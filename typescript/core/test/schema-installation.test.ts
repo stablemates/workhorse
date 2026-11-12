@@ -773,6 +773,10 @@ describe("schema installation", () => {
         version: 101,
         description: "index the active leases of each admission shard",
       },
+      {
+        version: 102,
+        description: "take the locks of an enqueue call in key, tier, and row order",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

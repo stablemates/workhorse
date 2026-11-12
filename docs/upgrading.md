@@ -26,8 +26,8 @@ states. The upgrade is a rolling deployment, and a mixed fleet is supported whil
 
 1. If you run cold exporters, stop each one and let it finish its object and manifest uploads. Keep
    cold export enabled, so retention keeps waiting for the export.
-2. Run `workhorse schema migrate`. It applies migrations 0093 through 0102 and leaves the schema at
-   version 101. Do this before the first process of the new release starts, because the floor rises.
+2. Run `workhorse schema migrate`. It applies migrations 0093 through 0103 and leaves the schema at
+   version 102. Do this before the first process of the new release starts, because the floor rises.
    Migration 0102 builds an index on `task_runtime` without a block on writes. On a large table the
    build can take a long time, as the next section states.
 3. Roll out the new processes in any order. Then start the exporters again.
@@ -48,9 +48,10 @@ each `cold_export_segment` row that is exporting.
 | `0100-bound-failure-envelopes-and-answer-oversized-checkpoints.sql`               | 99             | `fail_v2` and `fast_fail_v2` cut the fields of a failure envelope, and `save_checkpoint_v3` answers `value_too_large` for a checkpoint value that it cannot store                                                                                                                                                                                                                         |
 | `0101-floor-the-lease-scan-gate-and-count-one-admission-shard.sql`                | 100            | `tick_v1` runs the expired-lease scan at most once in 500 ms while a live worker is registered, and `notify_concurrency_capacity_v1` counts one admission shard with parts that an index can serve                                                                                                                                                                                        |
 | `0102-index-the-active-leases-of-each-admission-shard.sql`                        | 101            | Builds `task_runtime_active_queue_shard_idx` on `(queue_name, admission_shard)` for active rows with `CREATE INDEX CONCURRENTLY`, outside a transaction                                                                                                                                                                                                                                   |
+| `0103-take-enqueue-locks-in-key-tier-row-order.sql`                               | 102            | `lock_enqueue_prerequisites_internal_v1`, `enqueue_many_v1`, `add_task_group_members_v1`, and `cancel_task_group_v1` take the locks of each enqueue call in key, tier, and row order                                                                                                                                                                                                      |
 
 Migrations 0093 through 0097 keep the floor. With migrations 0098, 0099, and 0100, the SDK schema floor rises from 76 to 99.
-Migrations 0101 and 0102 add no function that an SDK calls, so they keep the floor at 99.
+Migrations 0101 through 0103 add no function that an SDK calls, so they keep the floor at 99.
 Each SDK statement catalogue of the new release names `schedule_wait_v2`, `send_signal_v2`, and
 `create_children_v2`, which schema version 97 adds. The dashboard host of each SDK calls
 `override_retention_policy_v2` and the three other audited policy functions, which schema version
@@ -193,7 +194,7 @@ such a change, and 1.0.0 cannot:
 - .NET: `AddWorkhorse` throws for a `Json` section under `Workhorse:Queue` or `Workhorse:Worker`.
   Remove the section, and set the JSON options in code.
 
-A 0.12 process keeps working on schema version 101, because a migration inside a major line only
+A 0.12 process keeps working on schema version 102, because a migration inside a major line only
 adds. Migration 0098 keeps `schedule_wait_v1`, `send_signal_v1`, and `create_children_v1` and their
 answers. Migration 0100 keeps `fail_v1`, `fast_fail_v1`, and `save_checkpoint_v2` and their answers.
 

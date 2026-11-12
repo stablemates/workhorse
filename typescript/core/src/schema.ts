@@ -727,6 +727,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     kind: "additive",
     execution: "nontransactional",
   },
+  {
+    fromVersion: 101,
+    toVersion: 102,
+    file: "0103-take-enqueue-locks-in-key-tier-row-order.sql",
+    description: "take the locks of an enqueue call in key, tier, and row order",
+    kind: "additive",
+  },
 ];
 
 /**

@@ -7526,10 +7526,21 @@ $$;
 --
 -- A debounce member of enqueue_many_v1 locks the runtime row of its keyed task FOR UPDATE.
 -- enqueue_many_v1 holds every key advisory lock, so the keyed task of each member cannot change.
--- Thus this function also locks those runtime rows here, in the same identity order as the
--- prerequisites. A batch with two debounce members, or a debounce member and a prerequisite, then
--- cannot hold one row that a purge or a resolver waits for while it waits for a row that the other
--- holds.
+-- Thus this function also locks those runtime rows here, in one pass with the prerequisites.
+--
+-- The pass locks each row that is not blocked before each blocked row, and it uses identity order
+-- inside each part (SM-2004). A terminal transition of a task locks its runtime row first, and its
+-- resolver then locks the blocked dependents. A keyed task of the debounce mode never has a
+-- prerequisite, so it is never blocked. Thus the pass locks a keyed task before each dependent of
+-- it that the batch names as a prerequisite, as the resolver does. Before, the pass used identity
+-- order only. If such a dependent sorted below the keyed task, the batch held the dependent and
+-- waited for the keyed task, while the transition of the keyed task held it and waited for the
+-- dependent. The keyed tasks of two batches stay in identity order, so two batches with debounce
+-- members lock them in the same order, and a purge locks them in that order too.
+--
+-- A purge locks the rows of its queue in identity order only. If a dependent sorts below its keyed
+-- prerequisite in the purged queue, a purge that waits between the two rows can still deadlock
+-- with such a batch. A purge has the same conflict with a cancel of the prerequisite.
 --
 -- Only a key in the debounce mode counts. Its task never has a prerequisite, so no resolver locks
 -- it after another row. A key in another mode can name a blocked dependent. A resolver locks that
@@ -7574,17 +7585,25 @@ BEGIN
        AND identity.coalescing_mode = 'debounce'
   );
   IF cardinality(v_debounced_task_ids) > 0 THEN
-    -- One pass in identity order. A task that is both a prerequisite and a keyed task takes the
-    -- stronger lock.
+    -- One pass. A row that is not blocked comes before a blocked row, and identity order decides
+    -- inside each part. A task that is both a prerequisite and a keyed task takes the stronger lock.
+    -- A keyed task is never blocked, so only the other prerequisites read their state. A batch of
+    -- debounce members alone thus reads no state. The state is read without a lock, so it only
+    -- orders the pass.
     FOR v_lock IN
-      SELECT ids.task_id, bool_or(ids.exclusive) AS exclusive
+      SELECT ids.task_id, bool_or(ids.exclusive) AS exclusive,
+             bool_or(NOT ids.exclusive AND EXISTS (
+               SELECT 1 FROM workhorse.task_runtime runtime
+                WHERE runtime.task_id = ids.task_id AND runtime.state = 'blocked'
+                  AND NOT ids.task_id = ANY(v_debounced_task_ids)
+             )) AS blocked
         FROM (
           SELECT task_id, true AS exclusive FROM unnest(v_debounced_task_ids) task_id
           UNION ALL
           SELECT task_id, false AS exclusive FROM unnest(v_prerequisite_task_ids) task_id
         ) ids
        GROUP BY ids.task_id
-       ORDER BY ids.task_id
+       ORDER BY blocked, ids.task_id
     LOOP
       IF v_lock.exclusive THEN
         PERFORM 1 FROM workhorse.task_runtime runtime
@@ -9024,12 +9043,26 @@ BEGIN
     RAISE EXCEPTION 'idempotency key is retained for incompatible coalescing mode';
   END IF;
 
-  -- Lock the tiers of every debounce and throttle queue in name order before any request runs.
-  -- Throttle works on both tiers, but its queues still take their tier locks here.
+  -- Every enqueue call takes its key locks, then its tier locks, then its row locks (SM-2006). A
+  -- batch with a debounce or throttle member enqueues member by member after the prerequisite row
+  -- locks below. Outside read committed, a tier lock creates the queue_control row of a new queue,
+  -- so the batch locks the tier of every member queue here, in name order, before any request
+  -- runs. At read committed a tier lock takes no row lock, so the plain members keep their own
+  -- tier locks and the call runs as before. A plain batch passes no queue, and enqueue_batch_v1
+  -- locks its tiers before its row locks. A queue name that enqueue_batch_v1 rejects is left to
+  -- that rejection.
   v_fast_queues := workhorse.lock_queue_tiers_v1(ARRAY(
     SELECT DISTINCT candidate->>'queue'
       FROM jsonb_array_elements(p_requests) candidate
      WHERE candidate ? 'debounce' OR candidate ? 'throttle'
+        OR (COALESCE(candidate->>'queue', '') <> ''
+            AND octet_length(candidate->>'queue') <= 256
+            AND current_setting('transaction_isolation')
+                NOT IN ('read committed', 'read uncommitted')
+            AND EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(p_requests) keyed(request)
+                   WHERE keyed.request ? 'debounce' OR keyed.request ? 'throttle'
+                ))
   ));
   -- Report a debounce request on a fast-tier queue with its ordinal.
   SELECT input.request->>'queue', input.ordinality::integer
@@ -20991,6 +21024,7 @@ DECLARE
   v_fast_ordinal integer;
   v_row record;
   v_member_group_id uuid;
+  v_lock record;
   v_new_task_ids uuid[] := '{}';
   v_total integer;
   v_opened integer;
@@ -21017,8 +21051,30 @@ BEGIN
     RAISE EXCEPTION 'a task group add cannot use debounce or throttle';
   END IF;
 
+  -- Every enqueue call takes its key locks, then its tier locks, then its row locks (SM-2006).
   -- Outside read committed, lock_queue_tiers_v1 creates and locks the queue_control row of each
-  -- queue. A purge creates the row of its queue before it locks the tasks of that queue, so the add
+  -- queue. An enqueue that holds a key creates that row after the key. Thus the add takes the key
+  -- locks that enqueue_many_v1 takes, in the same order, before the tier locks. Otherwise it could
+  -- hold the uncommitted row while it waited for a key that the enqueue holds. At read committed a
+  -- tier lock takes no row lock, so the add takes its key locks in enqueue_many_v1 as before.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    FOR v_lock IN
+      SELECT ordered.scope, ordered.key
+        FROM (
+          SELECT DISTINCT
+                 COALESCE(input.request->'idempotency'->>'scope', 'default') COLLATE "C" AS scope,
+                 (input.request->'idempotency'->>'key') COLLATE "C" AS key
+            FROM jsonb_array_elements(p_requests) input(request)
+           WHERE jsonb_typeof(input.request) = 'object' AND input.request ? 'idempotency'
+        ) ordered
+       WHERE ordered.key IS NOT NULL
+       ORDER BY ordered.scope, ordered.key
+    LOOP
+      PERFORM pg_advisory_xact_lock(hashtextextended(v_lock.scope || chr(31) || v_lock.key, 0));
+    END LOOP;
+  END IF;
+
+  -- A purge creates the row of its queue before it locks the tasks of that queue, so the add
   -- takes the tier locks before any row lock. Otherwise it could hold a prerequisite that the purge
   -- waits for while it waits for the uncommitted row of the purge.
   PERFORM workhorse.lock_queue_tiers_v1(ARRAY(
@@ -21399,6 +21455,34 @@ BEGIN
     WHEN v_request_id_length <= 8 THEN left(p_request_id, 2) || '…' || right(p_request_id, 2)
     ELSE left(p_request_id, 8) || '…' || right(p_request_id, 4)
   END;
+
+  -- The cancel can finish the group, and the finish enqueues the callbacks. Every enqueue call
+  -- takes its tier locks before its row locks (SM-2006), so the cancel locks the tiers of the
+  -- callback queues first. The callbacks of a group never change after its creation, so a read
+  -- without a lock finds them. Outside read committed this creates the queue_control row of each
+  -- callback queue before the member locks. A purge of that queue creates the same row before it
+  -- locks its tasks, so the cancel cannot hold a member that the purge waits for while it waits
+  -- for the uncommitted row of the purge. A queue name that the callback enqueue rejects is left
+  -- to that rejection, which records a callback_failed event. At read committed a tier lock takes
+  -- no row lock, so the cancel takes the tier locks in the callback enqueue as before.
+  --
+  -- A completion of the last member outside read committed still locks the member before the tier
+  -- of a callback queue, so it can deadlock with this cancel. Before, the cancel waited for the
+  -- member and failed with SQLSTATE 40001 instead.
+  IF current_setting('transaction_isolation') NOT IN ('read committed', 'read uncommitted') THEN
+    PERFORM workhorse.lock_queue_tiers_v1(ARRAY(
+      SELECT DISTINCT callback.request->>'queue'
+        FROM workhorse.task_group task_group
+        CROSS JOIN LATERAL (
+          VALUES (task_group.on_finish), (task_group.on_success), (task_group.on_failure)
+        ) callback(request)
+       WHERE task_group.id = p_group_id
+         AND task_group.state <> 'finished'
+         AND jsonb_typeof(callback.request) = 'object'
+         AND COALESCE(callback.request->>'queue', '') <> ''
+         AND octet_length(callback.request->>'queue') <= 256
+    ));
+  END IF;
 
   PERFORM 1
     FROM workhorse.task_group_member member
@@ -25655,10 +25739,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (98, 'keep the settings audit, withhold error stacks, and find derived history records'),
   (99, 'bound failure envelopes and answer an oversized checkpoint value with a status'),
   (100, 'floor the expired-lease scan gate and count one admission shard'),
-  (101, 'index the active leases of each admission shard')
+  (101, 'index the active leases of each admission shard'),
+  (102, 'take the locks of an enqueue call in key, tier, and row order')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (101) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (102) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

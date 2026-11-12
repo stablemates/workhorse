@@ -158,11 +158,29 @@ the key row cannot name a different task between steps 1 and 3.
 
 A batch can hold more than one debounce member. Before any member runs, `enqueue_many_v1` calls
 `lock_enqueue_prerequisites_internal_v1`. That function locks the runtime row of the keyed task of
-each debounce member `FOR UPDATE`, and each prerequisite runtime row `FOR KEY SHARE`, in one pass in
-identity order. A purge locks its runtime rows in the same order, so the batch and the purge cannot
-deadlock on those rows. The pass takes only a key with `coalescing_mode = 'debounce'`, because its task never has
-a prerequisite. A key in another mode can name a blocked dependent, and a resolver locks a
-dependent after its prerequisite.
+each debounce member `FOR UPDATE`, and each prerequisite runtime row `FOR KEY SHARE`, in one pass.
+The pass locks each row that is not `blocked` before each `blocked` row. Identity order decides
+inside each part. The state is read without a lock, so it only orders the pass. The pass takes
+only a key with `coalescing_mode = 'debounce'`, because its task never has a prerequisite. A key in
+another mode can name a blocked dependent, and a resolver locks a dependent after its prerequisite.
+
+A keyed task is never `blocked`, so two batches lock their keyed tasks in identity order. A purge
+also locks its runtime rows in identity order. Thus two batches, or a batch and a purge, cannot
+deadlock on two keyed tasks.
+
+Since migration 0103 (schema version 102), a `blocked` prerequisite comes after the keyed tasks. A
+keyed task P can be a prerequisite of a task D that another member names as a prerequisite. A
+terminal transition of P locks P first, and its resolver then locks D. Before, the pass used
+identity order only, and it locked D first when D sorted below P. Then a cancel, a purge, or a
+completion of P that rejects D ended one transaction with `40P01` (SM-2004). A completion that
+releases D did not deadlock. Its `FOR NO KEY UPDATE` lock does not conflict with `FOR KEY SHARE`.
+
+One case stays. A purge locks the rows of its queue in identity order, not in dependency order.
+Assume that D sorts below P in the purged queue, and that the purge waits for a row between them.
+Then the purge holds D and the batch holds P. PostgreSQL ends one transaction with `40P01`, and no
+task state changes. The same purge order already conflicts with a cancel of P
+([data model](data-model.md#task_dependency)). A batch without a debounce member locks its
+prerequisites in identity order only, as before.
 
 ##### Replacement
 
@@ -944,6 +962,41 @@ levels fails instead of writing it to a tier that the queue no longer has.
 `queue_control` row of its queue before it locks the tasks of that queue, so the add waits for the
 purge before it locks a prerequisite. If the purge commits first, the add fails with SQLSTATE
 `40001`.
+
+At these levels, a transaction that inserts a `queue_control` row holds it until it commits. A
+second transaction that inserts the same row waits for the first. Thus each enqueue call takes its
+locks in one order. It takes the key locks of `idempotency`, `debounce`, and `throttle` first, in
+scope and key order. Then it takes the tier locks in queue name order. Then it takes the row locks.
+Since migration 0103 (schema version 102), these calls follow that order outside read committed
+(SM-2006):
+
+| Call                        | Change of migration 0103                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| `add_task_group_members_v1` | Takes the key locks of its requests before the tier locks.                         |
+| `enqueue_many_v1`           | With a debounce or throttle member, locks the tier of every member before any row. |
+| `cancel_task_group_v1`      | Locks the tiers of the callback queues of the group before the member rows.        |
+
+`enqueue_batch_v1` already took its key locks before its tier locks. Before migration 0103, a call
+could hold a key or a row and wait for the uncommitted row of another transaction. That
+transaction waited for the same key or row. PostgreSQL then ended one transaction with `40P01`. At
+read committed a tier lock takes no row lock, so these calls run as before. A read committed
+enqueue takes no new lock and runs no new statement.
+
+These cases stay ([SM-2050](https://linear.app/stablemates/issue/SM-2050)). In each one,
+PostgreSQL ends one transaction with `40P01`, and that transaction rolls back completely. The
+caller can run it again.
+
+- A transaction inserts the `queue_control` row of a queue in one call. It takes a key in a later
+  call, so it holds the row before the key. A second transaction holds that key and waits for the
+  row. One call cannot change an order that spans two calls.
+- A terminal transition of the last member of a group holds the member row and then enqueues the
+  callback. A repeatable read `cancel_task_group_v1` holds the new `queue_control` row of the
+  callback queue and waits for the member. Before migration 0103, the cancel waited for the member
+  first and failed with `40001`.
+- A child task create and the cancels of a purge also take a tier lock after a row lock.
+- A direct call of `enqueue_debounce_v1` or `enqueue_throttle_v1` takes the tier lock before the
+  key lock. Each SDK calls them only through `enqueue_many_v1`, which takes the key locks and the
+  tier locks first.
 
 `FOR KEY SHARE` does not detect the update, because `tier` is not a key column. A read committed
 enqueue takes no row lock, so producers on one queue do not share a row lock. Before migration

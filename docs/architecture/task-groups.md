@@ -254,31 +254,36 @@ p_worker_id text DEFAULT NULL, p_fence_token bigint DEFAULT NULL)` returns the r
 `enqueue_many_v1`: `(ordinal, task_id, outcome, reason)`. In order, it:
 
 1. Rejects more than 1,000 requests, and any request with `debounce` or `throttle`.
-2. For a member add, locks the `task_runtime` row of the member task `FOR NO KEY UPDATE` and the
+2. Outside read committed, takes the key lock of each request with `idempotency`, in the order of
+   `enqueue_many_v1`. Then it takes the tier lock of each request queue through
+   `lock_queue_tiers_v1`. Every enqueue call takes its key locks, then its tier locks, then its row
+   locks, as [Isolation requirement](lifecycle.md#isolation-requirement) states. At read committed
+   it takes only the tier locks here.
+3. For a member add, locks the `task_runtime` row of the member task `FOR NO KEY UPDATE` and the
    `task_runtime` rows of the prerequisites `FOR KEY SHARE`, one row at a time in identity order.
    `enqueue_prerequisite_task_ids_internal_v1` gives the prerequisite identities. The member lock
    conflicts with every update and delete of the row. It does not block the `FOR KEY SHARE` lock of
    an enqueue that names the member task as a prerequisite. `cancel_task_group_v1` locks the
    runtime rows of live members in identity order too, so a member add that names a lower member
    as a prerequisite does not hold its own row while it waits for the cancel.
-3. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
+4. Locks the prerequisites of the requests through `lock_enqueue_prerequisites_internal_v1`, then
    all shard rows of the group, then the group row. Completion, cancellation, purge, and lease
    recovery lock a runtime row before the shard and group rows, so a member add and an add that
    names a member as a prerequisite take the same order. An unknown group raises an error.
-4. Refuses the add with `P1008` when the group is canceled or finished, when the group is sealed
+5. Refuses the add with `P1008` when the group is canceled or finished, when the group is sealed
    and no member arguments are given, or with the reason `not_running_member` when the member
    check below fails. The check runs after the group row lock, so a wait for a lock cannot make it
    stale.
-5. Rejects a request on a fast-tier queue with `P1007` and feature `task groups`.
-6. Enqueues the requests through `enqueue_many_v1`. On a contract mismatch it returns that row and
+6. Rejects a request on a fast-tier queue with `P1007` and feature `task groups`.
+7. Enqueues the requests through `enqueue_many_v1`. On a contract mismatch it returns that row and
    adds nothing.
-7. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
+8. Rejects with `P1010` a `replayed` row whose task is not already a member of this group, or a task
    this call enqueued. Thus an idempotent retry of the same add returns the existing member.
-8. Rejects with `P1009` an add that takes the member count above 100,000. The member count is the
+9. Rejects with `P1009` an add that takes the member count above 100,000. The member count is the
    sum of the shard `total_count` values, read while the add holds all shard rows and the group row.
-9. Inserts the membership rows at the next positions, increases the `total_count` of their shards,
-   and increases `pending_shard_count` for each shard whose pending count was 0. Then it counts the
-   outcomes that the enqueue already wrote, for example for a deadline in the past.
+10. Inserts the membership rows at the next positions, increases the `total_count` of their shards,
+    and increases `pending_shard_count` for each shard whose pending count was 0. Then it counts the
+    outcomes that the enqueue already wrote, for example for a deadline in the past.
 
 The member check passes only when all of these conditions are true. Conditions 1 to 5 are the
 conditions of `save_checkpoint_v2`, with `clock_timestamp()` as the time:
@@ -319,14 +324,19 @@ The `P1008` reason is `sealed`, `finished`, `canceled`, or `not_running_member`.
 `cancel_task_group_v1(p_group_id, p_requested_by, p_reason, p_request_id)` returns the group
 snapshot, or no row for an unknown group:
 
-1. It locks the runtime rows of the pending member tasks, then all shard rows, then the group row.
-2. If the group is `finished`, it returns the snapshot and changes nothing.
-3. It seals an `open` group and records the cancel columns. No task can join a canceled group, not
+1. Outside read committed, it reads the callback queues of the group without a lock and takes
+   their tier locks through `lock_queue_tiers_v1`. The callbacks of a group never change after its
+   creation. This creates the `queue_control` row of each callback queue before any row lock, as
+   [Isolation requirement](lifecycle.md#isolation-requirement) states. A finished group and a
+   queue name that the callback enqueue rejects take no tier lock here.
+2. It locks the runtime rows of the pending member tasks, then all shard rows, then the group row.
+3. If the group is `finished`, it returns the snapshot and changes nothing.
+4. It seals an `open` group and records the cancel columns. No task can join a canceled group, not
    even from a running member task.
-4. It calls `cancel_v1` for each pending member task. A queued member task becomes `canceled` at
+5. It calls `cancel_v1` for each pending member task. A queued member task becomes `canceled` at
    once. An active member task gets a cancel request, and its outcome follows. The cancel applies
    the recorded outcomes of its group after every 100 members and at the end.
-5. It writes the `canceled` event and finishes the group if no member task is pending.
+6. It writes the `canceled` event and finishes the group if no member task is pending.
 
 The canceled member tasks count as not succeeded, so `onFinish` and `onFailure` run.
 `Admin.cancelTaskGroup(groupId, { actor, reason, requestId })` calls it. `workhorse admin
