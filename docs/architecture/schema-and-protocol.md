@@ -2301,6 +2301,9 @@ Workhorse code between the two. `recoverCallerHook` drops a panic if its first f
 is `recoverCallerHook` itself, so a panic of the hook in any package does not end the process. If
 the hook calls back into Workhorse code and that code panics, the panic continues.
 
+Only the Go worker has this recovery.
+[Worker log differences](../parity.md#worker-log-differences) states why this difference stays.
+
 ### Go handler context
 
 The handler context gives a Go handler its checkpoint, progress, timer, and child methods.
