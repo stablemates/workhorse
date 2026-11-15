@@ -189,6 +189,93 @@ panic value, such as `string`. A Rust worker gives `panic`, because a panic payl
 name. A Rust panic also goes to the panic hook of the process, which writes each panic to standard
 error by default.
 
+## Worker log differences
+
+A worker log record is one log event that a worker writes about a task or about itself. The seven
+SDKs give each worker log event the same name. Some details of the records still differ. An
+operator who writes one query or one alert for the workers of all seven SDKs must know these
+differences. The [warning event names](architecture/telemetry.md#warning-event-names) state each
+record.
+
+[SM-2054](https://linear.app/stablemates/issue/SM-2054) listed the differences that remained after
+the event names became the same. The maintainer decided that the differences in the table stay.
+Four more differences exist today. In one of them, a request of the local timer fails after the
+handler ended, while the worker waits for the answer. The Rust worker writes no record for it. The
+other six workers write one, apart from the cases that the warning event names state.
+[SM-2064](https://linear.app/stablemates/issue/SM-2064),
+[SM-2065](https://linear.app/stablemates/issue/SM-2065),
+[SM-2066](https://linear.app/stablemates/issue/SM-2066), and
+[SM-2067](https://linear.app/stablemates/issue/SM-2067) remove the four differences.
+
+| Difference                                 | SDKs       | What an operator sees                                                                                                                                                                                                                                                                                                                                                                              | Why it stays                                                                                                                                                                         |
+| ------------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The value of `error.type`                  | All seven  | The same failure has a different `error.type` in each SDK. TypeScript gives the error name, and Python gives the type name. Ruby, the JVM, and .NET give the full type name. Go gives the `%T` type. Rust gives the variant of `workhorse::Error`, such as `Postgres`.                                                                                                                             | The OpenTelemetry convention for `error.type` is the type of the error in its language. A shared list of error kinds is a new vocabulary that each SDK must keep current.            |
+| An error that wraps the suspension         | Go, Rust   | A handler can return an error that wraps the suspension of a durable call. Go and Rust read that error as the suspension, so they emit no `workhorse.handler.signal_swallowed`. Ruby, the JVM, and .NET compare the thrown exception itself, so a wrapping exception gives the warning.                                                                                                            | Go and Rust read an error through the errors that it wraps. Each SDK applies the suspension, and nothing is lost, so no warning is correct.                                          |
+| An expiry request that the stop cancels    | Go, .NET   | The worker writes no `workhorse.worker.expiration_request_failed` record for a request that fails after the stop of the run cancels it. The Go stop cancels the request at the end of the shutdown grace period. The .NET stop cancels it after the drain, at the latest lease end of the attempts in flight.                                                                                      | A request that fails during a stop is, in most cases, a result of the stop. Lease recovery settles the task in each SDK. The difference changes no task state.                       |
+| An expiry that a heartbeat reported        | TypeScript | A heartbeat answer reports the deadline or the attempt timeout, and the worker aborts the handler. If no request of the [local timer](architecture/lifecycle.md#local-timers) is in flight, the worker then sends its own expiry request. If that request fails, the worker does not ask again. The `workhorse.worker.expiration_request_failed` record comes when the worker settles the attempt. | The heartbeat answer came from PostgreSQL, so the expiry is confirmed before the worker aborts the handler. `fail_v1` checks each boundary again, and the task gets the same result. |
+| A request in flight after the handler ends | TypeScript | A handler can end while a request of the local timer is in flight. Each worker then waits for the answer. Only the TypeScript worker gives that wait a fixed limit, 1,000 ms. If no answer comes in that time, it writes the record with `error.type` `timeout`.                                                                                                                                   | The limit protects the settlement of the attempt. No answer gives no error object, so `timeout` is the only value that the worker can write.                                         |
+| A panic in a database call of the worker   | Go         | A worker goroutine can run application code, such as a pgx tracer, inside a database call. The goroutine of `Run` and each worker goroutine other than the execution goroutine turn a panic of that code into an error of the call. The goroutine then takes its usual error path. A panic during a `pgxpool` acquire or release in such a call ends the process.                                  | It is a property of the Go tracer hook. No other SDK has a hook with the same risk.                                                                                                  |
+
+TypeScript and Python emit `workhorse.handler.signal_swallowed` only when the handler returns a value
+after the suspension. When the handler throws, they emit nothing. SM-2066 changes that, so the row
+for a wrapping error does not name these two SDKs.
+
+These rows are not capability cells, so `pnpm parity:check` does not check them. The code and the
+tests that show each row are:
+
+- The value of `error.type`: `expirationErrorType` in `typescript/core/src/task-attempt.ts`,
+  `_log_expiration_request_failure` in `python/src/workhorse/worker.py`, `request_expiration` in
+  `ruby/lib/stablemates/workhorse/worker.rb`, `requestExpiration` in
+  `jvm/workhorse/src/main/java/run/workhorse/Worker.java`, `RequestExpirationAsync` in
+  `dotnet/src/Workhorse/Worker.Execution.cs`, `superviseOwnership` in `go/worker.go`, and
+  `Error::type_name` in `rust/src/error.rs`. These tests check the value:
+  `logs a failed expiration request and settles with an empty arbiter` in
+  `typescript/core/test/task-attempt.test.ts` (`TypeError`),
+  `AFailedExpiryRequestLogsItsEventWithTheWorkerAndTheErrorType` in
+  `dotnet/tests/Workhorse.Tests/Durable/DurableContextTests.cs` (`Workhorse.DatabaseException`), and
+  `a_failed_expiry_request_logs_its_event` in `rust/tests/worker_log_events_postgres.rs`
+  (`Postgres`). `TestWorkerLogsTheEventOfAFailedExpiryRequest` in `go/worker_log_events_test.go`
+  checks only that the Go record has a value.
+- An error that wraps the suspension: `errors.Is` in `execute` in `go/worker.go`, and the
+  `From<E>` conversion of `HandlerError` in `rust/src/worker/handler.rs`, which reads at most 16
+  sources. Ruby rescues `HandlerContext::Suspension`, the JVM catches `Suspension`, and .NET checks
+  `error is not SuspensionException`. `TestWorkerWarnsWhenAHandlerSwallowsItsSuspension` in
+  `go/worker_log_events_test.go` and `a_swallowed_suspension_logs_one_warning` in
+  `rust/tests/worker_log_events_postgres.rs` test a handler that returns the suspension itself. No
+  test returns a wrapped suspension.
+- An expiry request that the stop cancels: the check `ctx.Err() == nil` before the record in
+  `superviseOwnership` in `go/worker.go`, and the filter on `StopPath` in `RequestExpirationAsync` in
+  `dotnet/src/Workhorse/Worker.Execution.cs`. No test covers this case.
+- An expiry that a heartbeat reported: `refreshOwnership`, `expireOwnershipInBackground`, and
+  `settleExpiration` in `typescript/core/src/task-attempt.ts`. If a request of the local timer is in
+  flight, `expireOnConfirmation` asks again after its failure. The test
+  `logs a failed expiration request and settles with an empty arbiter` in
+  `typescript/core/test/task-attempt.test.ts` shows the record at settlement. It does not count the
+  requests. `fail_v1` in `sql/schema/current.sql` calls `expire_owned_v1` when the deadline or the
+  attempt timeout has passed.
+- A request in flight after the handler ends: `settleExpiration` and `SHARED_EXPIRATION_BUDGET_MS`
+  in `typescript/core/src/task-attempt.ts`. The test
+  `waits at most one second for an expiration request that never answers` in
+  `typescript/core/test/task-attempt.test.ts` checks the limit and the value `timeout`. The test
+  `logs a timer request that fails after the handler ended once, at settlement` checks the record of
+  a failed request. For the other workers, only Rust has a test of the wait. Their waits are in these
+  places:
+  - Go: `superviseOwnership` in `go/worker.go`.
+  - Rust: the select loop after the handler in `rust/src/worker/execute.rs`. The test
+    `renewals_continue_while_a_returned_handler_waits_for_its_expiry_answer` in
+    `rust/tests/worker_postgres.rs` checks the wait.
+  - Python: the join of `expiration_thread` in `python/src/workhorse/worker.py`.
+  - Ruby: `Ownership#release` in `ruby/lib/stablemates/workhorse/worker.rb`.
+  - JVM: `Ownership.release` in `jvm/workhorse/src/main/java/run/workhorse/Worker.java`.
+  - .NET: `Ownership.ReleaseAsync` in `dotnet/src/Workhorse/Internal/Runtime/Attempt.cs`.
+- A panic in a database call of the worker: `recoverQueryPanic` and `callerCodeFrames` in
+  `go/query_panic.go`. The tests are `TestWorkerGoroutinesSurviveAQueryTracerPanic` and
+  `TestWorkerAsksAgainWhenTheQueryTracerPanicsInAnExpiryRequest` in `go/worker_query_panic_test.go`,
+  and `TestCallerCodeFramesAcceptsOnlyAPanicThatPgxCalled` in `go/query_panic_internal_test.go`.
+  [Go query panics on other worker
+  goroutines](architecture/schema-and-protocol.md#go-query-panics-on-other-worker-goroutines) lists
+  each covered call.
+
 ## Active Job reachability
 
 The Ruby column above records the native SDK. A Rails application can also reach Workhorse through

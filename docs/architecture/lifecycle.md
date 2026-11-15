@@ -813,7 +813,8 @@ than the suspension, the worker also applies the suspension. The Go, Rust, Ruby,
 workers then emit the same warning. The TypeScript and Python workers do not emit it in that case.
 Go and Rust read an error that wraps the suspension as the suspension, so they emit no warning for
 it. Ruby, the JVM, and .NET compare the thrown exception itself.
-The shared case
+[Worker log differences](../parity.md#worker-log-differences) states why the reading of a wrapped
+suspension stays. The shared case
 `durable-suspension-that-the-handler-catches-still-suspends` checks in every SDK that the task stays
 `scheduled` with no attempt row, and that the replay completes the same attempt (SM-1950).
 
@@ -3140,7 +3141,10 @@ worker asks again until PostgreSQL settles it. The worker waits for the answer f
 1,000 ms. If the request fails or gives no answer in that time, the worker logs
 `workhorse.worker.expiration_request_failed`, and `fail_v1` settles the attempt. `fail_v1` checks
 each boundary again under the row lock. A `stale` answer goes to the reconciliation that a stale
-failure uses.
+failure uses. The other workers also wait for the answer of a request of the local timer, but with
+no fixed limit. In Go and Rust, that wait also ends when the lease watchdog ends the attempt.
+[Worker log differences](../parity.md#worker-log-differences) states which workers log a failed
+request in this case.
 
 Every SDK cancels the handler for an expiry only after PostgreSQL confirms it. If the answer is
 `not_due`, the handler continues to run under its lease, and the worker asks again. Thus a worker
@@ -3154,11 +3158,14 @@ asks again after the backoff that it uses for `not_due`. The worker does not can
 its run does not end with the error. The lease watchdog still ends an attempt that nobody renews.
 In Python, Ruby, the JVM, and .NET, a heartbeat round that reports the expiry also sends the
 request. If that request fails, the next round reports the expiry again. The error has no effect on
-the other leases of the round.
+the other leases of the round. The TypeScript worker does not ask again if the request that a
+heartbeat answer started fails. [Worker log differences](../parity.md#worker-log-differences) states
+why this difference stays.
 
 Every SDK logs the warning event `workhorse.worker.expiration_request_failed`, with `error.type`
 and the task and worker identity, for each expiry request of the local timer that fails while the
-handler runs ([Warning event names](telemetry.md#warning-event-names), SM-2013).
+handler runs ([Warning event names](telemetry.md#warning-event-names), SM-2013). The Go and .NET
+workers do not log a request that fails after the stop of the run cancels it.
 
 The shared case `deadline-settles-after-a-failed-expiry-request` checks this rule in the conformance
 runner of every SDK (SM-1934). Its first expiry request fails. The handler must see the cancellation

@@ -745,18 +745,24 @@ successful configuration changes at info.
   ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
 
 - `workhorse.worker.expiration_request_failed` carries bounded task and worker identity and
-  `error.type`. Each of the seven workers emits it once for each expiry request that fails while
-  the handler runs. The worker then asks again, and the handler keeps running
-  ([Local timers](lifecycle.md#local-timers)). `error.type` is the type of the error: the error
-  name in TypeScript, the type name in Python, Ruby, and Java, the `%T` type in Go, and the variant
-  of `workhorse::Error` in Rust, such as `Postgres`. The .NET worker logs the event name through
-  `ILogger` with the exception, and its template names the values `TaskId`, `WorkerId`, and
-  `ErrorType`. The Go and Rust records also carry the error text in `error`.
-  The TypeScript worker sends the request of an expiry that a heartbeat reported without a retry.
-  If that request fails, the worker aborts the handler, and the record comes at settlement. The
-  TypeScript worker also emits it when a handler ends and the `expire_owned_v1` request in
-  flight fails or gives no answer within 1,000 ms. For no answer, `error.type` is `timeout`. Either
-  result proves nothing about the expiry, so `fail_v1` then settles the attempt.
+  `error.type`. Each of the seven workers emits it once for each expiry request that fails while the
+  handler runs. The worker then asks again, and the handler keeps running ([Local
+  timers](lifecycle.md#local-timers)). `error.type` is the type of the error. It is the error name
+  in TypeScript and the type name in Python. It is the full type name in Ruby and Java, and the `%T`
+  type in Go. In Rust, it is the variant of `workhorse::Error`, such as `Postgres`. The .NET worker
+  logs the event name through `ILogger` with the exception, and its template names the values
+  `TaskId`, `WorkerId`, and `ErrorType`. The Go and Rust records also carry the error text in
+  `error`. A heartbeat answer can report the expiry while no request of the local timer is in
+  flight. Then the TypeScript worker sends its own request. It does not ask again after a failed
+  request, and the record comes at settlement. A handler can end while a request of the local timer
+  is in flight. Each worker then waits for its answer. If that request fails, the TypeScript,
+  Python, Go, Ruby, JVM, and .NET workers emit the record. The Rust worker emits no record in that
+  case. In Go and Rust, the wait also ends when the lease watchdog ends the attempt. The Go worker
+  then emits no record. Only the TypeScript worker gives the wait a fixed limit, 1,000 ms. If no
+  answer comes in that time, it emits the record with `error.type` `timeout`. In TypeScript, either
+  result proves nothing about the expiry, so `fail_v1` then settles the attempt. The Go and .NET
+  workers write no record for a request that fails after the stop of the run cancels it. [Worker log
+  differences](../parity.md#worker-log-differences) states which of these differences stay.
 
 - `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
   and `error.type`. `workhorse.worker.reporter` names the reporter callback that failed:
