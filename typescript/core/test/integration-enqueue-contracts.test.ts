@@ -3818,7 +3818,7 @@ describe("debounce and enqueue under lock waits", () => {
       }
     });
 
-    // A known case that stays open (SM-2050). A purge locks the rows of its queue in identity
+    // A known case that stays open (ADR 0124, case 1). A purge locks the rows of its queue in identity
     // order, and a resolver locks a prerequisite before its dependents. If D sorts before P in the
     // purged queue, no order of the batch agrees with both. The purge holds D and waits for a row X
     // between D and P. The batch locks P and waits for D, and the purge then waits for P.

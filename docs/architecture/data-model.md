@@ -633,7 +633,8 @@ If `B` sorts above `A`, the enqueue waits for `A` before it locks `B`. The cance
 and the enqueue continues after the cancel commits.
 
 Workhorse keeps this limit, and neither call retries the `40P01` (SM-1286,
-[ADR 0101](../decisions/0101-cancel-a-purged-prerequisite-whose-dependent-stays.md)). An SDK cannot
+[ADR 0101](../decisions/0101-cancel-a-purged-prerequisite-whose-dependent-stays.md), case 8 of
+[ADR 0124](../decisions/0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md)). An SDK cannot
 send an enqueue again that runs in a transaction of the caller. A cancel learns its dependents only
 after it locks its task, so no single lock order covers both calls. A caller that gets `40P01` from
 either call can run its transaction again. `integration-cancel-enqueue-deadlock.test.ts`
@@ -779,15 +780,18 @@ attempts in total. A fenced write is a statement that names a task, its worker, 
 Nothing in the rolled-back statement committed. The fence decides again whether the resend can still
 act.
 
-The retried statements are:
+Each SDK sends these fenced writes through its helper:
 
-- `complete_v1`, `fail_v1`, `release_owned_v1`, `acknowledge_cancel_v1`
-- `expire_owned_v1`, `expire_owned_telemetry_v1`
-- `heartbeat_v1`, `heartbeat_v2`, `heartbeat_many_v1`, `heartbeat_many_v2`
+- `complete_v1`, `fail_v2`, `release_owned_v1`, `acknowledge_cancel_v1`
+- `expire_owned_telemetry_v1`
 - `complete_many_and_claim_v1`, `record_batch_dispatch_v1`, `record_batch_failure_v1`
-- `create_child_v2`, `create_children_v1`
-- `save_checkpoint_v1`, `update_progress_v1`
-- `schedule_wait_v1`, `wait_for_signal_v1`, `wait_for_human_v1`
+- `create_child_v2`, `create_children_v2`
+- `save_checkpoint_v3`, `update_progress_v1`
+- `schedule_wait_v2`, `wait_for_signal_v1`, `wait_for_human_v1`
+
+The TypeScript heartbeat methods of `Queue` also send `heartbeat_v1`, `heartbeat_v2`, and
+`heartbeat_many_v2` through the helper. The heartbeat round of a worker has its own rule for
+`40P01`, as [Heartbeat round deadline](lifecycle.md#heartbeat-round-deadline) states.
 
 | SDK        | Helper                                                                            | Attempt constant                 |
 | ---------- | --------------------------------------------------------------------------------- | -------------------------------- |
@@ -795,6 +799,8 @@ The retried statements are:
 | Go         | `queryFencedWrite`                                                                | `fencedWriteDeadlockAttempts`    |
 | Python     | `fenced_write_rows` and `async_fenced_write_rows` in `workhorse/_fenced_write.py` | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
 | Rust       | `fenced_rows`                                                                     | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
+| Ruby       | `Executor#fenced_rows`                                                            | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
+| JVM        | `Sql.fencedRows`                                                                  | `FENCED_WRITE_DEADLOCK_ATTEMPTS` |
 | .NET       | `Sql.FencedRowsAsync`                                                             | `FencedWriteDeadlockAttempts`    |
 
 - A deadlock aborts a caller-owned transaction, so a resend inside one fails with SQLSTATE `25P02`.
@@ -3122,7 +3128,16 @@ locks a rejected dependent `FOR UPDATE` before settlement deletes its runtime ro
 next dependency levels one at a time ([Propagation and cascades](#propagation-and-cascades)). Thus:
 
 - A terminal transition of a purged task, such as a concurrent cancel or a cascade, locks the task
-  before its dependents too. It cannot deadlock with the purge.
+  before its dependents too. If each dependent that it locks is outside the purged queue, or sorts
+  above the task, it cannot deadlock with the purge. Step 3 locks a dependent outside the queue after
+  step 1. Step 1 locks a dependent that sorts above the task after the task.
+- A dependent can be a `blocked` task of the purged queue that sorts below its prerequisite. Then
+  step 1 can lock the dependent before the prerequisite. A concurrent cancel of the prerequisite
+  locks the prerequisite and then waits for the dependent in its resolver. The purge then waits for
+  the prerequisite, and PostgreSQL aborts one of them with `40P01`. A `cancel_task_group_v1` that
+  holds both tasks has the same cycle. Workhorse keeps this limit (case 9 of
+  [ADR 0124](../decisions/0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md)).
+  `integration-enqueue-lock-order.test.ts` reproduces it.
 - The step 3 lock does not conflict with the key-share lock of an enqueue. An enqueue that names a
   purged task and a dependent that its policy releases cannot deadlock with the purge.
 - An enqueue that names a purged task and a dependent that its policy cancels or fails can deadlock

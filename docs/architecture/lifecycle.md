@@ -175,11 +175,12 @@ identity order only, and it locked D first when D sorted below P. Then a cancel,
 completion of P that rejects D ended one transaction with `40P01` (SM-2004). A completion that
 releases D did not deadlock. Its `FOR NO KEY UPDATE` lock does not conflict with `FOR KEY SHARE`.
 
-One case stays. A purge locks the rows of its queue in identity order, not in dependency order.
+One case stays ([ADR 0124](../decisions/0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md)).
+A purge locks the rows of its queue in identity order, not in dependency order.
 Assume that D sorts below P in the purged queue, and that the purge waits for a row between them.
-Then the purge holds D and the batch holds P. PostgreSQL ends one transaction with `40P01`, and no
-task state changes. The same purge order already conflicts with a cancel of P
-([data model](data-model.md#task_dependency)). A batch without a debounce member locks its
+Then the purge holds D and the batch holds P. PostgreSQL ends one transaction with `40P01`. That
+transaction commits no task change, and the other transaction can commit. The same purge order
+already conflicts with a cancel of P ([data model](data-model.md#queue-purge)). A batch without a debounce member locks its
 prerequisites in identity order only, as before.
 
 ##### Replacement
@@ -1022,21 +1023,42 @@ transaction waited for the same key or row. PostgreSQL then ended one transactio
 read committed a tier lock takes no row lock, so these calls run as before. A read committed
 enqueue takes no new lock and runs no new statement.
 
-These cases stay ([SM-2050](https://linear.app/stablemates/issue/SM-2050)). In each one,
-PostgreSQL ends one transaction with `40P01`, and that transaction rolls back completely. The
-caller can run it again.
+These cases stay ([ADR 0124](../decisions/0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md)).
+In each one, PostgreSQL ends one transaction with `40P01`, and that transaction rolls back
+completely, so it commits no task change. The other transaction can commit. The caller can run the
+ended transaction again. Each case except the last needs a transaction outside read committed,
+because only there does a tier lock take a row lock. No worker runs at those levels. A caller that
+selects them must already run its transaction again after `40001`, and `40P01` asks for the same
+action.
 
 - A transaction inserts the `queue_control` row of a queue in one call. It takes a key in a later
   call, so it holds the row before the key. A second transaction holds that key and waits for the
   row. One call cannot change an order that spans two calls.
 - A terminal transition of the last member of a group holds the member row and then enqueues the
   callback. A repeatable read `cancel_task_group_v1` holds the new `queue_control` row of the
-  callback queue and waits for the member. Before migration 0103, the cancel waited for the member
-  first and failed with `40001`.
-- A child task create and the cancels of a purge also take a tier lock after a row lock.
+  callback queue and waits for the member. The cycle needs the transition outside read committed
+  too. If the transition runs at read committed, its callback enqueue takes no row lock, and the
+  cancel fails with `40001`. Before migration 0103, the cancel waited for the member first and
+  failed with `40001`.
+- A terminal transition of the last member can also deadlock with a purge of the callback queue,
+  if that queue has no `queue_control` row. The purge inserts the row first. Then it waits for a task of that
+  queue that the transition holds. That task is a dependent of the member that the resolver locked,
+  or the member itself if it is not `active`. This applies to `complete_v1`, `fail_v2`, `cancel_v1`,
+  `acknowledge_cancel_v1`, lease expiry, and the deadline of the last member. A worker runs each of
+  them at read committed, because each claim entry point requires it. Thus the case needs a caller
+  that runs a transition in its own transaction outside read committed.
+- A child task create locks the parent row before the tier lock of the child queue. Assume that the
+  child queue has no `queue_control` row. Then an enqueue to the child queue that names the parent
+  as a prerequisite inserts the row first and waits for the parent. A purge of the child queue does not form this cycle, because a purge never locks
+  an `active` parent.
+- The cancels of a purge also take a tier lock after a row lock.
 - A direct call of `enqueue_debounce_v1` or `enqueue_throttle_v1` takes the tier lock before the
   key lock. Each SDK calls them only through `enqueue_many_v1`, which takes the key locks and the
   tier locks first.
+- A `cancel_task_group_v1` and a purge lock their tasks in identity order. A dependent can sort
+  below its prerequisite, with both in the set. A cancel of the prerequisite in another transaction
+  locks the prerequisite first and then the dependent. This case also occurs at read committed. It
+  has the same order as the purge case of [Keyed debounce](#keyed-debounce).
 
 `FOR KEY SHARE` does not detect the update, because `tier` is not a key column. A read committed
 enqueue takes no row lock, so producers on one queue do not share a row lock. Before migration
