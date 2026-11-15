@@ -69,6 +69,87 @@ function enqueueMany(session: Session, requests: readonly Record<string, unknown
   );
 }
 
+// A known case that stays open (ADR 0124, case 3). The completion of the last member of a group
+// holds the member row, and its commit enqueues the callback of the group. A repeatable read
+// cancel_task_group_v1 holds the new queue_control row of the callback queue and waits for the
+// member. Each test commits the completion after the cancel waits, so the order is fixed.
+async function cancelDuringLastCompletion(completionIsolation: string): Promise<{
+  groupId: string;
+  memberId: string;
+  callbackQueue: string;
+  completion: Settled;
+  cancel: Settled;
+}> {
+  const callbackQueue = `lock-order-last-callback-${randomUUID()}`;
+  const memberQueue = `lock-order-last-member-${randomUUID()}`;
+  const group = await queue.createTaskGroup({
+    onFinish: { type: "report", payload: {}, options: { queue: callbackQueue } },
+  });
+  await queue.addToTaskGroup(group.id, [
+    { type: "member", payload: {}, options: { queue: memberQueue } },
+  ]);
+  await queue.sealTaskGroup(group.id);
+  const claimed = await pool.query<{ task_id: string; fence_token: string }>(
+    "SELECT task_id, fence_token FROM workhorse.claim_v1($1, 'last-member-worker', 600000)",
+    [memberQueue],
+  );
+  const member = claimed.rows[0]!;
+  expect(await hasQueueControlRow(callbackQueue)).toBe(false);
+
+  const completer = await openSession();
+  const canceler = await openSession();
+  try {
+    // complete_v1 locks the member row. The group outcome and the callback enqueue run in a
+    // deferred trigger at commit.
+    await completer.client.query(`BEGIN ISOLATION LEVEL ${completionIsolation}`);
+    const completed = await completer.client.query<{ accepted: boolean }>(
+      "SELECT workhorse.complete_v1($1, 'last-member-worker', $2, 'null'::jsonb) AS accepted",
+      [member.task_id, member.fence_token],
+    );
+    expect(completed.rows).toEqual([{ accepted: true }]);
+    // The cancel creates the queue_control row of the callback queue, and then it waits for the
+    // member row of the completion.
+    await canceler.client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+    const cancel = settle(
+      canceler.client.query(
+        "SELECT state FROM workhorse.cancel_task_group_v1($1, 'operator', 'stop', 'cancel-last')",
+        [group.id],
+      ),
+    );
+    await waitForLock(canceler.pid, "transactionid");
+    const completion = await settle(completer.client.query("COMMIT"));
+    const cancelResult = await cancel;
+    await canceler.client.query(cancelResult.ok ? "COMMIT" : "ROLLBACK");
+    return {
+      groupId: group.id,
+      memberId: member.task_id,
+      callbackQueue,
+      completion,
+      cancel: cancelResult,
+    };
+  } finally {
+    await closeSessions([completer, canceler]);
+  }
+}
+
+async function groupState(groupId: string, memberId: string, callbackQueue: string) {
+  const result = await pool.query<{
+    state: string;
+    canceled: boolean;
+    member: string | null;
+    callbacks: number;
+  }>(
+    `SELECT task_group.state, task_group.canceled_at IS NOT NULL AS canceled,
+            (SELECT outcome.state FROM workhorse.task_outcome outcome
+              WHERE outcome.task_id = $2) AS member,
+            (SELECT count(*)::integer FROM workhorse.task task
+              WHERE task.queue_name = $3) AS callbacks
+       FROM workhorse.task_group task_group WHERE task_group.id = $1`,
+    [groupId, memberId, callbackQueue],
+  );
+  return result.rows[0];
+}
+
 describe("enqueue lock order outside read committed", () => {
   it("lets a repeatable read group cancel and a purge of its callback queue finish", async () => {
     const queueName = `lock-order-callback-${randomUUID()}`;
@@ -291,7 +372,7 @@ describe("enqueue lock order outside read committed", () => {
     }
   });
 
-  // A known case that stays open (SM-2050). A transaction that creates a queue_control row in one call and
+  // A known case that stays open (ADR 0124, case 2). A transaction that creates a queue_control row in one call and
   // takes a key in a later call holds the row before the key. One call cannot change that order.
   // The architecture page states it (docs/architecture/lifecycle.md, "Isolation requirement").
   it("ends one transaction with a deadlock when two calls of one transaction take the row before the key", async () => {
@@ -339,6 +420,289 @@ describe("enqueue lock order outside read committed", () => {
     );
     expect(tasks.rows[0]).toEqual({ count: 0 });
   });
+
+  it("ends one transaction with a deadlock when a repeatable read group cancel meets a repeatable read completion of the last member", async () => {
+    const run = await cancelDuringLastCompletion("REPEATABLE READ");
+    const results = [run.completion, run.cancel];
+    expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, code: "40P01" }]);
+    // PostgreSQL rolled back the transaction that ended with 40P01. It usually ends the cancel,
+    // which waited first. If it ends the completion instead, the member has no outcome, the group
+    // cannot finish, and no callback task exists.
+    const state = await groupState(run.groupId, run.memberId, run.callbackQueue);
+    expect({ member: state?.member, callbacks: state?.callbacks }).toEqual(
+      run.completion.ok ? { member: "succeeded", callbacks: 1 } : { member: null, callbacks: 0 },
+    );
+  });
+
+  it("ends a repeatable read group cancel with a serialization failure and no deadlock when the completion of the last member runs at read committed", async () => {
+    const run = await cancelDuringLastCompletion("READ COMMITTED");
+    // At read committed the callback enqueue takes no row lock on queue_control, so the
+    // completion does not wait for the cancel. The cancel then finds a member that changed after
+    // its snapshot.
+    expect(run.completion).toEqual({ ok: true, rows: [] });
+    expect(run.cancel).toEqual({ ok: false, code: "40001" });
+    expect(await groupState(run.groupId, run.memberId, run.callbackQueue)).toEqual({
+      state: "finished",
+      canceled: false,
+      member: "succeeded",
+      callbacks: 1,
+    });
+  });
+
+  // A known case that stays open (ADR 0124, case 5). The completion of the last member locks the
+  // member and, in its resolver, a dependent in the callback queue. A purge of that queue inserts
+  // the queue_control row and waits for the dependent. At commit, the callback enqueue of the
+  // completion waits for that row.
+  it("ends one transaction with a deadlock when a repeatable read completion of the last member meets a purge of the callback queue", async () => {
+    const callbackQueue = `lock-order-purged-callback-${randomUUID()}`;
+    const memberQueue = `lock-order-purged-member-${randomUUID()}`;
+    const group = await queue.createTaskGroup({
+      onFinish: { type: "report", payload: {}, options: { queue: callbackQueue } },
+    });
+    const [member] = await queue.addToTaskGroup(group.id, [
+      { type: "member", payload: {}, options: { queue: memberQueue } },
+    ]);
+    await queue.sealTaskGroup(group.id);
+    await queue.enqueue(
+      "after-member",
+      {},
+      {
+        queue: callbackQueue,
+        dependencies: {
+          prerequisiteTaskIds: [member!.taskId],
+          onSuccess: "release",
+          onFailure: "cancel",
+          onCancellation: "cancel",
+        },
+      },
+    );
+    const claimed = await pool.query<{ task_id: string; fence_token: string }>(
+      "SELECT task_id, fence_token FROM workhorse.claim_v1($1, 'purged-callback-worker', 600000)",
+      [memberQueue],
+    );
+    const lease = claimed.rows[0]!;
+    expect(await hasQueueControlRow(callbackQueue)).toBe(false);
+
+    const completer = await openSession();
+    const purger = await openSession();
+    try {
+      await completer.client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await completer.client.query(
+        "SELECT workhorse.complete_v1($1, 'purged-callback-worker', $2, 'null'::jsonb)",
+        [lease.task_id, lease.fence_token],
+      );
+      const purge = settle(
+        purger.client.query(
+          "SELECT deleted_count FROM workhorse.purge_queue_v1($1, 'operator', 'purge', 'purge-callback')",
+          [callbackQueue],
+        ),
+      );
+      await waitForLock(purger.pid, "transactionid");
+      const completion = await settle(completer.client.query("COMMIT"));
+      const results = [completion, await purge];
+      expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, code: "40P01" }]);
+      // PostgreSQL rolled back the transaction that ended with 40P01. The member has an outcome
+      // only if the completion committed.
+      const outcome = await pool.query<{ state: string }>(
+        "SELECT state FROM workhorse.task_outcome WHERE task_id = $1",
+        [lease.task_id],
+      );
+      expect(outcome.rows).toEqual(completion.ok ? [{ state: "succeeded" }] : []);
+    } finally {
+      await closeSessions([completer, purger]);
+    }
+  });
+
+  // A known case that stays open (ADR 0124, case 6). A child create locks the parent row and then
+  // takes the tier lock of the child queue. An enqueue to the child queue that names the parent as a
+  // prerequisite takes that tier lock first and then waits for the parent. A holder keeps a second
+  // prerequisite X, which sorts below the parent, so the enqueue holds the tier lock and waits for X
+  // before the child create starts.
+  it("ends one transaction with a deadlock when a repeatable read child create meets a repeatable read enqueue that names the parent", async () => {
+    const parentQueue = `lock-order-parent-${randomUUID()}`;
+    const childQueue = `lock-order-child-${randomUUID()}`;
+    // Each attempt claims a new parent and enqueues candidates for X until one sorts below it.
+    let parent: { task_id: string; fence_token: string } | undefined;
+    let below: string | undefined;
+    for (let attempt = 0; attempt < 16 && below === undefined; attempt += 1) {
+      await queue.enqueue("parent", {}, { queue: parentQueue });
+      const claimed = await pool.query<{ task_id: string; fence_token: string }>(
+        "SELECT task_id, fence_token FROM workhorse.claim_v1($1, 'child-create-worker', 600000)",
+        [parentQueue],
+      );
+      parent = claimed.rows[0]!;
+      for (let candidate = 0; candidate < 16 && below === undefined; candidate += 1) {
+        const task = await queue.enqueue("below", {}, { queue: `${parentQueue}-other` });
+        if (task < parent.task_id) below = task;
+      }
+    }
+    if (parent === undefined || below === undefined) {
+      throw new Error("No pair of random identities sorted in the requested order");
+    }
+    expect(await hasQueueControlRow(childQueue)).toBe(false);
+
+    const holder = await openSession();
+    const enqueuer = await openSession();
+    const creator = await openSession();
+    try {
+      await holder.client.query("BEGIN");
+      await holder.client.query(
+        "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR UPDATE",
+        [below],
+      );
+      // The enqueue inserts the queue_control row of the child queue and waits for X.
+      await enqueuer.client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      const enqueue = settle(
+        enqueueMany(enqueuer, [
+          {
+            queue: childQueue,
+            type: "after-parent",
+            payload: {},
+            dependencies: {
+              prerequisiteTaskIds: [below, parent.task_id],
+              onSuccess: "release",
+              onFailure: "release",
+              onCancellation: "release",
+            },
+          },
+        ]),
+      );
+      await waitForLock(enqueuer.pid, "transactionid");
+      // The child create locks the parent and waits for the row of the enqueue.
+      await creator.client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      const create = settle(
+        creator.client.query(
+          "SELECT status FROM workhorse.create_single_child_v2($1, 'child-create-worker', $2, 'child', $3::jsonb)",
+          [
+            parent.task_id,
+            parent.fence_token,
+            JSON.stringify({ queue: childQueue, type: "child", payload: {} }),
+          ],
+        ),
+      );
+      await waitForLock(creator.pid, "transactionid");
+      // The enqueue locks X and then waits for the parent.
+      await holder.client.query("ROLLBACK");
+      const enqueued = await enqueue;
+      const created = await create;
+      await enqueuer.client.query("ROLLBACK");
+      await creator.client.query("ROLLBACK");
+      expect([enqueued, created].filter((result) => !result.ok)).toEqual([
+        { ok: false, code: "40P01" },
+      ]);
+    } finally {
+      await closeSessions([holder, enqueuer, creator]);
+    }
+    // The test rolled back both transactions, so the child queue holds no task.
+    const tasks = await pool.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM workhorse.task WHERE queue_name = $1",
+      [childQueue],
+    );
+    expect(tasks.rows[0]).toEqual({ count: 0 });
+  });
+});
+
+// A known case that stays open (ADR 0124, case 9). A purge and a group cancel lock their tasks in
+// identity order. A cancel of a prerequisite locks the prerequisite and then, in its resolver, the
+// dependent. If the dependent sorts below its prerequisite and both are in the set, each waits for
+// the other. A holder keeps a task X between them, so the set call holds the dependent and waits
+// before the cancel starts.
+describe("identity order against a resolver at read committed", () => {
+  type SetCall = "purge" | "group cancel";
+
+  interface Arranged {
+    prerequisite: string;
+    between: string;
+    run: (session: Session) => Promise<{ rows: unknown[] }>;
+  }
+
+  async function arrange(call: SetCall): Promise<Arranged> {
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const queueName = `lock-order-resolver-${randomUUID()}`;
+      const groupId = call === "group cancel" ? (await queue.createTaskGroup()).id : undefined;
+      const add = async (type: string, prerequisite?: string): Promise<string> => {
+        const options = {
+          queue: queueName,
+          ...(prerequisite === undefined
+            ? {}
+            : {
+                dependencies: {
+                  prerequisiteTaskIds: [prerequisite],
+                  onSuccess: "release" as const,
+                  onFailure: "cancel" as const,
+                  onCancellation: "cancel" as const,
+                },
+              }),
+        };
+        if (groupId === undefined) return queue.enqueue(type, {}, options);
+        const [result] = await queue.addToTaskGroup(groupId, [{ type, payload: {}, options }]);
+        return result!.taskId;
+      };
+      const prerequisite = await add("prerequisite");
+      const dependent = await add("dependent", prerequisite);
+      if (!(dependent < prerequisite)) continue;
+      for (let candidate = 0; candidate < 32; candidate += 1) {
+        const between = await add("between");
+        if (dependent < between && between < prerequisite) {
+          return {
+            prerequisite,
+            between,
+            run: (session) =>
+              groupId === undefined
+                ? session.client.query(
+                    "SELECT deleted_count FROM workhorse.purge_queue_v1($1, 'operator', 'purge', 'purge-resolver')",
+                    [queueName],
+                  )
+                : session.client.query(
+                    "SELECT state FROM workhorse.cancel_task_group_v1($1, 'operator', 'stop', 'cancel-resolver')",
+                    [groupId],
+                  ),
+          };
+        }
+      }
+    }
+    throw new Error("No set of random identities sorted in the requested order");
+  }
+
+  it.each<SetCall>(["purge", "group cancel"])(
+    "ends one transaction with a deadlock when a %s holds the dependent below its prerequisite",
+    async (call) => {
+      const arranged = await arrange(call);
+      const holder = await openSession();
+      const setCaller = await openSession();
+      const canceler = await openSession();
+      try {
+        await holder.client.query("BEGIN");
+        await holder.client.query(
+          "SELECT 1 FROM workhorse.task_runtime WHERE task_id = $1 FOR SHARE",
+          [arranged.between],
+        );
+        // The set call locks the dependent and waits for X.
+        const setResult = settle(arranged.run(setCaller));
+        await waitForLock(setCaller.pid, "transactionid");
+        // The cancel locks the prerequisite. Its resolver then waits for the dependent.
+        const cancel = settle(
+          canceler.client.query("SELECT workhorse.cancel_v1($1, 'operator', 'stop') AS canceled", [
+            arranged.prerequisite,
+          ]),
+        );
+        await waitForLock(canceler.pid, "transactionid");
+        // The set call locks X and then waits for the prerequisite.
+        await holder.client.query("ROLLBACK");
+        const results = [await setResult, await cancel];
+        expect(results.filter((result) => !result.ok)).toEqual([{ ok: false, code: "40P01" }]);
+        // PostgreSQL rolled back the transaction that ended with 40P01. If the cancel won, X is
+        // still ready. If the set call won, it removed or canceled X.
+        const between = await pool.query<{ state: string }>(
+          "SELECT state FROM workhorse.task_runtime WHERE task_id = $1",
+          [arranged.between],
+        );
+        expect(between.rows).toEqual(results[1]!.ok ? [{ state: "ready" }] : []);
+      } finally {
+        await closeSessions([holder, setCaller, canceler]);
+      }
+    },
+  );
 });
 
 describe("enqueue lock order at read committed", () => {

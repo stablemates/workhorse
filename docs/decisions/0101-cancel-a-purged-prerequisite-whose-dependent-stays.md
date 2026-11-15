@@ -4,6 +4,8 @@
 - **Date:** 2026-10-13
 - **Related:** [ADR 0095](0095-add-task-groups-with-completion-callbacks.md)
 - **Issue:** SM-1284. SM-1282 gave the purge its lock order.
+- **Amended by:** [ADR 0124](0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md)
+  (the purge and a cancel of a prerequisite in the purged queue)
 
 ## Context
 
@@ -183,3 +185,25 @@ dependency core for one caller.
 
 The purge could refuse with a Workhorse error code. Then the operator must first clean up every
 dependent by hand, and a purge of one queue depends on the state of other queues.
+
+## Amendment: the purge and a cancel of a prerequisite in the purged queue (2026-11-15)
+
+SM-2050 found that the lock protocol statement above is too broad. That statement says that the
+purge has no deadlock that a cancel of the same tasks does not also have. It holds only if no
+purged dependent sorts below its prerequisite in the purged queue. The rejected first design above
+had the same cycle for a dependent outside the purged queue.
+
+`integration-enqueue-lock-order.test.ts` reproduces the cycle at read committed:
+
+1. The task `D` is `blocked` and depends on `P`. Both are in the purged queue, and `D` sorts below
+   `P`.
+2. The purge locks `D` in identity order and waits for a task between `D` and `P`.
+3. A cancel of `P` locks `P`. Its resolver then waits for `D`.
+4. The purge locks the task between them and waits for `P`.
+5. PostgreSQL aborts one of them with `40P01`.
+
+A `cancel_task_group_v1` that holds `D` and `P` has the same cycle. If `D` sorts above `P`, or is
+outside the purged queue, the purge locks `P` first, and no cycle occurs. Workhorse keeps this
+limit, as case 9 of
+[ADR 0124](0124-keep-the-lock-order-cases-that-end-one-transaction-with-a-deadlock.md) records.
+The decision text above does not change.
