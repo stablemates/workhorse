@@ -90,15 +90,17 @@ it did not use the API of the Entity Framework Core and ASP.NET Core packages.
 
 The collector that
 [`DEPLOYMENT.md`](../typescript/demo/DEPLOYMENT.md#the-soak-window-forbids-a-database-reinstall)
-describes observes the public demo database from 2026-09-21. On 2026-11-03, a private record shows
+describes started to observe the public demo database on 2026-09-21. On 2026-11-03, a private record shows
 that this one installation meets the
 [amended bar](decisions/0056-set-the-1-0-0-exit-criteria.md#amendment-verify-processing-through-retention).
 At that date, the report counted 15 consecutive complete UTC days with successful task
 completions, from 2026-10-19 to 2026-11-02. The record also shows two deployments, on 2026-10-07
 and 2026-10-13, that applied migrations to the database.
 
-The collection continues after the gate passes, as the amendment requires. At the observation of
-2026-11-15, 23:17 UTC, the report of the private record counts this evidence:
+After the gate passes, collection is no longer required, as the
+[amendment of 2026-11-16](decisions/0056-set-the-1-0-0-exit-criteria.md#amendment-collection-after-gate-4-passes-is-not-required-2026-11-16)
+states. At the observation of 2026-11-15, 23:17 UTC, the report of the private record counts this
+evidence:
 
 - 27 consecutive complete UTC days with successful task completions, 2026-10-19 to 2026-11-14.
 - 35 days in the observation window that held a daily history partition.

@@ -694,7 +694,8 @@ the URL through the environment, as the role env file does, so no credential app
 line. Use the CLI inside the new image, because only that build carries migration 0025. The image
 installs it at `/opt/workhorse-demo/node_modules/.bin/workhorse`, under the working directory.
 
-The cutover migrates the databases, so it keeps the soak clock running. Every existing queue stays
+The cutover migrates the databases. If a soak window is open, the cutover keeps its observation
+series. Every existing queue stays
 full-tier, and nothing changes until an operator moves an empty queue to the fast tier. The demo's
 fast-tier seed step does this for its own three new queues only. From the
 next release on, the ordinary pipeline step applies again.
@@ -706,8 +707,13 @@ The demo host is the soak site for
 Gate 4. The gate asks one database to prove at least 14 consecutive complete UTC days of successful
 task completions. The
 [release gates page](https://github.com/stablemates/workhorse/blob/main/docs/release-gates.md#gate-4-verify-one-installation-through-retention)
-shows the gate as met, with the last change on 2026-11-03. The demo host already runs TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers against one PostgreSQL database, so the
-evidence is a matter of leaving it alone rather than building anything.
+shows the gate as met, with the last change on 2026-11-03. The demo host already runs TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers against one PostgreSQL database.
+The evidence of a soak window is a matter of leaving it alone rather than building anything.
+
+No soak window is open now. After Gate 4 passed, the
+[amendment of 2026-11-16](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md#amendment-collection-after-gate-4-passes-is-not-required-2026-11-16)
+made collection no longer required. A database reinstall now does not change the state of the gate.
+The rules below apply only to a new soak window, if a later decision asks for new evidence.
 
 While a soak window is open:
 
