@@ -14,7 +14,13 @@
   covers the JVM),
   [the amendment of 2026-10-22](#amendment-the-jvm-and-net-sdks-set-the-100-gates-2026-10-22)
   (Gate 2 drops its two clocks, Gate 1 gains `dotnet-api:check`, Gate 3 and Gate 6 cover .NET, and
-  the time floor changes)
+  the time floor changes),
+  [the amendment of 2026-11-03](#amendment-verify-processing-through-retention) (Gate 4 verifies
+  one installation through retention),
+  [the amendment of 2026-11-12](#amendment-publish-the-state-of-the-gates-2026-11-12) (a public page
+  gives the state of each gate),
+  [the amendment of 2026-11-16](#amendment-collection-after-gate-4-passes-is-not-required-2026-11-16)
+  (collection after Gate 4 passes is not required)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0055](0055-the-1-0-0-schema-boundary-adds-no-migration.md),
   [ADR 0053](0053-start-migrations-at-0-1-0-and-keep-them-additive.md),
@@ -320,6 +326,7 @@ Record the speaker, statement date, claimed operating dates, and supporting reco
 Do not invent dates or count an operator statement as a recorded completion, partition deletion, migration, or recovery.
 Evidence stays in the private operations repository.
 Automatic collection continues after the gate passes.
+The [amendment of 2026-11-16](#amendment-collection-after-gate-4-passes-is-not-required-2026-11-16) replaces this sentence.
 
 ## Amendment: publish the state of the gates (2026-11-12)
 
@@ -333,3 +340,21 @@ SM-34 stays the tracker that links the evidence of each gate, including the priv
 
 A pull request that moves the state of a gate changes the page in the same pull request. If the
 evidence is not in this repository, the next pull request changes the page.
+
+## Amendment: collection after Gate 4 passes is not required (2026-11-16)
+
+The maintainer accepts this amendment on 2026-11-16 (SM-2072). It replaces only the sentence
+"Automatic collection continues after the gate passes." of the
+[amendment of 2026-11-03](#amendment-verify-processing-through-retention). The bar of Gate 4 and the
+other gates do not change.
+
+Collection after Gate 4 passes is not required. The gate needs no later observation, and the
+committed record of the observation series is complete. The amendment of 2026-11-03 gives no reason
+to continue the collection.
+
+The record of Gate 4 is the committed snapshot in the private operations repository. An event on the
+demo installation after the gate passed does not change the state of the gate. A database reinstall
+is such an event.
+
+A new observation window is necessary only if a later decision asks for new evidence. The rules of
+the soak window then apply to that window.
