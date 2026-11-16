@@ -7,6 +7,30 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
+## Upgrade from 0.14.x to the next release
+
+The next release stops each cleanup pass from reading the whole key and dependency tables to delete
+a few rows. The upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0106 and leaves the schema at version 105.
+2. Roll out the new processes in any order.
+
+A 0.14.0 database is at schema version 104. The migration replaces two function bodies and changes
+no stored rows:
+
+| Migration                                              | Schema version | Changes                                                                                                                   |
+| ------------------------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `0106-delete-pruned-keys-and-edges-by-row-address.sql` | 105            | `prune_enqueue_idempotency_v1` and `prune_released_dependencies_v1` delete the rows that they locked through their `ctid` |
+
+Migration 0106 adds no function that an SDK calls. It does not raise the floor, so it stays 99. The
+functions change for every SDK version when the migration commits. Under a generic plan, the key
+phase and the released-edge phase no longer read each row of `enqueue_idempotency` or
+`task_dependency` on each call. A scan stays only for a batch that is a large part of its table, or
+for a very small table. The result of the functions does not change.
+
+A 0.14 process keeps working on schema version 105, because a migration inside a major line only
+adds.
+
 ## Upgrade from 0.12.x to 0.14.0
 
 The project publishes no 0.13.0. The maintainer skipped that number, so 0.14.0 is the

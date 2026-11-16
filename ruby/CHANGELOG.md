@@ -3,6 +3,15 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### Cleanup no longer reads the whole key and dependency tables
+
+Under a generic plan, `prune_enqueue_idempotency_v1` and `prune_released_dependencies_v1` read the
+whole `enqueue_idempotency` or `task_dependency` table to delete the rows of one pass (issue 1263).
+They now delete the rows that they locked by their `ctid`. The result does not change, and this SDK
+does not change. Migration 0106 moves the schema to version 105, and the floor stays 99.
+
 ## 0.14.0 — 2026-11-13
 
 There is no 0.13.0. A task queue does not tempt fate.

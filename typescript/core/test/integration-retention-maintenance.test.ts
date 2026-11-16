@@ -310,8 +310,10 @@ const firstPruneCallReads = async (kept: number) => {
 
 // Reads of one key phase and one released-edge phase, behind members of an open task group that
 // each have an expired key and a released edge. "references" counts the index rows of the two
-// reference walks, and "tables" counts the rows that each scan returns and each index scan fetches
-// from task and task_outcome.
+// reference walks. "tables" counts the rows that each scan returns and each index scan fetches
+// from task and task_outcome, and the rows that each scan returns from enqueue_idempotency and
+// task_dependency. A sequential scan returns each row of its table, so a delete that read the
+// whole reference table shows in that count.
 const referencePhaseReads = async (
   kept: number,
   counted: "references" | "tables" = "references",
@@ -385,6 +387,9 @@ const referencePhaseReads = async (
                         + pg_stat_get_xact_tuples_fetched('workhorse.task'::regclass)
                         + pg_stat_get_xact_tuples_returned('workhorse.task_outcome'::regclass)
                         + pg_stat_get_xact_tuples_fetched('workhorse.task_outcome'::regclass)
+                        + pg_stat_get_xact_tuples_returned(
+                          'workhorse.enqueue_idempotency'::regclass)
+                        + pg_stat_get_xact_tuples_returned('workhorse.task_dependency'::regclass)
                           AS tuples`,
           )
         ).rows[0]!.tuples,
@@ -3612,25 +3617,28 @@ describe("retention maintenance", () => {
     expect(await taskExists(taskId)).toBe(true);
   });
 
-  it("reads the same key and edge rows in one pass behind 1,100 or 1,400 kept tasks", async () => {
+  it("reads the same key and edge rows in one pass behind 2,000 or 3,000 kept tasks", async () => {
     // Members of an open task group stay, and each has an expired key and a released edge to a
     // finished dependent. The key and edge phases delete those references, so with a limit of 1
     // each phase walk reads a few index rows, whatever the kept tasks. On tables this small, a
     // generic plan of these phases can also read each whole table, as it did before this change.
     await useOneDayRowWindows(1);
-    const small = await referencePhaseReads(1100);
-    expect(await referencePhaseReads(1400)).toBe(small);
+    const small = await referencePhaseReads(2000);
+    expect(await referencePhaseReads(3000)).toBe(small);
     expect(small).toBeLessThan(10);
   });
 
   it.each(["force_generic_plan", "force_custom_plan"] as const)(
-    "reads the same task and outcome rows in the key and edge phases behind 1,100 or 1,400 kept tasks (%s)",
+    "reads the same table rows in the key and edge phases behind 2,000 or 3,000 kept tasks (%s)",
     async (plan) => {
       // Each phase looks up the task and the outcome of each reference that it deletes by primary
-      // key, so with a limit of 1 the reads do not grow with the kept tasks (ADR 0122).
+      // key, and it deletes each reference by its ctid. Thus with a limit of 1 the reads do not grow
+      // with the kept tasks (ADR 0122). With fewer than about 1,300 rows, a generic plan on
+      // PostgreSQL 15 and 16 can read all of task_outcome for the update of held_until, because a
+      // scan of so small a table costs less than the index. These sizes stay clear of that bound.
       await useOneDayRowWindows(1);
-      const small = await referencePhaseReads(1100, "tables", plan);
-      expect(await referencePhaseReads(1400, "tables", plan)).toBe(small);
+      const small = await referencePhaseReads(2000, "tables", plan);
+      expect(await referencePhaseReads(3000, "tables", plan)).toBe(small);
       expect(small).toBeLessThan(20);
     },
   );

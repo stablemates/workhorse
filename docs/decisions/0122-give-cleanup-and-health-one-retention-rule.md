@@ -467,6 +467,20 @@ update of `held_until` reads each end from one JSON object and finds its rows wi
 through the primary key. A join of the outcome with the array of ends let the planner scan
 `task_outcome` under a generic plan, so it is not used.
 
+Migration 0106 (schema version 105) applies the same rule to the deletes of the key phase and the
+released-edge phase (issue 1263). Each delete joined the rows to remove to the reference table on
+its key columns. A generic plan cannot see the phase limit, so it read the whole
+`enqueue_idempotency` or `task_dependency` table to delete one row. Each candidate now keeps the
+`ctid` of the row that it locks, and the delete finds the rows with `ctid = ANY`. PostgreSQL plans
+that condition as a TID scan, so the reads grow with the batch, not with the table. PostgreSQL can
+still scan the table when the batch is a large part of it, or when the table is very small, because
+the scan then costs less. The row lock keeps each `ctid` until the delete.
+
+The delete is a separate statement after the lock statement. If an update of a candidate row
+commits after the snapshot of the lock statement, the lock gives the `ctid` of the new row version.
+A delete in the same statement uses the earlier snapshot, so it does not see that version and
+removes nothing. The delete statement takes a later snapshot, which sees it.
+
 A count that does not depend on the speed of the host cannot show a comparison inside an
 expression. The test "tests no array once for each row in the hold code" therefore checks the
 function bodies, and "reads rows in proportion to the limit in the key phase" checks the rows that
