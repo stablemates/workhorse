@@ -692,6 +692,17 @@ so the work grew with the square of the batch (SM-2023). The work of the key pha
 proportion to its limit. `integration-retention-maintenance.test.ts` ("the cost of the hold code")
 checks both properties.
 
+The key phase and the released-edge phase each keep the `ctid` of each candidate row that they lock.
+The delete finds the removable rows with `ctid = ANY`. PostgreSQL plans that condition as a TID
+scan, so the reads grow with the batch, not with the table. PostgreSQL can still scan the table when
+the batch is a large part of it, or when the table is very small, because the scan then costs less.
+The row lock keeps each `ctid` until the delete. The delete is a separate statement, so its snapshot
+sees a row version that an update committed while the lock statement ran. Before migration 0106
+(schema version 105), each delete joined those rows to the table on its key columns. A generic plan
+then read the whole `enqueue_idempotency` or `task_dependency` table to delete one row. "reads the
+same table rows in the key and edge phases behind 2,000 or 3,000 kept tasks" checks the rows that
+the two phases read.
+
 `terminal_prune_position` stores two walks for each tier. The main walk starts after its position.
 If fewer rows follow, it continues from the oldest row up to its position. It stores the position
 after the last locked identity of a full batch or after the end of a whole slice. It removes the

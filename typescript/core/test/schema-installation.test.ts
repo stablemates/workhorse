@@ -787,6 +787,11 @@ describe("schema installation", () => {
         version: 104,
         description: "let an event detail read seek the task of its record",
       },
+      {
+        version: 105,
+        description:
+          "delete the expired keys and released edges of a cleanup pass by their row address",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(

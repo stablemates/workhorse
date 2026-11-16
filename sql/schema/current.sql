@@ -18509,13 +18509,14 @@ RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE v_count integer;
+DECLARE v_rows tid[];
 BEGIN
   IF p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 100000 THEN
     RAISE EXCEPTION 'released dependency limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
-    SELECT dependency.dependent_task_id, dependency.prerequisite_task_id,
-           outcome.finished_at AS dependent_finished_at
+    SELECT dependency.ctid AS row_address, dependency.dependent_task_id,
+           dependency.prerequisite_task_id, outcome.finished_at AS dependent_finished_at
       FROM workhorse.task_dependency dependency
       JOIN workhorse.task_outcome outcome ON outcome.task_id = dependency.dependent_task_id
      WHERE dependency.released_at IS NOT NULL
@@ -18533,24 +18534,31 @@ BEGIN
       FROM candidates
   ), removable AS MATERIALIZED (
     -- One window by prerequisite marks the edges of a blocked task, so no row searches the array.
-    SELECT marked.dependent_task_id, marked.prerequisite_task_id
+    SELECT marked.row_address
       FROM (
-        SELECT side.dependent_task_id, side.prerequisite_task_id, side.edge,
+        SELECT side.row_address, side.edge,
                bool_or(side.blocked) OVER (PARTITION BY side.prerequisite_task_id) AS blocked
           FROM (
-            SELECT candidates.dependent_task_id, candidates.prerequisite_task_id, true AS edge,
+            SELECT candidates.row_address, candidates.prerequisite_task_id, true AS edge,
                    false AS blocked
               FROM candidates
             UNION ALL
-            SELECT NULL::uuid, held.task_id, false, true
+            SELECT NULL::tid, held.task_id, false, true
               FROM blocked CROSS JOIN unnest(blocked.task_ids) AS held(task_id)
           ) side
       ) marked
      WHERE marked.edge AND NOT marked.blocked
   )
-  DELETE FROM workhorse.task_dependency dependency USING removable
-   WHERE dependency.dependent_task_id = removable.dependent_task_id
-     AND dependency.prerequisite_task_id = removable.prerequisite_task_id;
+  SELECT COALESCE(array_agg(removable.row_address), '{}'::tid[]) INTO v_rows FROM removable;
+  -- The delete finds the locked edges by ctid, so its reads grow with the batch, not with the
+  -- table. A join on the key let a generic plan read the whole table. The lock keeps each ctid
+  -- until the delete. The delete is a separate statement. An update can commit after the snapshot
+  -- of the lock statement. The lock then gives the ctid of the new row version, and only a later
+  -- snapshot sees that version.
+  IF cardinality(v_rows) = 0 THEN
+    RETURN 0;
+  END IF;
+  DELETE FROM workhorse.task_dependency dependency WHERE dependency.ctid = ANY(v_rows);
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
@@ -18570,7 +18578,8 @@ CREATE OR REPLACE FUNCTION workhorse.prune_enqueue_idempotency_v1(
 ) RETURNS integer
 LANGUAGE plpgsql
 AS $$
-DECLARE v_count integer;
+DECLARE v_count integer := 0;
+DECLARE v_rows tid[];
 DECLARE v_purge_count integer := 0;
 DECLARE v_purge_retention_days integer;
 BEGIN
@@ -18581,8 +18590,7 @@ BEGIN
     RAISE EXCEPTION 'idempotency prune limit must be between 1 and 100000';
   END IF;
   WITH candidates AS MATERIALIZED (
-    SELECT idempotency.idempotency_scope, idempotency.idempotency_key_hash,
-           idempotency.task_id, idempotency.expires_at
+    SELECT idempotency.ctid AS row_address, idempotency.task_id, idempotency.expires_at
       FROM workhorse.enqueue_idempotency idempotency
      WHERE idempotency.expires_at <= p_before
        AND NOT (
@@ -18605,25 +18613,30 @@ BEGIN
       FROM candidates
   ), removable AS MATERIALIZED (
     -- One window by task marks the keys of a blocked task, so no row searches the array.
-    SELECT marked.idempotency_scope, marked.idempotency_key_hash
+    SELECT marked.row_address
       FROM (
-        SELECT side.idempotency_scope, side.idempotency_key_hash, side.key,
+        SELECT side.row_address, side.key,
                bool_or(side.blocked) OVER (PARTITION BY side.task_id) AS blocked
           FROM (
-            SELECT candidates.idempotency_scope, candidates.idempotency_key_hash,
-                   candidates.task_id, true AS key, false AS blocked
+            SELECT candidates.row_address, candidates.task_id, true AS key, false AS blocked
               FROM candidates
             UNION ALL
-            SELECT NULL::text, NULL::bytea, held.task_id, false, true
+            SELECT NULL::tid, held.task_id, false, true
               FROM blocked CROSS JOIN unnest(blocked.task_ids) AS held(task_id)
           ) side
       ) marked
      WHERE marked.key AND NOT marked.blocked
   )
-  DELETE FROM workhorse.enqueue_idempotency idempotency USING removable
-   WHERE idempotency.idempotency_scope = removable.idempotency_scope
-     AND idempotency.idempotency_key_hash = removable.idempotency_key_hash;
-  GET DIAGNOSTICS v_count = ROW_COUNT;
+  SELECT COALESCE(array_agg(removable.row_address), '{}'::tid[]) INTO v_rows FROM removable;
+  -- The delete finds the locked keys by ctid, so its reads grow with the batch, not with the
+  -- table. A join on the key let a generic plan read the whole table. The lock keeps each ctid
+  -- until the delete. The delete is a separate statement. An update can commit after the snapshot
+  -- of the lock statement. The lock then gives the ctid of the new row version, and only a later
+  -- snapshot sees that version.
+  IF cardinality(v_rows) > 0 THEN
+    DELETE FROM workhorse.enqueue_idempotency idempotency WHERE idempotency.ctid = ANY(v_rows);
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+  END IF;
   SELECT task_identity_retention_days INTO v_purge_retention_days
     FROM workhorse.retention_policy WHERE singleton;
   IF v_purge_retention_days IS NOT NULL THEN
@@ -26452,10 +26465,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (101, 'index the active leases of each admission shard'),
   (102, 'take the locks of an enqueue call in key, tier, and row order'),
   (103, 'keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup'),
-  (104, 'let an event detail read seek the task of its record')
+  (104, 'let an event detail read seek the task of its record'),
+  (105, 'delete the expired keys and released edges of a cleanup pass by their row address')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (104) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (105) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

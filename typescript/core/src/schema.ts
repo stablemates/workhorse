@@ -749,6 +749,14 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
     description: "let an event detail read seek the task of its record",
     kind: "additive",
   },
+  {
+    fromVersion: 104,
+    toVersion: 105,
+    file: "0106-delete-pruned-keys-and-edges-by-row-address.sql",
+    description:
+      "delete the expired keys and released edges of a cleanup pass by their row address",
+    kind: "additive",
+  },
 ];
 
 /**

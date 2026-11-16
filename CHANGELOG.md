@@ -21,6 +21,25 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### Cleanup no longer reads the whole key and dependency tables
+
+The key phase and the released-edge phase of terminal cleanup lock their candidate rows through an
+index. Each phase then deleted those rows with a join on the key columns. A long-lived session runs
+`prune_enqueue_idempotency_v1` and `prune_released_dependencies_v1` with a generic plan. That plan
+cannot see the phase limit, so it read the whole `enqueue_idempotency` or `task_dependency` table to
+delete one row (issue 1263).
+
+Each phase now keeps the `ctid` of each row that it locks, and the delete finds the rows by `ctid`.
+PostgreSQL plans that condition as a TID scan, so the reads grow with the batch, not with the table.
+The result does not change. Migration 0106 changes the two function bodies. The schema moves to
+version 105, and the floor stays 99.
+
+The weekly CI run on PostgreSQL 15 and 16 failed on a read-count test of these phases. The test used
+1,100 and 1,400 kept tasks. At those sizes, a scan of `task_outcome` can cost less than its index.
+The test now uses 2,000 and 3,000 kept tasks. It also counts the reads of the two reference tables.
+
 ## 0.14.0 — 2026-11-13
 
 There is no 0.13.0. A task queue does not tempt fate.
