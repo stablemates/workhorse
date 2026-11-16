@@ -703,8 +703,10 @@ next release on, the ordinary pipeline step applies again.
 
 The demo host is the soak site for
 [ADR 0056](https://github.com/stablemates/workhorse/blob/main/docs/decisions/0056-set-the-1-0-0-exit-criteria.md)
-Gate 4, which holds the 1.0.0 tag on one database running 30 consecutive days under continuous
-work. It already runs TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers against one PostgreSQL database, so the
+Gate 4. The gate asks one database to prove at least 14 consecutive complete UTC days of successful
+task completions. The
+[release gates page](https://github.com/stablemates/workhorse/blob/main/docs/release-gates.md#gate-4-verify-one-installation-through-retention)
+shows the gate as met, with the last change on 2026-11-03. The demo host already runs TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers against one PostgreSQL database, so the
 evidence is a matter of leaving it alone rather than building anything.
 
 While a soak window is open:
@@ -712,7 +714,8 @@ While a soak window is open:
 - **Containers may be redeployed.** A deploy replaces processes, not data, and the clock is a
   property of the database. Redeploy as often as the work requires.
 - **Neither database may be reinstalled.** Dropping, recreating, or restoring the primary demo
-  database starts a new 30-day clock on the day it happens, and the days already served are gone.
+  database starts a new observation series on the day it happens, and the days already served are
+  gone.
   That includes a restore from backup, because the evidence is the migration ledger the restored
   copy no longer carries forward.
 - **A migration is the only way the schema changes.** Carrying the database across releases by
