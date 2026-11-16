@@ -85,16 +85,27 @@ it did not use the API of the Entity Framework Core and ASP.NET Core packages.
 
 - **Bar:** One installation proves at least 14 consecutive complete UTC days of completed tasks,
   and the five other conditions of the amended gate.
-- **State:** Open
-- **Last change:** 2026-09-03
+- **State:** Met
+- **Last change:** 2026-11-03
 
-The observation of the public demo database started on 2026-09-21, with the collector that
+The collector that
 [`DEPLOYMENT.md`](../typescript/demo/DEPLOYMENT.md#the-soak-window-forbids-a-database-reinstall)
-describes. The
-[five conditions](decisions/0056-set-the-1-0-0-exit-criteria.md#amendment-verify-processing-through-retention)
-include at least 14 daily partition rollovers, completed tasks after a retention deletion, and
-recovery from an ungraceful worker stop. A report must count that evidence for the installation,
-and that report does not exist yet.
+describes observes the public demo database from 2026-09-21. On 2026-11-03, a private record shows
+that this one installation meets the
+[amended bar](decisions/0056-set-the-1-0-0-exit-criteria.md#amendment-verify-processing-through-retention).
+At that date, the report counted 15 consecutive complete UTC days with successful task
+completions, from 2026-10-19 to 2026-11-02. The record also shows two deployments, on 2026-10-07
+and 2026-10-13, that applied migrations to the database.
+
+The collection continues after the gate passes, as the amendment requires. At the observation of
+2026-11-15, 23:17 UTC, the report of the private record counts this evidence:
+
+- 27 consecutive complete UTC days with successful task completions, 2026-10-19 to 2026-11-14.
+- 35 days in the observation window that held a daily history partition.
+- 14 retention movements, and 13 of them dropped a partition.
+- 13 complete UTC days with successful task completions after an observed deletion.
+- 1 of 1 ungraceful worker stop, on 2026-09-21, recovered with no lost and no duplicated task.
+- One installation with no reinstall, and 82 migrations applied in the observation window.
 
 ## Gate 5. The dashboard server is reviewed
 
