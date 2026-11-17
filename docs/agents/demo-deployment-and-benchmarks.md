@@ -10,7 +10,7 @@ assess changes that need visual verification.
 
 A long-lived proxy serves the local demo hostname. If the demo stops, the proxy returns `504
 Gateway Timeout` rather than a connection error. Stopping Vite during dependency pre-bundling can
-also corrupt `typescript/dashboard/app/node_modules/.vite`; remove that cache and restart the demo
+also corrupt `dashboard/app/node_modules/.vite`; remove that cache and restart the demo
 if a running server returns a `504` for a `.vite/deps` chunk.
 
 The demo writes continuously to its database. Run repository commands from the checkout that owns
