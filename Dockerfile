@@ -55,7 +55,7 @@ COPY ruby/examples/demo_worker.rb ./
 
 # The JVM worker's jars. The build reads the core's sources and the dashboard bundle that the core
 # jar carries. The runtime stage needs no Gradle and no JDK, only the JRE stage below.
-FROM gradle:9.8.2-jdk25-alpine@sha256:80143a78c558d1298d392339ea51236bea816131afe2916ef465a76ff2579809 AS jvm-build
+FROM gradle:9.8.2-jdk25-alpine@sha256:20d4d9547874206648a7a72991bf3af6d8bc1c8bffc7f32051f682b21f86d027 AS jvm-build
 
 WORKDIR /workhorse
 ARG BUILD_CONCURRENCY=4
