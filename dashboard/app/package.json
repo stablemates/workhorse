@@ -66,7 +66,7 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@orpc/client": "1.16.1",
+    "@orpc/client": "1.16.2",
     "@stablemates/workhorse": "workspace:*",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
@@ -76,8 +76,8 @@
     "react-dom": "^19.3.1",
     "react-grab": "^0.2.0",
     "typescript": "^5.8.3",
-    "vite": "^8.3.5",
-    "vitest": "^5.0.3"
+    "vite": "^8.3.7",
+    "vitest": "^5.1.0"
   },
   "peerDependencies": {
     "@stablemates/workhorse": ">=0.14.0 <0.15.0",
