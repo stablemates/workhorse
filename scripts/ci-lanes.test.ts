@@ -522,8 +522,9 @@ describe("a docs-only pull request", () => {
   });
 });
 
-// The merge rule in AGENTS.md forbids the skip-CI marker for a change to any changelog. The root
-// changelog matches the `*.md` glob of DOC_PATHS, so the gate refuses changelogs by name.
+// The merge rule in docs/agents/ci-and-releases.md forbids the skip-CI marker for a change to any
+// changelog. The root changelog matches the `*.md` glob of DOC_PATHS, so the gate refuses
+// changelogs by name.
 describe("the docs-only merge gate", () => {
   it("accepts a change to documentation only", () => {
     expect(skipCiVerdict(["docs/architecture.md", "README.md", "site/content/docs/a.mdx"])).toEqual(

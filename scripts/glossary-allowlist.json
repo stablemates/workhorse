@@ -177,6 +177,30 @@
       "files": "docs/dashboard-security-review.md",
       "context": "packaged archive map",
       "reason": "This archive is the packaged browser bundle of an SDK host."
+    },
+    {
+      "word": "message",
+      "files": "docs/agents/{commits-and-pull-requests,ci-and-releases,demo-deployment-and-benchmarks,simplified-technical-english}.md",
+      "context": "[Cc]ommit messages?|squash message|the message's only agent attribution|rewrite the message to describe|a single current message|stay out of the message",
+      "reason": "A commit message is the Git text of a commit, not a Workhorse task."
+    },
+    {
+      "word": "lane",
+      "files": "docs/agents/ci-and-releases.md",
+      "context": "runs only its lanes|The release lanes are|(runs|are|planned every|skipped a) (the )?release lanes?|every push lane|weekly packed lane|the lanes (that a change selects|for your local changes)|selects every lane",
+      "reason": "A CI lane is one group of CI checks that the lane plan selects, not a Workhorse tier."
+    },
+    {
+      "word": "job",
+      "files": "docs/agents/{ci-and-releases,testing}.md",
+      "context": "[Tt]he CI job|ruby-rails(-main)? CI job|plan job of each push run|types job locally",
+      "reason": "A GitHub Actions job is one unit of a CI workflow, not a Workhorse task."
+    },
+    {
+      "word": "class",
+      "files": "docs/agents/{checkouts-and-databases,writing-documentation}.md",
+      "context": "each test class|[Aa] test class there|\\.NET class database|ends with its class|a database for each class|per-language error classes",
+      "reason": "A test class is a .NET test fixture, and an error class is a language exception type. Neither is a Workhorse tier."
     }
   ]
 }
