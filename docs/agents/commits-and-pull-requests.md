@@ -9,7 +9,7 @@ naming the exact model ID. That trailer is the message's only agent attribution:
 harness, product, or session.
 
 ```
-Co-Authored-By: claude-fable-5-1 <noreply@anthropic.com>
+Co-Authored-By: <exact-model-id> <noreply@anthropic.com>
 ```
 
 ## Keep an agent pull request to one commit
