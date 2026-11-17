@@ -19,8 +19,9 @@
 // holds the map to the workflow and to the files each lane names in its sources.
 //
 // `tsx scripts/ci-lanes.ts --docs-only` reads changed paths from standard input and tells whether
-// the change is docs-only, for the merge rule in AGENTS.md. That gate also refuses a change to a
-// changelog, because the merge of such a change must not get the skip-CI marker.
+// the change is docs-only, for the merge rule in docs/agents/ci-and-releases.md. That gate also
+// refuses a change to a changelog, because the merge of such a change must not get the skip-CI
+// marker.
 import { execFile } from "node:child_process";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -278,7 +279,9 @@ export const RELEASE_FILES = [
 /**
  * The documentation. If every file that a pull request changes matches one of these globs, the
  * change is docs-only. Each glob is also in {@link ALWAYS_RUN_LANE_INPUTS}, so a docs-only change
- * never runs every lane. AGENTS.md lets the squash merge of a docs-only change skip its push run.
+ * never runs every lane. The squash merge of a docs-only change skips its push run when
+ * {@link skipCiVerdict} permits it and the commit is not a release candidate
+ * (docs/agents/ci-and-releases.md).
  */
 export const DOC_PATHS = ["docs/**", "site/**", "*.md", "api/README.md"] as const;
 
@@ -692,10 +695,10 @@ export async function pushFiles(
 
 /**
  * Tells whether the squash merge of a change can skip its push run, for the merge rule in
- * AGENTS.md. The change must be docs-only, and it must not change a changelog. A changelog matches
- * {@link DOC_PATHS} at the root, but AGENTS.md forbids the skip-CI marker for a change to any
- * changelog. Lane planning does not use this rule: {@link isDocsOnlyChange} still counts the root
- * changelog as documentation.
+ * docs/agents/ci-and-releases.md. The change must be docs-only, and it must not change a changelog.
+ * A changelog matches {@link DOC_PATHS} at the root, but the merge rule forbids the skip-CI marker
+ * for a change to any changelog. Lane planning does not use this rule: {@link isDocsOnlyChange}
+ * still counts the root changelog as documentation.
  */
 export function skipCiVerdict(changedFiles: readonly string[]): {
   readonly docsOnly: boolean;
