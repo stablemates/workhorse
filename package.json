@@ -222,9 +222,9 @@
     "rust:vuln": "tsx scripts/audit-rust-dependencies.ts"
   },
   "devDependencies": {
-    "@opentelemetry/context-async-hooks": "2.12.0",
-    "@opentelemetry/core": "2.12.0",
-    "@opentelemetry/sdk-metrics": "2.12.0",
+    "@opentelemetry/context-async-hooks": "2.12.1",
+    "@opentelemetry/core": "2.12.1",
+    "@opentelemetry/sdk-metrics": "2.12.1",
     "@opentelemetry/sdk-trace-base": "2.12.0",
     "@resvg/resvg-js": "2.6.2",
     "@stablemates/workhorse-knex": "workspace:*",
