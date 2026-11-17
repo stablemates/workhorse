@@ -45,7 +45,7 @@
       "tested": ["10.0"]
     },
     "go": {
-      "minimum": "1.25.0"
+      "minimum": "1.26.0"
     },
     "java": {
       "endOfLife": {

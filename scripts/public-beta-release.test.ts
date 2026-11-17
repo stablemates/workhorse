@@ -108,7 +108,9 @@ describe("the 0.14.0 release", () => {
         ],
       ],
       ["python/CHANGELOG.md", [`Python **${manifest.support.python.minimum}** or newer`]],
-      ["go/CHANGELOG.md", [`Go **${manifest.support.go.minimum.replace(/\.0$/, "")}** or newer`]],
+      // 0.14.0 shipped with the Go 1.25 floor. The next minor raises it to 1.26 (ADR 0058). The
+      // number is written here because a published entry is immutable.
+      ["go/CHANGELOG.md", ["Go **1.25** or newer"]],
       [
         "rust/CHANGELOG.md",
         [

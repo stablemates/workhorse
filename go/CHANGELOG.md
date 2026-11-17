@@ -10,6 +10,23 @@ adds.
 
 ## Unreleased
 
+### The module requires Go 1.26
+
+The module now declares `go 1.26.0`, and it requires OpenTelemetry Go 1.47.0, raised from 1.46.0.
+OpenTelemetry Go 1.47.0 fixes GHSA-q7gw-24fr-5p69: before 1.47.0, the SDK and the automatic
+instrumentation tracer did not apply `AttributeValueLengthLimit` to attribute values made of U+FFFD
+runes. OpenTelemetry Go 1.47.0 requires Go 1.26. The packages of this module import only the
+OpenTelemetry API, which includes that tracer. Only the tests use the SDK, and your application
+selects its SDK version.
+
+The Go project stopped its support of Go 1.25 on 2026-08-19, when it released Go 1.27.0. If you
+build on Go 1.25, upgrade Go to 1.26 or newer before you take this release. 0.14 continues to
+build on Go 1.25, but it does not have this fix.
+
+No earlier changelog announced the drop, which the compatibility policy requires. ADR 0058 records
+this one exception: the Go project no longer fixes Go 1.25, and the fixed OpenTelemetry release
+does not build on it.
+
 ### Cleanup no longer reads the whole key and dependency tables
 
 Under a generic plan, `prune_enqueue_idempotency_v1` and `prune_released_dependencies_v1` read the

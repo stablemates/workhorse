@@ -38,7 +38,7 @@ key. The operator menu also retains an explicit idempotent enqueue path.
 
 The demo needs these prerequisites:
 
-- Node.js 22+, pnpm 10+, Go 1.25+, `uv`, Cargo, and Ruby 3.3+ with Bundler.
+- Node.js 22+, pnpm 10+, Go 1.26+, `uv`, Cargo, and Ruby 3.3+ with Bundler.
 - The JDK, Gradle, and .NET SDK versions that `mise.toml` pins.
 - The workspace dependencies, installed with `pnpm install`.
 - The Ruby gems, installed with `pnpm ruby:install`.

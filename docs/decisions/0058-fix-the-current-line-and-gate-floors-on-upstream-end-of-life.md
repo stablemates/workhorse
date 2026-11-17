@@ -5,7 +5,8 @@
 - **Assembled by:** [ADR 0059](0059-assemble-the-1-0-0-specification.md)
 - **Amended by:** [ADR 0106](0106-keep-the-release-lines-in-lockstep-after-1-0-0.md) (a fix in one SDK
   releases every line, and each other line publishes a version-only release); the 2026-11-09
-  amendment below (Active Job 8.0 left without a changelog notice)
+  amendment below (Active Job 8.0 left without a changelog notice); the 2026-11-17 amendment below
+  (Go 1.25 left without a changelog notice)
 - **Related:** [ADR 0054](0054-define-what-1-0-0-promises.md),
   [ADR 0056](0056-set-the-1-0-0-exit-criteria.md),
   [ADR 0057](0057-retain-superseded-functions-and-contract-on-the-operators-schedule.md),
@@ -222,6 +223,26 @@ The notice rule itself stands. A future floor raise still needs its changelog no
 minor before the minor that drops the version. Since SM-1922, the support-matrix test also fails
 before the date when no published minor carries that notice. "Raising a floor" in
 `docs/compatibility.md` describes the check.
+
+## Amendment: Go 1.25 leaves the matrix without a changelog notice (2026-11-17)
+
+Go 1.27.0 was released on 2026-08-19. From that day, Go 1.25 was older than the two releases that
+the Go project supports, so it was at its upstream end of life. Go has no published end-of-life
+date, so `support.json` records none, and the support-matrix test did not fail. No published
+minor's changelog announced the drop.
+
+GitHub published GHSA-q7gw-24fr-5p69 on 2026-11-13. It reports that OpenTelemetry Go before 1.47.0
+does not apply `AttributeValueLengthLimit` to attribute values made of U+FFFD runes. OpenTelemetry Go 1.47.0
+requires Go 1.26.
+
+The next minor drops Go 1.25 anyway, as a second one-time exception. The Go project no longer
+fixes Go 1.25, and the fixed OpenTelemetry release does not build on it. An application on Go 1.25
+keeps 0.14, which works against the database it was built for. The changelog of that minor
+states the exception.
+
+The notice rule itself stands. Go has no date for the support-matrix test to check, so the next Go
+floor raise needs its changelog notice when a new Go release makes the floor older than the two
+releases that the Go project supports.
 
 ## Consequences
 

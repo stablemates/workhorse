@@ -27,7 +27,7 @@ import { repositoryRoot } from "./packages.js";
 //
 // `go run` builds the tool with the toolchain already installed, because `actions/setup-go` sets
 // GOTOOLCHAIN=local. So the pin has to name an `x/exp` commit whose own `go` directive is no newer
-// than `go/go.mod`. Newer commits ask for go 1.26, and under GOTOOLCHAIN=local the check fails
+// than `go/go.mod`. A commit that asks for a newer Go fails under GOTOOLCHAIN=local
 // before it compares anything. Re-pin only alongside a `go/go.mod` bump.
 const apidiffVersion = "v0.0.0-20260820122028-d6e0b57b1a69";
 const goModule = "github.com/stablemates/workhorse/go";
@@ -97,7 +97,7 @@ async function newestBaseline(): Promise<Baseline> {
 async function incompatibleChanges(baseline: Baseline): Promise<string[]> {
   const scratch = await mkdtemp(path.join(tmpdir(), "workhorse-go-api-"));
   try {
-    await writeFile(path.join(scratch, "go.mod"), "module workhorse-go-api-baseline\n\ngo 1.25\n");
+    await writeFile(path.join(scratch, "go.mod"), "module workhorse-go-api-baseline\n\ngo 1.26\n");
     // The download and both `go run` steps reach the module proxy or the checksum database, which
     // can reset a stream for a short time. Each one runs again if it fails (SM-1557).
     await retryStep(
