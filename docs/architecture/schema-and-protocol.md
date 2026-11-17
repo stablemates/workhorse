@@ -1759,7 +1759,7 @@ The Go SDK contains the queue client and the worker for Go.
 
 ### Module and executors
 
-The Go module is `github.com/stablemates/workhorse/go`. It requires Go 1.25 or newer. It requires
+The Go module is `github.com/stablemates/workhorse/go`. It requires Go 1.26 or newer. It requires
 pgx v5.12.0 as a minimum, not as a pin. Minimal version selection lets a consumer choose a higher
 pgx v5. A higher pgx v5 is expected to work, but it is not tested.
 

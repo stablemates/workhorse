@@ -1,3 +1,10 @@
 {
-  "acceptances": []
+  "acceptances": [
+    {
+      "advisory": "RUSTSEC-2026-0543",
+      "crate": "chrono",
+      "reason": "An unmaintained notice, not a vulnerability. chrono is a direct dependency of the published crate and reaches it through the tokio-postgres with-chrono-0_4 feature. No maintained release of chrono exists, and RustSec names no safe upgrade. Moving the crate to a maintained time library changes its public API and needs its own release.",
+      "reviewBy": "2027-02-17"
+    }
+  ]
 }

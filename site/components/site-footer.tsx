@@ -32,7 +32,7 @@ const runtimes = [
   `PostgreSQL ${support.support.postgres.minimum}+`,
   `Node ${support.support.node.minimum}+`,
   `Python ${support.support.python.minimum}+`,
-  // `support.json` spells the Go floor as a full version, `1.25.0`. Every other
+  // `support.json` spells the Go floor as a full version, `1.26.0`. Every other
   // surface prints the language version a reader installs (support-matrix).
   `Go ${support.support.go.minimum.replace(/\.0$/, "")}+`,
   `Rust ${rustVersion}+`,

@@ -913,7 +913,7 @@ describe("continuous integration", () => {
 
     expect(pullRequest.typescript.include).toEqual([{ node: 24, postgres: 18 }]);
     expect(pullRequest.python.include).toEqual([{ python: "3.14", postgres: 18 }]);
-    expect(pullRequest.go.include).toEqual([{ go: "1.25", postgres: 18 }]);
+    expect(pullRequest.go.include).toEqual([{ go: "1.26", postgres: 18 }]);
     expect(pullRequest.rust.include).toEqual([{ postgres: 18 }]);
     expect(pullRequest.ruby.include).toEqual([{ ruby: "4.0", postgres: 18 }]);
     expect(pullRequest.jvm.include).toEqual([
@@ -960,7 +960,7 @@ describe("continuous integration", () => {
       }
     }
     for (const postgres of manifest.support.postgres.tested) {
-      expect(full.go.include).toContainEqual({ go: "1.25", postgres });
+      expect(full.go.include).toContainEqual({ go: "1.26", postgres });
     }
   });
 
