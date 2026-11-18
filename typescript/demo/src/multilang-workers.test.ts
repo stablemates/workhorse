@@ -142,7 +142,7 @@ describe("multilanguage demo worker topology", () => {
       readFile(resolve("ruby/examples/demo_worker.rb"), "utf8"),
     ]);
 
-    expect(dockerfile).toContain("FROM golang:1.25-alpine@sha256:");
+    expect(dockerfile).toContain("FROM golang:1.26.11-alpine@sha256:");
     expect(dockerfile).toContain("cargo build --locked --release -p workhorse-demo-worker");
     expect(dockerfile).toMatch(
       /^FROM ghcr\.io\/astral-sh\/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} AS uv$/m,
