@@ -329,7 +329,7 @@ describe("the public beta line", () => {
 
   it("builds the site with the supported Go toolchain line", async () => {
     expect(await read("Dockerfile.site")).toMatch(
-      /^FROM golang:1\.25(?:\.[0-9]+)?-alpine@sha256:[0-9a-f]{64} AS go$/m,
+      /^FROM golang:1\.26(?:\.[0-9]+)?-alpine@sha256:[0-9a-f]{64} AS go$/m,
     );
   });
 
