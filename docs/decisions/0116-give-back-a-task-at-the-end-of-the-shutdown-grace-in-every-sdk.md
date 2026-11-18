@@ -6,6 +6,9 @@
   shutdown deadline)
 - **Amended by:** [ADR 0117](0117-let-the-shutdown-cancellation-decide-the-settlement-in-the-unwind-window.md)
   (the shutdown cancellation, not the type of the error, decides rule 4; a panic fails the attempt)
+  and [ADR 0125](0125-exit-with-code-0-when-every-handler-stops-at-the-shutdown-abort.md) (the
+  TypeScript and Python runners exit with code 0 when every handler stops in the window, and a
+  write that fails in the window makes the stop fail in every SDK)
 - **Issue:** SM-1919
 
 ## Context

@@ -35,12 +35,14 @@ export function reportWorkerStartup(worker: object): void {
  * the signal of each handler that still runs, so the worker can give the task back before the
  * process exits (SM-1919).
  */
-const shutdownAborts = new WeakMap<object, () => void>();
+const shutdownAborts = new WeakMap<object, () => number>();
 
-export function onWorkerShutdownAbort(worker: object, abort: () => void): void {
+/** The abort returns the number of handlers whose signal it aborted. */
+export function onWorkerShutdownAbort(worker: object, abort: () => number): void {
   shutdownAborts.set(worker, abort);
 }
 
-export function abortWorkerHandlers(worker: object): void {
-  shutdownAborts.get(worker)?.();
+/** Abort the signal of each handler that still runs, and return how many it aborted. */
+export function abortWorkerHandlers(worker: object): number {
+  return shutdownAborts.get(worker)?.() ?? 0;
 }

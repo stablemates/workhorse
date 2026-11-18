@@ -1190,7 +1190,9 @@ export class Worker {
     }
     onWorkerShutdownAbort(this, () => {
       this.shutdownAborted = true;
-      for (const attempt of this.activeAttempts) attempt.abortForShutdown();
+      let aborted = 0;
+      for (const attempt of this.activeAttempts) if (attempt.abortForShutdown()) aborted += 1;
+      return aborted;
     });
   }
 
@@ -1930,9 +1932,9 @@ export class Worker {
         try {
           accepted = (await writeCompletion()).accepted;
         } catch (error) {
-          // As after a failed release, lease recovery settles the task.
+          // As after a failed release, lease recovery settles the task, and run() rejects.
           this.logShutdownSettlementFailure(task, error);
-          return;
+          throw error;
         }
       } else {
         accepted = await this.writeCompletion(task, writeCompletion);
@@ -2038,7 +2040,8 @@ export class Worker {
   }
 
   // Releases the task of a handler that the shutdown abort ended, as Go settleAfterShutdown does.
-  // If the release fails, the worker logs the failure, and lease recovery settles the task.
+  // If the release fails, the worker logs the failure and rethrows it, so run() rejects as it does
+  // in every SDK (SM-2073). Lease recovery settles the task.
   private async releaseAfterShutdown(
     task: ClaimedTask,
     span: WorkhorseTelemetrySpan,
@@ -2048,10 +2051,12 @@ export class Worker {
       await this.releaseOwned(task, span, attempt);
     } catch (error) {
       this.logShutdownSettlementFailure(task, error);
+      throw error;
     }
   }
 
-  // A completion or a release after the shutdown abort failed. Lease recovery settles the task.
+  // A completion or a release after the shutdown abort failed. Lease recovery settles the task, and
+  // the error then ends the run.
   private logShutdownSettlementFailure(task: ClaimedTask, error: unknown): void {
     logWarn(
       "workhorse.worker.shutdown_settlement_failed",

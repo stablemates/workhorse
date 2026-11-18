@@ -5870,7 +5870,9 @@ interface WorkerProcessDefinition<TTransaction = unknown> {
   workers: readonly WorkerProcessWorkerDefinition[];
   /**
   * Shutdown grace after the first termination signal. Defaults to 25 seconds. At its end, the
-  * runner aborts the signal of each handler that still runs, waits 250 ms, and exits the process.
+  * runner aborts the signal of each handler that still runs, waits 250 ms, and exits the process:
+  * with code 0 if the drain completed in that window, and with code 1 otherwise. The drain includes
+  * closing the adapter and the probe server.
   */
   shutdownTimeoutMs?: number;
   /** Optional probe-only HTTP listener for container orchestrators. */

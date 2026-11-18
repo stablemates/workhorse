@@ -220,8 +220,10 @@ The default shutdown deadline is 25 seconds and may be configured from 1 millise
 
 - A second `SIGINT` exits immediately with code 130.
 - A second `SIGTERM` exits immediately with code 143.
-- A missed graceful-shutdown deadline aborts the signal of each active handler with a `WorkerShutdownError` reason. The runner waits 250 ms, or until the drain ends, and then exits with code 1. A handler that returns a value in that window completes its task. A handler that throws releases its task through `release_owned_v1`, and the task keeps its attempt.
-- A fatal worker-loop failure starts the same deadline when the worker first observes it. The deadline exits with code 1 if the failing worker and its siblings do not settle in time.
+- A missed graceful-shutdown deadline aborts the signal of each active handler with a `WorkerShutdownError` reason. The runner waits 250 ms, or until the drain ends. A handler that returns a value in that window completes its task. A handler that throws releases its task through `release_owned_v1`, and the task keeps its attempt.
+- If the drain completes in that window, including the adapter close, the runner logs at `info` and exits with code 0. Every handler returned or threw in the window, so the stop is clean, and a deploy that cuts a long task short does not report a failed container.
+- If a handler does not return in that window, a completion or release write fails, or the drain fails, the runner logs at `error` and exits with code 1. Lease recovery settles the tasks that the window left. The stop of every other SDK reports a failed write the same way.
+- A fatal worker-loop failure starts the same deadline when the worker first observes it. The deadline exits with code 1 if the failing worker and its siblings do not settle in time. A failure shutdown exits with code 1 even if every handler stops at the abort.
 
 A hard exit does not invent a task failure or retry transition. A handler that does not return in the unwind window keeps its lease until the lease expires. Active leases remain durable PostgreSQL state. Another worker recovers them after lease expiry using the existing fenced recovery protocol. External effects remain at least once, so handlers must retain their normal idempotency strategy.
 

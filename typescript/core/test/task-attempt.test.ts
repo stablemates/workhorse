@@ -236,6 +236,22 @@ describe("TaskAttempt", () => {
     expect(heartbeat.removed).toBe(1);
   });
 
+  // SM-2073: the process runner logs how many handlers the shutdown abort stopped.
+  it("reports only the shutdown abort that changed the signal", () => {
+    const { attempt } = startAttempt();
+
+    expect(attempt.abortForShutdown()).toBe(true);
+    expect(attempt.abortForShutdown()).toBe(false);
+    expect(attempt.signal.reason).toMatchObject({ name: "WorkerShutdownError" });
+  });
+
+  it("reports no shutdown abort when another outcome already aborted the signal", () => {
+    const { attempt, heartbeat } = startAttempt();
+    heartbeat.status!("stale", Date.now());
+
+    expect(attempt.abortForShutdown()).toBe(false);
+  });
+
   it("rethrows the abort reason when an expiry ended the attempt", () => {
     const { attempt, heartbeat } = startAttempt();
 

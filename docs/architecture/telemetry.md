@@ -741,8 +741,8 @@ successful configuration changes at info.
 
 - `workhorse.worker.shutdown_settlement_failed` carries bounded task and worker identity and
   `error.type`. The TypeScript, Python, and Go workers emit it when the completion or the release
-  after the shutdown abort fails. Lease recovery then settles the task
-  ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
+  after the shutdown abort fails. The run then ends with that error, and lease recovery settles the
+  task ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
 
 - `workhorse.worker.expiration_request_failed` carries bounded task and worker identity and
   `error.type`. Each of the seven workers emits it once for each expiry request that fails while the

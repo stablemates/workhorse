@@ -118,8 +118,9 @@ func TestWorkerWaitsForAHandlerThatHonoursItsCancellation(t *testing.T) {
 
 	select {
 	case err := <-runResult:
-		if errors.Is(err, workhorse.ErrShutdownIncomplete) {
-			t.Fatal("a handler that unwound on cancellation was reported as abandoned")
+		// SM-2073: a handler that stops in the window and a release that succeeds are a clean stop.
+		if err != nil {
+			t.Fatalf("Run returned %v after a handler unwound on cancellation, want nil", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run never returned after the grace period")
@@ -128,6 +129,65 @@ func TestWorkerWaitsForAHandlerThatHonoursItsCancellation(t *testing.T) {
 	case <-finished:
 	default:
 		t.Fatal("Run returned before the cancelled handler unwound")
+	}
+}
+
+// SM-2073: a handler stops at its cancellation, but the release of its task fails. Run returns that
+// error, as Ruby, Rust, the JVM, and .NET do, and lease recovery settles the task.
+func TestWorkerReturnsTheErrorOfAReleaseThatFailsAfterTheCancellation(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-shutdown-release-fails")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "go-worker-shutdown-release-fails"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "cooperative", nil); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "shutdown-release-fails-worker",
+		LeaseDuration: 5 * time.Second, PollInterval: 5 * time.Millisecond,
+		ShutdownGracePeriod: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	worker.Handle("cooperative", func(
+		handlerContext context.Context,
+		_ any,
+		_ *workhorse.HandlerContext,
+	) (any, error) {
+		close(started)
+		<-handlerContext.Done()
+		// The test database is this test's own, so the release can fail at once, as in an outage.
+		if _, err := pool.Exec(ctx, `DO $$ BEGIN
+			EXECUTE format('ALTER FUNCTION %s RENAME TO release_owned_v1_offline',
+				'workhorse.release_owned_v1'::regproc::regprocedure);
+		END $$`); err != nil {
+			return nil, err
+		}
+		return nil, context.Cause(handlerContext)
+	})
+
+	runContext, stop := context.WithCancel(ctx)
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	awaitSignal(t, started, "the handler to start", stop)
+	stop()
+
+	select {
+	case err := <-runResult:
+		if err == nil || errors.Is(err, workhorse.ErrShutdownIncomplete) {
+			t.Fatalf("Run returned %v, want the error of the release", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned after the grace period")
 	}
 }
 

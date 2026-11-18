@@ -97,13 +97,21 @@ from 1 through 3,600,000, and its default is 25,000 ms. The process refuses zero
 | Event                          | Exit                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | Second signal                  | Conventional signal code                                                 |
-| Missed deadline                | Code 1, after the shutdown abort and the 250 ms unwind window            |
+| Missed deadline, clean unwind  | Code 0, after the shutdown abort and the 250 ms unwind window            |
+| Missed deadline, stuck handler | Code 1, after the shutdown abort and the 250 ms unwind window            |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, fails the process |
 
 At the deadline, the process runner aborts the signal of each handler that still runs. The abort
 reason is a `WorkerShutdownError`, and the heartbeat keeps the lease alive. Then the runner waits
-250 ms, `HANDLER_UNWIND_MS`, or until the drain ends, and exits with code 1. A drain that ends in
-that window does not make `runWorkerProcess` return before the exit. In that window, the
+250 ms, `HANDLER_UNWIND_MS`, or until the drain ends, and exits. The exit code follows from the
+drain (SM-2073). If a signal started the shutdown and `completed` resolves in the window, the runner
+logs `Shutdown grace ended; N active handlers stopped at the abort signal` at `info` and exits with
+code 0. If the window ends first or `completed` rejects, it logs at `error` and exits with code 1. A
+completion or release write that fails in the window rejects `run()`, so `completed` rejects too, as
+the stop of every other SDK reports that error. A worker failure shutdown always exits with code 1. A second signal keeps code 130 or 143. If the
+grace ends before `startWorkerProcess` resolves, the runner waits for that startup and its drain in
+the same window, and aborts the handlers of the runtime once it exists. A drain that ends in that
+window does not make `runWorkerProcess` return before the exit. In that window, the
 worker settles each handler that returns, as Go `settleAfterShutdown` does:
 
 1. If the handler returns a value, the worker completes the task.
@@ -111,7 +119,8 @@ worker settles each handler that returns, as Go `settleAfterShutdown` does:
    `release_owned_v1`. The task keeps its `current_attempt`. This applies only if the abort came
    before the handler returned. `TaskAttempt.markHandlerReturned` records that state, and a batch
    member records it when the batch callback returns (ADR 0117).
-3. If the completion or the release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`. Lease
+3. If the completion or the release fails, the worker logs
+   `workhorse.worker.shutdown_settlement_failed` and rethrows the error, so `run()` rejects. Lease
    recovery then settles the task.
 
 A handler that does not return in the window holds a lease that nobody renews. Ordinary fenced
@@ -161,7 +170,7 @@ The worker process does not start a failed worker again. It drains and exits, an
 starts a new process. The time to return to service has three parts:
 
 1. The drain. The active handlers settle, or the shutdown deadline ends the drain. The deadline is
-   `shutdownTimeoutMs`. A drain that does not finish by the deadline exits with code 1.
+   `shutdownTimeoutMs`. A failure shutdown that does not finish by the deadline exits with code 1.
 2. The restart delay. The restart policy of the supervisor sets it, for example the back-off of a
    Kubernetes pod or the `RestartSec` of a systemd unit. A supervisor that does not restart the
    process leaves the work stopped.

@@ -1702,17 +1702,23 @@ handler of the main thread.
   and 143 for `SIGTERM`.
 - An expired deadline calls `Worker._abort_handlers_for_shutdown()` on the timer thread. It cancels
   the `CancellationToken` of each running handler with `_WorkerShutdownError`. Then the runner waits
-  0.25 s, `_HANDLER_UNWIND_SECONDS`, or until the drain ends, and calls `force_exit(1)`. If a handler
+  0.25 s, `_HANDLER_UNWIND_SECONDS`, or until the drain ends. It calls `force_exit(0)` if a signal
+  started the shutdown and `_run_continuously` returned without an error in that window, and
+  `force_exit(1)` otherwise (SM-2073). If a handler
   returns a value in that window, the worker completes the task. If it raises, the worker releases
   the task through `release_owned_v1`, and the task keeps its attempt. The worker reads the token
   when the handler returns, and a batch member reads it when the batch callback returns. A handler
   that failed before the cancellation keeps its usual settlement (ADR 0117). If the completion or the
-  release fails, the worker logs `workhorse.worker.shutdown_settlement_failed`.
+  release fails, the worker logs `workhorse.worker.shutdown_settlement_failed` and raises the error.
+  The run then raises it, so `run_worker_process` calls `force_exit(1)` (SM-2073).
 - The worker sets `_shutdown_aborted` before it cancels the first token. A handler whose token is
   still live, such as a batch member whose callback raised at the token of another member, reads
   that flag and is released too.
-- If the expiry started, the main thread waits for its `force_exit(1)` call before
-  `run_worker_process` returns, also when the drain ends inside the window.
+- If the expiry started, the main thread waits for its `force_exit` call before
+  `run_worker_process` returns, also when the drain ends inside the window. It restores the
+  previous signal handlers only after that call, so a second signal in the window still calls
+  `force_exit` with 128 plus its number. The second signal and the expiry decide under one lock,
+  and only the first one calls `force_exit` (SM-2073).
 
 A fatal worker error starts the same deadline. When `Worker` observes the first fatal error of a
 run, it reports it through `_report_fatal_error`, before `_drain_active_threads` waits. That
@@ -2039,7 +2045,9 @@ that the stop does not cancel. The 250 millisecond unwind period bounds that con
 
 Both writes are fenced. If PostgreSQL rejects the completion, `reconcileRejectedSettlement`
 acknowledges a cancellation request or settles an expiry within the same window. If a write or that
-reconciliation fails, the worker logs the failure, and lease recovery settles the task. If a task is
+reconciliation fails, the worker logs `workhorse.worker.shutdown_settlement_failed`, and lease
+recovery settles the task. `execute` returns that error, and `Run` returns it after the drain, as
+in Ruby, Rust, the JVM, and .NET (SM-2073). A lost lease is not such an error. If a task is
 completed or released in this way, its handler span has no error status. The span of a panic has
 the error status. `execute` reads the cancellation of the handler context when the handler
 returns, and a batch member records it when the batch handler returns. A handler that failed before
@@ -2054,7 +2062,10 @@ pool.
 
 After the period expires, `drainExecutions` does not report an execution error that matches
 `context.Canceled`. The reason is that the deadline caused that error. It still returns an error
-that it settled earlier.
+that it settled earlier. A failed settlement write after the stop is an exception (SM-2073). The
+drain keeps that error, also in the unwind period. A write can fail with a cancellation. Then
+`shutdownSettlementError` marks the error with a type that does not match `context.Canceled`. Thus
+a caller that reads a cancellation as a clean stop still sees the failed write.
 
 The same deadline cancels each shutdown statement that waits for a pooled connection:
 
@@ -2226,7 +2237,8 @@ becomes a `HandlerPanicError`, and the slot of the attempt returns on each path:
 | Other code, such as the `Error` method of an error   | `worker execution for <type> panicked outside the handler: <value>` | `failPanickedExecution` sends `fail_v1`, on the unwind window after the stop    |
 
 `execute` recovers a panic of its body before `releaseOwnership`, so the lease still renews while
-`failPanickedExecution` writes the failure. Each settlement write is fenced. If the attempt was
+`failPanickedExecution` writes the failure. If that write fails after the stop, `Run` returns its
+error (SM-2073). Each settlement write is fenced. If the attempt was
 settled before the panic, PostgreSQL refuses the write of `failPanickedExecution`, and the attempt
 keeps its settlement. If that write panics
 again, the execution goroutine recovers the panic, and `Run` returns it as an execution error.

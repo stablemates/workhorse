@@ -4244,11 +4244,10 @@ class Worker:
                     },
                 )
         except Exception as error:
-            if not stopped_for_shutdown:
-                raise
-            # As after a failed release, lease recovery settles the task.
-            self._log_shutdown_settlement_failure(task, error)
-            return
+            if stopped_for_shutdown:
+                # As after a failed release, lease recovery settles the task, and the run raises.
+                self._log_shutdown_settlement_failure(task, error)
+            raise
         if accepted is not True:
             self._reconcile_rejected_completion(task, arbiter)
             return
@@ -4354,7 +4353,8 @@ class Worker:
     ) -> None:
         """Release the task of a handler that the shutdown abort ended, as Go settleAfterShutdown.
 
-        If the release fails, the worker logs the failure, and lease recovery settles the task.
+        If the release fails, the worker logs the failure and raises it, so the run raises, as in
+        every SDK (SM-2073). Lease recovery settles the task.
         """
         attributes = {
             **_task_span_attributes(task),
@@ -4365,7 +4365,7 @@ class Worker:
             outcome, status = self._release_owned(task, attributes)
         except Exception as error:
             self._log_shutdown_settlement_failure(task, error)
-            return
+            raise
         span_outcome["value"] = status
         arbiter.submit(outcome)
 
@@ -4412,6 +4412,7 @@ class Worker:
 
     def _log_shutdown_settlement_failure(self, task: ClaimedTask, error: Exception) -> None:
         """A completion or a release after the shutdown abort failed. Lease recovery settles it."""
+        # The caller raises the error next, so the run ends with it.
         _emit_log(
             "WARN",
             "workhorse.worker.shutdown_settlement_failed",

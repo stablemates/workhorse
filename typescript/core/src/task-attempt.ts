@@ -211,12 +211,13 @@ export class TaskAttempt {
   /**
    * Aborts the handler signal at the end of the shutdown grace. The heartbeat continues, because
    * `release_owned_v1` and `complete_v1` refuse an expired lease. Another outcome that already won
-   * keeps its signal reason.
+   * keeps its signal reason. Returns true if this call aborted the signal.
    */
-  abortForShutdown(): void {
-    if (this.arbiter.outcome !== undefined || this.controller.signal.aborted) return;
+  abortForShutdown(): boolean {
+    if (this.arbiter.outcome !== undefined || this.controller.signal.aborted) return false;
     this.shutdownRequested = true;
     this.controller.abort(new WorkerShutdownError(this.task.id));
+    return true;
   }
 
   /** True when the shutdown abort ended the handler and no other outcome won after it. */

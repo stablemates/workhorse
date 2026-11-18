@@ -138,7 +138,8 @@ The [Kubernetes deployment reference](/docs/kubernetes) uses a 110-second proces
 | Clean drain                    | Code 0                                                                       |
 | Second `SIGINT`                | Code 130                                                                     |
 | Second `SIGTERM`               | Code 143                                                                     |
-| Missed deadline                | Code 1, after the handler abort and the 250 ms unwind window                 |
+| Missed deadline, clean unwind  | Code 0, after the handler abort and the 250 ms unwind window                 |
+| Missed deadline, stuck handler | Code 1, after the handler abort and the 250 ms unwind window                 |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, and exits with code 1 |
 
 A hard exit leaves active leases for the usual fenced recovery after lease expiry.
