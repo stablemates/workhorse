@@ -1,3 +1,12 @@
 {
-  "acceptances": []
+  "acceptances": [
+    {
+      "advisory": 1247710,
+      "githubAdvisoryId": "GHSA-fc5q-39xc-vjpf",
+      "module": "picomatch",
+      "workspacePackages": ["site"],
+      "reason": "Outside the published closure, and no patched picomatch exists. No published package depends on picomatch; it is reached only through the private `site` package's build-time TanStack router tooling, which globs this repository's own route files. The ReDoS needs an attacker-written extglob pattern, and every pattern it matches comes from the router plugin or this repository.",
+      "reviewBy": "2027-03-01"
+    }
+  ]
 }
