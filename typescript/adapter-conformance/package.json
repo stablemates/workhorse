@@ -7,8 +7,8 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "devDependencies": {
-    "@mikro-orm/core": "7.2.6",
-    "@mikro-orm/postgresql": "7.2.6",
+    "@mikro-orm/core": "7.2.8",
+    "@mikro-orm/postgresql": "7.2.8",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "@stablemates/workhorse": "workspace:*",
@@ -21,12 +21,12 @@
     "knex": "3.3.0",
     "kysely": "0.29.8",
     "magicast": "0.5.5",
-    "objection": "3.9.2",
+    "objection": "3.9.3",
     "pg": "8.23.1",
     "prisma": "7.10.1",
     "typeorm": "1.1.2",
     "typescript": "^5.8.3",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22"
