@@ -4,8 +4,8 @@
       "advisory": 1247710,
       "githubAdvisoryId": "GHSA-fc5q-39xc-vjpf",
       "module": "picomatch",
-      "workspacePackages": ["site"],
-      "reason": "Outside the published closure, and no patched picomatch exists. No published package depends on picomatch; it is reached only through the private `site` package's build-time TanStack router tooling, which globs this repository's own route files. The ReDoS needs an attacker-written extglob pattern, and every pattern it matches comes from the router plugin or this repository.",
+      "workspacePackages": ["site", "typescript__typeorm"],
+      "reason": "No patched picomatch exists. The ReDoS needs an attacker-written extglob pattern, and no path here takes a pattern from untrusted input. The private `site` package reaches picomatch through build-time TanStack router tooling, which globs this repository's own route files. The published `@stablemates/workhorse-typeorm` reaches it through its `typeorm` peer, which globs only the `entities`, `migrations` and `subscribers` paths the application's own developer writes into its DataSource configuration. The adapter receives an already-built DataSource and passes typeorm no glob.",
       "reviewBy": "2027-03-01"
     }
   ]
