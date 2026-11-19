@@ -979,12 +979,15 @@ after the drain.
 | Event                          | Exit                                                             |
 | ------------------------------ | ---------------------------------------------------------------- |
 | Second signal                  | Conventional signal code                                         |
-| Missed deadline                | Code 1, after the handler abort and a 250 ms unwind window       |
+| Missed deadline, clean unwind  | Code 0, after the handler abort and a 250 ms unwind window       |
+| Missed deadline, stuck handler | Code 1, after the handler abort and a 250 ms unwind window       |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same drain, fails the process |
 
 The second signal to a Python process calls `force_exit` with 128 plus the signal number: 130 for
 `SIGINT`, 143 for `SIGTERM`. A missed deadline cancels the token of each running handler, waits
-0.25 s, and calls `force_exit(1)`. In that window, a handler that raises releases its task through
+0.25 s, and calls `force_exit`: with 0 if every handler stopped in that window and the worker run
+ended without an error, and with 1 otherwise. In that window, a handler that raises releases its
+task through
 `release_owned_v1`, and a handler that returns a value completes it.
 
 The first signal marks readiness false and calls `stop()` on every worker. Active handlers and their

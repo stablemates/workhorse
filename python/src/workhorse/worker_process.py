@@ -26,8 +26,10 @@ def run_worker_process(
 
     At the end of the shutdown grace, the runner cancels each handler that still runs. A handler
     that returns or raises in the next 250 ms gives its task back: a value completes the task, and
-    an error releases it without an attempt. Then the process exits with code 1. Lease recovery
-    settles the task of a handler that did not return.
+    an error releases it without an attempt. If a signal started the shutdown and the worker run
+    ends without an error in that window, the process exits with code 0. It exits with code 1 if a
+    handler did not return, if the run ended with an error, or if a fatal worker error started the
+    shutdown. Lease recovery settles the task of a handler that did not return.
     """
     if (
         isinstance(shutdown_timeout_ms, bool)
@@ -37,12 +39,21 @@ def run_worker_process(
         raise ValueError("shutdown_timeout_ms must be an integer between 1 and 3600000")
 
     first_signal: int | None = None
+    # What started the deadline: a termination signal or a fatal worker error. The first one wins.
+    cause: str | None = None
+    # Set before drained when the worker run returned without an error.
+    clean_drain = False
+    # The first exit code wins. A second signal and the end of the unwind window decide and call
+    # force_exit under one lock, so a clean expiry cannot replace the code of a second signal.
+    exit_lock = Lock()
+    exit_sent = False
     deadline: Timer | None = None
     deadline_lock = Lock()
     finished = False
     drained = Event()
     # Set when the expiry of the grace started, and when it called force_exit. The main thread
-    # does not return between the two, so a drain inside the unwind window still exits with 1.
+    # does not return between the two, so the expiry decides the exit code of a drain inside the
+    # unwind window.
     expiring = False
     exited = Event()
     requested_stop_version = worker._stop_version_snapshot()
@@ -52,6 +63,14 @@ def run_worker_process(
         signum: bytes((signum,)) for signum in (signal.SIGINT, signal.SIGTERM)
     }
 
+    def exit_once(code: int) -> None:
+        nonlocal exit_sent
+        with exit_lock:
+            if exit_sent:
+                return
+            exit_sent = True
+            force_exit(code)
+
     def handle_signal(signum: int, _frame: FrameType | None) -> None:
         try:  # noqa: SIM105 - keep the signal handler free of context manager machinery.
             os.write(signal_writer, signal_payloads[signum])
@@ -60,7 +79,9 @@ def run_worker_process(
 
     def expire() -> None:
         # The end of the grace cancels the handlers, as Go does, and gives them one unwind window.
-        # The process exits after that window or after the drain ends, whichever comes first.
+        # The process exits after that window or after the drain ends, whichever comes first. A
+        # signal shutdown whose run ends without an error in the window is a clean stop and exits
+        # with code 0, as in every other SDK (SM-2073). Every other end of the grace exits with 1.
         nonlocal expiring
         with deadline_lock:
             if finished:
@@ -68,17 +89,18 @@ def run_worker_process(
             expiring = True
         try:
             worker._abort_handlers_for_shutdown()
-            drained.wait(_HANDLER_UNWIND_SECONDS)
-            force_exit(1)
+            stopped = drained.wait(_HANDLER_UNWIND_SECONDS) and clean_drain
+            exit_once(0 if cause == "signal" and stopped else 1)
         finally:
             exited.set()
 
-    def start_deadline() -> None:
+    def start_deadline(started_by: str) -> None:
         # A signal and a fatal worker error share one deadline. Whichever comes first starts it.
-        nonlocal deadline
+        nonlocal deadline, cause
         with deadline_lock:
             if finished or deadline is not None:
                 return
+            cause = started_by
             deadline = Timer(shutdown_timeout_ms / 1000, expire)
             deadline.daemon = True
             deadline.start()
@@ -88,9 +110,9 @@ def run_worker_process(
         while payload := os.read(signal_reader, 1):
             signum = payload[0]
             if first_signal is not None:
-                force_exit(128 + signum)
+                exit_once(128 + signum)
             first_signal = signum
-            start_deadline()
+            start_deadline("signal")
             Thread(target=worker.stop, daemon=True).start()
 
     handled_signals = (signal.SIGINT, signal.SIGTERM)
@@ -104,21 +126,24 @@ def run_worker_process(
             installed_signals.append(signum)
         # The worker reports its first fatal error before it drains, so a handler that ignores
         # cancellation cannot keep the deadline from starting.
-        worker._run_continuously(requested_stop_version, lambda _error: start_deadline())
+        worker._run_continuously(requested_stop_version, lambda _error: start_deadline("failure"))
+        clean_drain = True
     finally:
         drained.set()
-        for signum in installed_signals:
-            signal.signal(signum, previous_handlers[signum])
-        os.close(signal_writer)
-        signal_relay.join()
-        os.close(signal_reader)
         with deadline_lock:
             finished = True
             if deadline is not None:
                 deadline.cancel()
             started_expiry = expiring
+        # An expiry that started decides the exit code first. The handlers and the relay stay
+        # until then, so a second signal in the unwind window still exits with its own code.
         if started_expiry:
             exited.wait()
+        for signum in installed_signals:
+            signal.signal(signum, previous_handlers[signum])
+        os.close(signal_writer)
+        signal_relay.join()
+        os.close(signal_reader)
 
 
 __all__ = ["run_worker_process"]

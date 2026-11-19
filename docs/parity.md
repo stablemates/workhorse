@@ -445,11 +445,17 @@ that does not return in the window holds a lease that nobody renews.
 `recover_expired_telemetry_v1` then recovers its task and charges the attempt.
 
 The other difference is what comes after the window. A TypeScript or Python worker owns a process,
-so its process runner exits that process with code 1. A Go, Rust, Ruby, JVM, or .NET `Worker` runs
-inside a caller's process, and a library must not end the process of another program. It stops
-renewing the leases of the handlers that still run. It returns `ErrShutdownIncomplete` in Go or
-`Error::ShutdownIncomplete` in Rust. It raises `ShutdownIncompleteError` in Ruby and throws
-`ShutdownIncompleteException` on the JVM and in .NET. The caller decides whether to exit.
+so its process runner exits that process. Both runners exit with code 0 if a signal started the
+shutdown and every handler stopped in the window, and with code 1 otherwise (ADR 0125). The
+TypeScript runner also waits for the adapter close in that window. A completion or release write
+that fails in the window makes the stop fail in all seven SDKs: the two runners exit with code 1,
+and the `Worker` of the others reports the error. A Go, Rust, Ruby, JVM, or .NET
+`Worker` runs inside a caller's process, and a library must not end the process of another program.
+It stops renewing the leases of the handlers that still run. It returns `ErrShutdownIncomplete` in
+Go or `Error::ShutdownIncomplete` in Rust. It raises `ShutdownIncompleteError` in Ruby and throws
+`ShutdownIncompleteException` on the JVM and in .NET. If every handler stopped in the window and
+each write succeeded, the `Worker` reports no error, so the stop is clean as in the two runners. The caller decides
+whether to exit.
 
 The queue of a handler task group add agrees. A handler can add a task to its own task group. If
 the request names no queue, all seven SDKs put the task in the queue of the member task that adds it.

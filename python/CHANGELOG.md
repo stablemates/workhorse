@@ -10,6 +10,27 @@ adds.
 
 ## Unreleased
 
+### A worker process exits with code 0 when every handler stops at the shutdown abort
+
+At the end of the shutdown grace, `run_worker_process` cancels each handler that still runs, waits
+0.25 s, and always called `force_exit(1)`. A worker with long tasks thus reported a failed exit at
+almost every deploy, also when each handler stopped at the cancellation and gave its task back
+(SM-2073).
+
+If a signal started the shutdown and the worker run ends without an error in that window, the runner
+now calls `force_exit(0)`. A handler that does not return, a run that ends with an error, or a
+shutdown that a fatal worker error started still calls `force_exit(1)`. A second signal keeps code
+130 or 143. The TypeScript, Ruby, Go, Rust, JVM, and .NET SDKs report the same stop as clean. ADR
+0125 records the decision.
+
+A completion or release write that fails after the shutdown abort now makes `Worker.run()` raise
+that error, after the worker logs `workhorse.worker.shutdown_settlement_failed`. Before, the worker
+only logged it. `run_worker_process` then calls `force_exit(1)`. Every other SDK reports the error
+the same way. Lease recovery still settles the task.
+
+Upgrade: a supervisor or alert that treats exit code 1 after a deploy as expected sees code 0 for a
+clean stop. No configuration changes.
+
 ### Cleanup no longer reads the whole key and dependency tables
 
 Under a generic plan, `prune_enqueue_idempotency_v1` and `prune_released_dependencies_v1` read the

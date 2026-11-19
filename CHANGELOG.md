@@ -23,6 +23,27 @@ upgrade steps.
 
 ## Unreleased
 
+### A worker process exits with code 0 when every handler stops at the shutdown abort
+
+At the end of the shutdown grace, `runWorkerProcess` aborts the signal of each handler that still
+runs and waits 250 ms. It then always exited with code 1. A worker with long tasks thus reported a
+failed exit at almost every deploy, also when each handler stopped at the abort and gave its task
+back (SM-2073).
+
+The exit code now follows from the drain. After a signal, if the drain completes in the window, the
+runner logs at `info` and exits with code 0. If a handler does not stop, the drain fails, or a
+worker failure started the shutdown, it logs at `error` and exits with code 1. A second signal keeps
+code 130 or 143. The grace-end line moved from `error` to `info`. The Python `run_worker_process`
+follows the same rule. ADR 0125 records the decision.
+
+A completion or release write that fails after the shutdown abort now makes `Worker.run()` reject
+with that error, after the worker logs `workhorse.worker.shutdown_settlement_failed`. Before, the
+worker only logged it. The Ruby, Rust, JVM, and .NET workers already report the error, and the
+Python and Go workers now do too. Lease recovery still settles the task.
+
+Upgrade: a supervisor or alert that treats exit code 1 after a deploy as expected sees code 0 for a
+clean stop. No configuration changes.
+
 ### Cleanup no longer reads the whole key and dependency tables
 
 The key phase and the released-edge phase of terminal cleanup lock their candidate rows through an

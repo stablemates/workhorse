@@ -4,6 +4,8 @@
 - **Date:** 2026-08-02
 - **Related:** [ADR 0003](0003-worker-owned-scheduler.md), [ADR 0021](0021-no-framework-integration-packages.md), [native worker concurrency analysis](../benchmarks/2026-08-02-native-worker-concurrency-analysis.md)
 - **Superseded in part by:** [ADR 0021](0021-no-framework-integration-packages.md)
+- **Amended by:** [ADR 0125](0125-exit-with-code-0-when-every-handler-stops-at-the-shutdown-abort.md)
+  (the exit code after a missed deadline)
 
 ## Context
 

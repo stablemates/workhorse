@@ -10,6 +10,18 @@ adds.
 
 ## Unreleased
 
+### Run returns the error of a settlement that fails after the shutdown cancellation
+
+At the end of the shutdown grace period, `Run` cancels the handlers that still run and settles the
+task of each one that returns. If that completion, release, or failure write failed, `Run`
+returned no error (SM-2073). `Run` now returns that error after the drain, as the Ruby, Rust,
+JVM, .NET, TypeScript, and Python workers report it. The worker logs
+`workhorse.worker.shutdown_settlement_failed` for each such write. A lost lease is still not an
+error of the run. Lease recovery still settles the task.
+
+Upgrade: a caller that exits with a failure when `Run` returns an error now does so for a failed
+settlement after the stop too. No configuration changes.
+
 ### The module requires Go 1.26
 
 The module now declares `go 1.26.0`, and it requires OpenTelemetry Go 1.47.0, raised from 1.46.0.

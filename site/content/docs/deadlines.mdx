@@ -333,7 +333,9 @@ waits. Then each short stage can start again without the stages before it.
 - The first signal does not create a durable cancellation or abort a handler.
 - `shutdownTimeoutMs` bounds that drain. The default is 25,000 ms. At a missed deadline, the process
   aborts each active handler and waits 250 ms. A handler that throws in that window releases its
-  task without a charged attempt. Then the process exits with code 1.
+  task without a charged attempt. Then the process exits. It exits with code 0 if every handler
+  returned or threw in that window and the worker closed its resources. Otherwise it exits with
+  code 1.
 - Hard termination leaves active leases for ordinary expiry recovery.
 - Set execution timeouts deliberately rather than relying on an unbounded handler.
 

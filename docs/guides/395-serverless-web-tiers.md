@@ -169,7 +169,8 @@ tier.
 | ------------------------------ | ------------------------------------------------------------------------- |
 | First `SIGINT` or `SIGTERM`    | Readiness turns false, claims stop, active handlers and heartbeats go on. |
 | Second signal                  | Exits with the conventional signal code.                                  |
-| Missed deadline                | Aborts each running handler, waits a 250 ms unwind window, exits code 1.  |
+| Missed deadline, clean unwind  | Aborts each running handler, waits a 250 ms unwind window, exits code 0.  |
+| Missed deadline, stuck handler | Aborts each running handler, waits a 250 ms unwind window, exits code 1.  |
 | Unexpected worker-loop failure | Stops sibling workers, applies the same bounded drain, fails the process. |
 
 `shutdownTimeoutMs` sets the deadline. The default deadline is 25 seconds. In the unwind window, the

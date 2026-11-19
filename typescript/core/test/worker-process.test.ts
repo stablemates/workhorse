@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClaimedTask, WorkhorseAdapter, WorkerProcessSignal } from "../src/index.js";
 import { Worker, defineWorkerProcess, runWorkerProcess, startWorkerProcess } from "../src/index.js";
 import type { WorkerQueueApi } from "../src/worker.js";
-import { observeWorkerFailure, reportWorkerStartup } from "../src/worker-failure.js";
+import {
+  observeWorkerFailure,
+  onWorkerShutdownAbort,
+  reportWorkerStartup,
+} from "../src/worker-failure.js";
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -36,6 +40,15 @@ class FakeWorker {
 
   passStartup(): void {
     reportWorkerStartup(this);
+  }
+
+  // Runs `handlers` handlers that ignore stop() and return only when the shutdown abort reaches them.
+  stopsAtAbort(handlers: number, settle: () => void = () => this.runResult.resolve()): this {
+    onWorkerShutdownAbort(this, () => {
+      settle();
+      return handlers;
+    });
+    return this;
   }
 }
 
@@ -247,9 +260,156 @@ describe("dedicated worker process runtime", () => {
       expect(forceExit).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(250);
 
+      expect(forceExit).toHaveBeenCalledOnce();
       expect(forceExit).toHaveBeenCalledWith(1);
       worker.runResult.resolve();
       await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // SM-2073: a handler that stops at the abort signal is a clean stop, not a failed exit.
+  it("exits with code 0 when every handler stops at the abort signal after the grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = new FakeWorker(false).stopsAtAbort(2);
+      const signals = new FakeSignalSource();
+      const forceExit = vi.fn<(code: number) => void>();
+      const { definition } = fixture([worker]);
+
+      const running = runWorkerProcess(definition, {
+        signalSource: signals,
+        forceExit,
+        shutdownTimeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      signals.emit("SIGTERM");
+      await vi.advanceTimersByTimeAsync(50);
+      await running;
+
+      expect(forceExit).toHaveBeenCalledOnce();
+      expect(forceExit).toHaveBeenCalledWith(0);
+      expect(definition.logger!.error).not.toHaveBeenCalled();
+      expect(definition.logger!.info).toHaveBeenCalledWith(
+        "Shutdown grace ended; 2 active handlers stopped at the abort signal; exiting with code 0",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exits with code 0 when the startup and the drain finish in the unwind window", async () => {
+    vi.useFakeTimers();
+    try {
+      // The handler stops only at the abort, which reaches it after the late startup.
+      const worker = new FakeWorker(false).stopsAtAbort(1);
+      const signals = new FakeSignalSource();
+      const forceExit = vi.fn<(code: number) => void>();
+      const { adapter, definition } = fixture([worker]);
+      const adapterReady = deferred<WorkhorseAdapter>();
+      const slowStart = { ...definition, adapter: () => adapterReady.promise };
+
+      const running = runWorkerProcess(slowStart, {
+        signalSource: signals,
+        forceExit,
+        shutdownTimeoutMs: 25,
+      });
+      signals.emit("SIGTERM");
+      await vi.advanceTimersByTimeAsync(26);
+      adapterReady.resolve(adapter);
+      await vi.advanceTimersByTimeAsync(300);
+      await running;
+
+      expect(forceExit.mock.calls).toEqual([[0]]);
+      expect(definition.logger!.info).toHaveBeenCalledWith(
+        "Shutdown grace ended; 1 active handler stopped at the abort signal; exiting with code 0",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives no second exit code when a second signal comes in the unwind window", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = new FakeWorker(false);
+      const signals = new FakeSignalSource();
+      const forceExit = vi.fn<(code: number) => void>();
+      const { definition } = fixture([worker]);
+
+      const running = runWorkerProcess(definition, {
+        signalSource: signals,
+        forceExit,
+        shutdownTimeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      signals.emit("SIGTERM");
+      await vi.advanceTimersByTimeAsync(100);
+      signals.emit("SIGINT");
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(forceExit.mock.calls).toEqual([[130]]);
+      worker.runResult.resolve();
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exits with code 1 when the drain fails after the abort signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = new FakeWorker(false);
+      worker.stopsAtAbort(1, () => worker.runResult.reject(new Error("settle failed")));
+      const signals = new FakeSignalSource();
+      const forceExit = vi.fn<(code: number) => void>();
+      const { definition } = fixture([worker]);
+
+      const running = runWorkerProcess(definition, {
+        signalSource: signals,
+        forceExit,
+        shutdownTimeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      signals.emit("SIGTERM");
+      // The runner rejects while the timers advance, before the assertion below observes it.
+      running.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(running).rejects.toThrow("settle failed");
+
+      expect(forceExit).toHaveBeenCalledOnce();
+      expect(forceExit).toHaveBeenCalledWith(1);
+      expect(definition.logger!.error).toHaveBeenCalledWith(
+        "Graceful shutdown exceeded 50ms, and the drain failed after the abort signal; exiting with code 1",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exits with code 1 after a worker failure even if every handler stops at the abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const workers = [new FakeWorker(false), new FakeWorker(false).stopsAtAbort(1)];
+      const signals = new FakeSignalSource();
+      const forceExit = vi.fn<(code: number) => void>();
+      const { definition } = fixture(workers);
+
+      const running = runWorkerProcess(definition, {
+        signalSource: signals,
+        forceExit,
+        shutdownTimeoutMs: 50,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      workers[0]!.runResult.resolve();
+      // The runner rejects while the timers advance, before the assertion below observes it.
+      running.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(running).rejects.toThrow("Worker 1 stopped unexpectedly");
+
+      expect(forceExit).toHaveBeenCalledOnce();
+      expect(forceExit).toHaveBeenCalledWith(1);
     } finally {
       vi.useRealTimers();
     }

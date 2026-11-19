@@ -947,6 +947,42 @@ func TestDispatchStartsTheShutdownBeforeWaitingForAStalledClaim(t *testing.T) {
 	}
 }
 
+// SM-2073: a settlement write of the stop that fails in the unwind window is an error of the run.
+// The drain may observe the result before or after the deadline; both must keep the error.
+func TestDrainKeepsASettlementFailureOfTheUnwindWindow(t *testing.T) {
+	worker := &Worker{}
+	settlement := errors.New("release write failed")
+	for attempt := range 200 {
+		drainContext, expire := context.WithCancel(context.Background())
+		expire()
+		results := make(chan executionResult, 1)
+		results <- executionResult{err: settlement}
+		abandoned, err := worker.drainExecutions(drainContext, results, 1, nil, func() {})
+		if abandoned != 0 || !errors.Is(err, settlement) {
+			t.Fatalf("attempt %d: drain returned %d abandoned and %v, want 0 and the write error",
+				attempt, abandoned, err)
+		}
+
+		// Any other write error keeps its own identity, so the handler span reports its type.
+		if marked := shutdownSettlementError(settlement); marked != settlement {
+			t.Fatalf("attempt %d: shutdownSettlementError changed %v into %T", attempt, settlement, marked)
+		}
+
+		// A write that failed with a cancellation is still a settlement failure, not an unwind.
+		cancelledWrite := shutdownSettlementError(fmt.Errorf("release write failed: %w", context.Canceled))
+		results <- executionResult{err: cancelledWrite}
+		_, err = worker.drainExecutions(drainContext, results, 1, nil, func() {})
+		var marked *shutdownSettlementFailure
+		if !errors.As(err, &marked) || err.Error() != "release write failed: context canceled" {
+			t.Fatalf("attempt %d: drain returned %v, want the marked write error", attempt, err)
+		}
+		// A caller of Run that ignores a cancellation as a clean stop must not ignore this write.
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("attempt %d: the marked write error matches context.Canceled", attempt)
+		}
+	}
+}
+
 // The deadline cancels the executions as soon as the grace period ends, so a cancelled execution's
 // result can already be buffered when the drain observes the deadline. Both are ready at once, and
 // select picks either; repeating the drain makes a result that depends on the pick fail reliably.

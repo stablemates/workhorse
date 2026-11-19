@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type HandlerContext,
   type Json,
+  type Queue,
   type WorkerProcessSignal,
   type WorkhorseAdapter,
   Worker,
@@ -11,6 +12,7 @@ import {
   runWorkerProcess,
 } from "../src/index.js";
 import { abortWorkerHandlers } from "../src/worker-failure.js";
+import { workerCompletionPrepare } from "../src/worker-internal.js";
 import { createIntegrationTestContext } from "./support/integration.js";
 
 const { admin, pool, queue } = createIntegrationTestContext(import.meta.url);
@@ -55,10 +57,13 @@ async function taskEvents(taskId: string): Promise<string[]> {
 }
 
 // Runs one real worker in runWorkerProcess, sends SIGTERM once the handler started, and returns the
-// exit code that the runner gave at the end of its grace.
+// exit code that the runner gave at the end of its grace. `afterExit` lets a handler that ignored
+// the abort return, so the runner can settle.
 async function stopAtGrace(
   queueName: string,
   configure: (worker: Worker, started: () => void) => void,
+  afterExit: () => void = () => undefined,
+  workerQueue: Queue = queue,
 ): Promise<number> {
   let started!: () => void;
   const handlerStarted = new Promise<void>((resolve) => {
@@ -73,7 +78,7 @@ async function stopAtGrace(
     adapter: () =>
       ({
         createWorker: () =>
-          new Worker(queue, {
+          new Worker(workerQueue, {
             workerId: `shutdown-${randomUUID()}`,
             queue: queueName,
             leaseMs: 2_000,
@@ -96,6 +101,7 @@ async function stopAtGrace(
   await handlerStarted;
   signals.emit("SIGTERM");
   const code = await exitCode;
+  afterExit();
   await running.catch(() => undefined);
   return code;
 }
@@ -118,7 +124,7 @@ describe("runWorkerProcess at the end of its shutdown grace", () => {
       });
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect((reason as Error).name).toBe("WorkerShutdownError");
     expect(await taskState(taskId)).toEqual({ state: "ready", currentAttempt: 1 });
     expect(await taskEvents(taskId)).toEqual(["enqueued", "claimed", "released"]);
@@ -136,8 +142,85 @@ describe("runWorkerProcess at the end of its shutdown grace", () => {
       });
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(await taskState(taskId)).toEqual({ state: "succeeded", currentAttempt: 1 });
+  });
+
+  // SM-2073: a release that fails after the abort leaves the task to lease recovery. The run then
+  // rejects with that error, as in every other SDK, so the stop is not clean.
+  it("exits with code 1 when the release after the abort fails", async () => {
+    const queueName = `shutdown-release-fails-${randomUUID()}`;
+    const taskId = await queue.enqueue("stopping", null, { queue: queueName, maxAttempts: 1 });
+    const failingQueue = Object.create(queue) as Queue;
+    failingQueue.releaseOwned = () => Promise.reject(new Error("release write failed"));
+
+    const code = await stopAtGrace(
+      queueName,
+      (worker, started) => {
+        worker.handle("stopping", async (_payload: Json, context: HandlerContext) => {
+          started();
+          await untilAborted(context.signal);
+          throw context.signal.reason;
+        });
+      },
+      () => undefined,
+      failingQueue,
+    );
+
+    expect(code).toBe(1);
+    expect((await taskState(taskId)).state).toBe("active");
+  });
+
+  // SM-2073: a completion that fails after the abort fails the stop too, as a failed release does.
+  it("exits with code 1 when the completion after the abort fails", async () => {
+    const queueName = `shutdown-complete-fails-${randomUUID()}`;
+    const taskId = await queue.enqueue("stopping", null, { queue: queueName, maxAttempts: 1 });
+    // The queue validates the result first and hands the worker a write, which fails here.
+    Object.defineProperty(queue, workerCompletionPrepare, {
+      configurable: true,
+      value: async () => () => Promise.reject(new Error("completion write failed")),
+    });
+
+    let code: number;
+    try {
+      code = await stopAtGrace(queueName, (worker, started) => {
+        worker.handle("stopping", async (_payload: Json, context: HandlerContext) => {
+          started();
+          await untilAborted(context.signal);
+          return { stoppedAt: "safe point" };
+        });
+      });
+    } finally {
+      // The own property hid the prototype method; deleting it restores the queue.
+      Reflect.deleteProperty(queue, workerCompletionPrepare);
+    }
+
+    expect(code).toBe(1);
+    expect((await taskState(taskId)).state).toBe("active");
+  });
+
+  // SM-2073: the exit code tells a clean stop at the abort from a handler that kept running.
+  it("exits with code 1 when a handler ignores the abort", async () => {
+    const queueName = `shutdown-ignore-${randomUUID()}`;
+    await queue.enqueue("stubborn", null, { queue: queueName, maxAttempts: 1 });
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+
+    const code = await stopAtGrace(
+      queueName,
+      (worker, started) => {
+        worker.handle("stubborn", async () => {
+          started();
+          await finished;
+          return null;
+        });
+      },
+      finish,
+    );
+
+    expect(code).toBe(1);
   });
 
   it("releases a batch member that still waits for its batch", async () => {
@@ -160,7 +243,7 @@ describe("runWorkerProcess at the end of its shutdown grace", () => {
       })();
     });
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(batches).toBe(0);
     expect(await taskState(taskId)).toEqual({ state: "ready", currentAttempt: 1 });
   });

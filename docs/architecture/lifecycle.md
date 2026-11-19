@@ -2493,8 +2493,8 @@ writes nothing. Each `run()` announces a new `instanceId`, and `deregister_worke
 row only while it names that instance. A late registration write of the ended run could still
 replace the row and the pause state of the later run. Each `run()` writes its first
 registration at once, also within the registry interval of the ended run. In `runWorkerProcess`, the shutdown grace is `shutdownTimeoutMs`, 25,000
-ms by default. At the grace, the runner aborts the handlers, waits at most 250 ms, and exits with
-code 1. Thus every wait on its stop path ends by the grace plus that window.
+ms by default. At the grace, the runner aborts the handlers, waits at most 250 ms, and exits: with
+code 0 if the drain completed in that window after a signal, and with code 1 otherwise. Thus every wait on its stop path ends by the grace plus that window.
 
 **Deregistration order.** A registration write can wait for a pooled connection or for the
 `workhorse:worker-registry:<id>` advisory lock, and then commit after the stop deadline. If the

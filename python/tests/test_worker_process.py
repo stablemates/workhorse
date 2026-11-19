@@ -169,6 +169,113 @@ def test_missed_graceful_drain_deadline_exits_with_failure() -> None:
     assert process.returncode == 1, f"stdout: {stdout!r} stderr: {stderr!r}"
 
 
+# SM-2073: a handler that stops at the abort is a clean stop, as in every other SDK.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_shutdown_grace_end_exits_with_success_when_every_handler_stops_at_the_abort() -> None:
+    process = _start_fixture("stop-at-abort", 50)
+
+    process.send_signal(signal.SIGTERM)
+
+    stdout, stderr = _finish(process)
+    assert process.returncode == 0, f"stdout: {stdout!r} stderr: {stderr!r}"
+
+
+# SM-2073: a fatal worker error is not a clean stop, even when every handler stops at the abort.
+def test_fatal_worker_error_shutdown_exits_with_failure_when_every_handler_stops() -> None:
+    process = _start_fixture("fatal-stop-at-abort", 50)
+
+    stdout, stderr = _finish(process)
+    assert process.returncode == 1, f"stdout: {stdout!r} stderr: {stderr!r}"
+
+
+class _IgnoresAbortWorker:
+    """A worker whose handler ignores the shutdown abort until the test releases it."""
+
+    def __init__(self) -> None:
+        self.released = Event()
+
+    def _stop_version_snapshot(self) -> int:
+        return 0
+
+    def _abort_handlers_for_shutdown(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def _run_continuously(self, _requested_stop_version: int, _on_fatal_error: Any = None) -> None:
+        # The runner installed its handlers before the run, so this signal starts the deadline.
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert self.released.wait(5)
+
+
+# SM-2073: the end of the unwind window and a second signal each decide an exit code. Only the
+# first one may call force_exit, or os._exit would end the process with the code of the loser.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_second_signal_during_the_expiry_exit_calls_force_exit_no_second_time() -> None:
+    worker = _IgnoresAbortWorker()
+    exits: list[int] = []
+
+    def force_exit(code: int) -> None:
+        exits.append(code)
+        if code == 1:
+            # The second signal arrives while the expiry exits. The relay must not exit again.
+            os.kill(os.getpid(), signal.SIGTERM)
+            sleep(0.3)
+            worker.released.set()
+
+    run_worker_process(
+        worker,  # type: ignore[arg-type]
+        shutdown_timeout_ms=50,
+        force_exit=force_exit,  # type: ignore[arg-type]
+    )
+
+    assert exits == [1]
+
+
+class _StopsAtAbortThenSignalsWorker(_IgnoresAbortWorker):
+    """A worker whose run ends at the abort. A second signal follows while the expiry decides."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.exited = Event()
+
+    def _abort_handlers_for_shutdown(self) -> None:
+        # This runs on the expiry thread before it waits for the drain. The run ends, and the main
+        # thread reaches its cleanup while the expiry has not yet chosen an exit code.
+        self.released.set()
+        sleep(0.1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        # The expiry decides only after the relay handled the signal, or after a bound if the
+        # runner no longer handles it.
+        self.exited.wait(2)
+
+
+# SM-2073: the run ends in the unwind window, and a second signal comes before the expiry exits.
+# The runner must still handle that signal, so its code wins over the clean exit.
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+def test_second_signal_after_a_clean_drain_in_the_unwind_window_keeps_its_exit_code() -> None:
+    worker = _StopsAtAbortThenSignalsWorker()
+    exits: list[int] = []
+
+    def force_exit(code: int) -> None:
+        exits.append(code)
+        worker.exited.set()
+
+    # A signal that reaches the handler outside the runner must not end the test process.
+    previous = signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+    try:
+        run_worker_process(
+            worker,  # type: ignore[arg-type]
+            shutdown_timeout_ms=50,
+            force_exit=force_exit,  # type: ignore[arg-type]
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+    assert exits == [143]
+
+
 @pytest.mark.parametrize("shutdown_timeout_ms", [0, -1, 3_600_001, 1.5, True])
 def test_shutdown_deadline_rejects_values_outside_the_process_contract(
     shutdown_timeout_ms: object,
@@ -560,7 +667,7 @@ def test_shutdown_grace_end_gives_back_the_task_of_a_handler_that_reacts(
         force_exit=exits.append,  # type: ignore[arg-type]
     )
 
-    assert exits == [1]
+    assert exits == [0]
     assert [type(reason).__name__ for reason in reasons] == ["_WorkerShutdownError"]
     with psycopg.connect(database_url, autocommit=True) as connection:
         if returns:
@@ -581,6 +688,66 @@ def test_shutdown_grace_end_gives_back_the_task_of_a_handler_that_reacts(
                 (task_id,),
             ).fetchall()
             assert [event for (event,) in events] == ["enqueued", "claimed", "released"]
+
+
+# SM-2073: a handler stops at the cancellation, but the completion or the release of its task fails.
+# The run raises that error, as in Ruby, Rust, the JVM, and .NET, so the process exits with code 1.
+# Lease recovery settles the task.
+@pytest.mark.integration
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process signals are required")
+@pytest.mark.parametrize("returns", [False, True], ids=["release", "completion"])
+def test_shutdown_grace_end_exits_with_failure_when_the_settlement_fails(
+    database_url: str, returns: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import workhorse.worker as worker_module
+
+    with psycopg.connect(database_url) as enqueue_connection:
+        task_id = Queue(enqueue_connection).enqueue(
+            "process.settlement-fails", {}, options=EnqueueOptions(max_attempts=1)
+        )
+        enqueue_connection.commit()
+
+    def handler(_payload: object, context: Any) -> dict[str, bool]:
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert context.cancellation.wait(10)
+        if returns:
+            return {"stopped": True}
+        raise context.cancellation.reason
+
+    worker = Worker(worker_pool, worker_id=f"python-settlement-fails-{returns}", poll_ms=10).handle(
+        "process.settlement-fails", handler
+    )
+    write_failure = RuntimeError("settlement write failed")
+    if returns:
+        fenced_write_rows = worker_module._fenced_write_rows
+
+        def failing_completion(executor: Any, statement: Any, *arguments: Any) -> Any:
+            if statement is STATEMENTS.complete:
+                raise write_failure
+            return fenced_write_rows(executor, statement, *arguments)
+
+        monkeypatch.setattr(worker_module, "_fenced_write_rows", failing_completion)
+    else:
+
+        def failing_release(*_arguments: object) -> Any:
+            raise write_failure
+
+        monkeypatch.setattr(worker, "_release_owned", failing_release)
+    exits: list[int] = []
+
+    with pytest.raises(RuntimeError, match="settlement write failed"):
+        run_worker_process(
+            worker,
+            shutdown_timeout_ms=100,
+            force_exit=exits.append,  # type: ignore[arg-type]
+        )
+
+    assert exits == [1]
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        runtime = connection.execute(
+            "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
+        ).fetchone()
+    assert runtime == ("active",)
 
 
 # The runner cancels the tokens one at a time. A batch callback can wake at the first token and
@@ -632,5 +799,5 @@ def test_shutdown_grace_end_releases_a_batch_member_whose_token_is_still_live(
         force_exit=exits.append,  # type: ignore[arg-type]
     )
 
-    assert exits == [1]
+    assert exits == [0]
     assert states() == ["ready", "ready"]

@@ -29,7 +29,9 @@ class FixtureWorker:
             self._ready = True
 
     def _abort_handlers_for_shutdown(self) -> None:
-        pass
+        # In the stop-at-abort modes, the handler stops at the abort, so the run ends.
+        if self._mode.endswith("stop-at-abort"):
+            self._finished.set()
 
     def _stop_version_snapshot(self) -> int:
         with self._state_lock:
@@ -53,6 +55,10 @@ class FixtureWorker:
         self._announce_ready()
         if self._mode == "pre-run-signal":
             os.kill(os.getpid(), signal.SIGTERM)
+        if self._mode == "fatal-stop-at-abort" and _on_fatal_error is not None:
+            # A fatal error starts the deadline. The run here still ends without one, so only the
+            # cause of the shutdown decides the exit code.
+            _on_fatal_error(RuntimeError("fatal worker error"))
         if self._mode != "block" and requested_stop_version != self._stop_version:
             return
         self._finished.wait()
@@ -68,7 +74,7 @@ class FixtureWorker:
         with self._state_lock:
             self._stop_version += 1
         _emit("stopping")
-        if self._mode != "block":
+        if self._mode not in ("block", "stop-at-abort"):
             self._finished.set()
 
 
