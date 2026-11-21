@@ -2,7 +2,7 @@
   "historicalPaths": [
     {
       "files": "docs/decisions/**",
-      "reason": "A decision record keeps the wording of the decision it records, including terms CONTEXT.md later retired."
+      "reason": "A decision record keeps the wording of the decision it records, including terms GLOSSARY.md later retired."
     },
     {
       "files": "docs/benchmarks/**",

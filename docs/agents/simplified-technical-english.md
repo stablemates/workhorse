@@ -43,6 +43,6 @@ Use simple, consistent words:
 - Use common words. For example, use "use", not "utilize", and "start", not "initiate".
 - Give each word one meaning and one part of speech.
 - Do not use phrasal verbs or idioms when a simple verb is available.
-- Use the terms that `CONTEXT.md` defines. `scripts/glossary-avoid-words.test.ts` flags its avoided
+- Use the terms that `GLOSSARY.md` defines. `scripts/glossary-avoid-words.test.ts` flags its avoided
   words under `docs/`, apart from the senses that `scripts/glossary-allowlist.json` names.
-- Write "payload contract" in full, because `CONTEXT.md` gives "contract step" a different meaning.
+- Write "payload contract" in full, because `GLOSSARY.md` gives "contract step" a different meaning.
