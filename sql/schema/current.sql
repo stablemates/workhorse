@@ -23914,64 +23914,94 @@ $$;
 -- value above the one before it and stops when there is none.
 CREATE OR REPLACE FUNCTION workhorse.dashboard_task_facets_v1(p_input jsonb)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 AS $$
-  WITH RECURSIVE configured_workers AS (
-    SELECT jsonb_array_elements_text(
-             CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
-                  THEN p_input->'configuredWorkers' END
-           ) AS worker
-  ), queue_scan AS (
-    SELECT (SELECT min(queue_name) FROM workhorse.dashboard_task_query_v1) AS value
-    UNION ALL
-    SELECT (SELECT min(query_row.queue_name) FROM workhorse.dashboard_task_query_v1 query_row
-             WHERE query_row.queue_name > queue_scan.value)
-      FROM queue_scan WHERE queue_scan.value IS NOT NULL
-  ), type_scan AS (
-    SELECT (SELECT min(task_type) FROM workhorse.dashboard_task_query_v1) AS value
-    UNION ALL
-    SELECT (SELECT min(query_row.task_type) FROM workhorse.dashboard_task_query_v1 query_row
-             WHERE query_row.task_type > type_scan.value)
-      FROM type_scan WHERE type_scan.value IS NOT NULL
-  ), history_worker_scan AS (
-    SELECT (SELECT min(worker_id) FROM workhorse.dashboard_attempt_history_v1) AS value
-    UNION ALL
-    SELECT (SELECT min(history.worker_id) FROM workhorse.dashboard_attempt_history_v1 history
-             WHERE history.worker_id > history_worker_scan.value)
-      FROM history_worker_scan WHERE history_worker_scan.value IS NOT NULL
-  ), queue_values AS (
-    (SELECT value FROM queue_scan WHERE value IS NOT NULL LIMIT 1000)
-    UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
-  ), worker_values AS (
-    SELECT worker AS value FROM configured_workers
-    UNION SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
-    UNION SELECT worker_id FROM workhorse.dashboard_task_runtime_v1 WHERE worker_id IS NOT NULL
-    UNION (SELECT value FROM history_worker_scan WHERE value IS NOT NULL LIMIT 1000)
-  ), type_values AS (
-    SELECT value FROM type_scan WHERE value IS NOT NULL LIMIT 1000
-  ), tag_tasks AS MATERIALIZED (
-    SELECT tags FROM workhorse.dashboard_task_v1
-     ORDER BY created_at DESC, id DESC
-     LIMIT 10000
-  ), tag_values AS (
-    SELECT DISTINCT tag.value
-      FROM tag_tasks
-      CROSS JOIN LATERAL unnest(tag_tasks.tags) AS tag(value)
-     LIMIT 1000
-  )
-  SELECT jsonb_build_object(
-    'queues', COALESCE((
-      SELECT jsonb_agg(value ORDER BY value) FROM queue_values WHERE value IS NOT NULL
-    ), '[]'::jsonb),
-    'workers', COALESCE((
-      SELECT jsonb_agg(value ORDER BY value) FROM worker_values WHERE value IS NOT NULL
-    ), '[]'::jsonb),
-    'taskTypes', COALESCE((
-      SELECT jsonb_agg(value ORDER BY value) FROM type_values
-    ), '[]'::jsonb),
-    'tags', COALESCE((
-      SELECT jsonb_agg(value ORDER BY value) FROM tag_values
-    ), '[]'::jsonb));
+DECLARE
+  v_facet text := NULLIF(p_input->>'facet', '');
+  v_queues jsonb := '[]'::jsonb;
+  v_workers jsonb := '[]'::jsonb;
+  v_task_types jsonb := '[]'::jsonb;
+  v_tags jsonb := '[]'::jsonb;
+BEGIN
+  IF v_facet IS NULL OR v_facet = 'queues' THEN
+    WITH RECURSIVE queue_scan AS (
+      SELECT (SELECT min(queue_name) FROM workhorse.dashboard_task_query_v1) AS value
+      UNION ALL
+      SELECT (SELECT min(query_row.queue_name) FROM workhorse.dashboard_task_query_v1 query_row
+               WHERE query_row.queue_name > queue_scan.value)
+        FROM queue_scan WHERE queue_scan.value IS NOT NULL
+    ), queue_values AS (
+      (SELECT value FROM queue_scan WHERE value IS NOT NULL LIMIT 1000)
+      UNION SELECT queue_name FROM workhorse.dashboard_queue_control_v1
+    )
+    SELECT COALESCE(jsonb_agg(value ORDER BY value), '[]'::jsonb) INTO v_queues
+      FROM queue_values WHERE value IS NOT NULL;
+  END IF;
+
+  IF v_facet IS NULL OR v_facet = 'workers' THEN
+    -- attempt_history has an index on worker_id in each partition, so the scan costs one index
+    -- seek for each distinct worker. The fast tier keeps no such index, and a seek for each worker
+    -- through dashboard_attempt_history_v1 read each fast-tier row once for each worker. The fast
+    -- tier is thus read once: the worker of each runtime and outcome row, and the worker of each
+    -- earlier attempt that its errors record. The list keeps each worker that the view gave.
+    WITH RECURSIVE configured_workers AS (
+      SELECT jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(p_input->'configuredWorkers') = 'array'
+                    THEN p_input->'configuredWorkers' END
+             ) AS worker
+    ), history_worker_scan AS (
+      SELECT (SELECT min(worker_id) FROM workhorse.attempt_history) AS value
+      UNION ALL
+      SELECT (SELECT min(history.worker_id) FROM workhorse.attempt_history history
+               WHERE history.worker_id > history_worker_scan.value)
+        FROM history_worker_scan WHERE history_worker_scan.value IS NOT NULL
+    ), fast_rows AS MATERIALIZED (
+      SELECT worker_id, errors FROM workhorse.fast_task_runtime
+      UNION ALL
+      SELECT worker_id, errors FROM workhorse.fast_task_outcome
+    ), worker_values AS (
+      SELECT worker AS value FROM configured_workers
+      UNION SELECT worker_id FROM workhorse.dashboard_worker_registry_v1
+      UNION SELECT worker_id FROM workhorse.task_runtime WHERE worker_id IS NOT NULL
+      UNION (SELECT value FROM history_worker_scan WHERE value IS NOT NULL LIMIT 1000)
+      UNION SELECT worker_id FROM fast_rows WHERE worker_id IS NOT NULL
+      UNION SELECT entry->>'worker_id'
+              FROM fast_rows CROSS JOIN LATERAL jsonb_array_elements(fast_rows.errors) AS entry
+             WHERE fast_rows.errors <> '[]'::jsonb AND jsonb_typeof(entry) = 'object'
+    )
+    SELECT COALESCE(jsonb_agg(value ORDER BY value), '[]'::jsonb) INTO v_workers
+      FROM worker_values WHERE value IS NOT NULL;
+  END IF;
+
+  IF v_facet IS NULL OR v_facet = 'taskTypes' THEN
+    WITH RECURSIVE type_scan AS (
+      SELECT (SELECT min(task_type) FROM workhorse.dashboard_task_query_v1) AS value
+      UNION ALL
+      SELECT (SELECT min(query_row.task_type) FROM workhorse.dashboard_task_query_v1 query_row
+               WHERE query_row.task_type > type_scan.value)
+        FROM type_scan WHERE type_scan.value IS NOT NULL
+    )
+    SELECT COALESCE(jsonb_agg(value ORDER BY value), '[]'::jsonb) INTO v_task_types
+      FROM (SELECT value FROM type_scan WHERE value IS NOT NULL LIMIT 1000) type_values;
+  END IF;
+
+  IF v_facet IS NULL OR v_facet = 'tags' THEN
+    WITH tag_tasks AS MATERIALIZED (
+      SELECT tags FROM workhorse.dashboard_task_v1
+       ORDER BY created_at DESC, id DESC
+       LIMIT 10000
+    ), tag_values AS (
+      SELECT DISTINCT tag.value
+        FROM tag_tasks
+        CROSS JOIN LATERAL unnest(tag_tasks.tags) AS tag(value)
+       LIMIT 1000
+    )
+    SELECT COALESCE(jsonb_agg(value ORDER BY value), '[]'::jsonb) INTO v_tags FROM tag_values;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'queues', v_queues, 'workers', v_workers, 'taskTypes', v_task_types, 'tags', v_tags);
+END;
 $$;
 
 -- The recent-history cutoff is read once into a variable. In the predicate, clock_timestamp() is
@@ -26466,10 +26496,11 @@ INSERT INTO workhorse.schema_migration(version, description) VALUES
   (102, 'take the locks of an enqueue call in key, tier, and row order'),
   (103, 'keep each hold end, bound the hold code, start health walks after held rows, and report a stalled cleanup'),
   (104, 'let an event detail read seek the task of its record'),
-  (105, 'delete the expired keys and released edges of a cleanup pass by their row address')
+  (105, 'delete the expired keys and released edges of a cleanup pass by their row address'),
+  (106, 'read each task filter on its own and read the workers of the fast tier once')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO workhorse.schema_version(version) VALUES (105) ON CONFLICT DO NOTHING;
+INSERT INTO workhorse.schema_version(version) VALUES (106) ON CONFLICT DO NOTHING;
 
 INSERT INTO workhorse.protocol_version(version) VALUES (5) ON CONFLICT DO NOTHING;
 SELECT workhorse.create_history_day_v1(

@@ -475,6 +475,7 @@ type DashboardTaskCounts
 interface DashboardTaskCursor
 interface DashboardTaskDetail
 type DashboardTaskEventType
+type DashboardTaskFacetName
 interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskGroup
@@ -509,6 +510,7 @@ function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
 const dashboardTaskEventTypes
+const dashboardTaskFacetNames
 const dashboardTaskFilters
 const dashboardTaskGroupEventLimit
 const dashboardTaskGroupPageSizes
@@ -683,6 +685,7 @@ type DashboardTaskCounts
 interface DashboardTaskCursor
 interface DashboardTaskDetail
 type DashboardTaskEventType
+type DashboardTaskFacetName
 interface DashboardTaskFacets
 type DashboardTaskFilter
 interface DashboardTaskGroup
@@ -717,6 +720,7 @@ function dashboardRateLimitPolicySummary
 const dashboardRedriveBatchDefault
 const dashboardRedriveBatchMax
 const dashboardTaskEventTypes
+const dashboardTaskFacetNames
 const dashboardTaskFilters
 const dashboardTaskGroupEventLimit
 const dashboardTaskGroupPageSizes
@@ -2918,6 +2922,8 @@ interface DashboardTaskDetail {
 
 type DashboardTaskEventType = (typeof dashboardTaskEventTypes)[number];
 
+type DashboardTaskFacetName = (typeof dashboardTaskFacetNames)[number];
+
 interface DashboardTaskFacets {
   queues: string[];
   workers: string[];
@@ -3801,7 +3807,7 @@ interface LiveProtocolWorker {
 
 const MAXIMUM_PROTOCOL_VERSION = 5;
 
-const MAXIMUM_SCHEMA_VERSION = 105;
+const MAXIMUM_SCHEMA_VERSION = 106;
 
 const MAX_CANCELLATION_REASON_CHARACTERS = 2000;
 
@@ -5605,7 +5611,7 @@ class TypeOrmQueryError extends QueryError {
 
 const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
-const WORKHORSE_SCHEMA_VERSION = 105;
+const WORKHORSE_SCHEMA_VERSION = 106;
 
 const WORKHORSE_VERSION = "0.15.0";
 
@@ -6251,7 +6257,14 @@ const dashboardRouter: {
         previous: "previous";
       }>>;
     }, z.core.$strip>, import("@orpc/server").Schema<import("../wire.js").DashboardTasksCursorPage, import("../wire.js").DashboardTasksCursorPage>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
-    taskFacets: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, import("@orpc/server").Schema<unknown, unknown>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
+    taskFacets: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodOptional<z.ZodNullable<z.ZodObject<{
+      facet: z.ZodDefault<z.ZodNullable<z.ZodEnum<{
+        tags: "tags";
+        queues: "queues";
+        workers: "workers";
+        taskTypes: "taskTypes";
+      }>>>;
+    }, z.core.$strip>>>, import("@orpc/server").Schema<import("../wire.js").DashboardTaskFacets, import("../wire.js").DashboardTaskFacets>, Record<never, never>, DashboardProcedureMeta & Record<never, never>>;
     activity: import("@orpc/server").DecoratedProcedure<import("@orpc/server").MergedInitialContext<DashboardRpcContext & Record<never, never>, DashboardRpcContext & Record<never, never>, DashboardRpcContext>, import("@orpc/server").MergedCurrentContext<DashboardRpcContext, Record<never, never>>, z.ZodObject<{
       filter: z.ZodDefault<z.ZodEnum<{
         canceled: "canceled";
@@ -6748,6 +6761,8 @@ const dashboardRuntimeConfigSchema: z.ZodObject<{
 }, z.core.$strict>;
 
 const dashboardTaskEventTypes: readonly ["enqueued", "debounced", "debounce_rejected", "throttled", "claimed", "batch_dispatched", "batch_failed", "succeeded", "failed", "retry_scheduled", "canceled", "cancel_requested", "promoted", "lease_expired", "released", "deadline_exceeded", "execution_timed_out", "redriven", "redrive_created", "checkpoint_saved", "progress_updated", "wait_scheduled", "wait_elapsed", "wait_replayed", "signal_waiting", "signal_received", "signal_replayed", "signal_rejected", "dependency_blocked", "dependency_released", "dependency_failed", "dependency_canceled", "dependency_counter_repaired", "child_created", "child_joined", "children_created", "children_joined", "parent_linked", "human_wait_created", "human_wait_completed", "human_wait_replayed", "human_wait_rejected"];
+
+const dashboardTaskFacetNames: readonly ["queues", "workers", "taskTypes", "tags"];
 
 const dashboardTaskFilters: readonly ["all", "blocked", "waiting", "scheduled", "retried", "queued", "running", "completed", "discarded", "canceled"];
 

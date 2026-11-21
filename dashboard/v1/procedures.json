@@ -333,7 +333,36 @@
     "taskFacets": {
       "path": "/rpc/dashboard/taskFacets",
       "mutation": false,
-      "input": null,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "facet": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "queues",
+                      "workers",
+                      "taskTypes",
+                      "tags"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "output": {
         "$ref": "#/$defs/DashboardTaskFacets"
       }

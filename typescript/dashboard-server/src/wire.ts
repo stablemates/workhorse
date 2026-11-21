@@ -718,6 +718,14 @@ export interface DashboardTaskFacets {
   tags: string[];
 }
 
+/**
+ * The value lists of the task filters. A `taskFacets` call that names one of them reads only that
+ * list and returns an empty array for each other list.
+ */
+export const dashboardTaskFacetNames = ["queues", "workers", "taskTypes", "tags"] as const;
+
+export type DashboardTaskFacetName = (typeof dashboardTaskFacetNames)[number];
+
 export interface DashboardCronPage {
   capturedAt: string;
   /** The first 50 schedules by namespace and name. */

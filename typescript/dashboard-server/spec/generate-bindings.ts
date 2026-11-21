@@ -221,6 +221,17 @@ function pythonType(schema: Schema, names?: WeakMap<Schema, string>): string {
   }
 }
 
+/**
+ * The schema of the Go type of a procedure input. A nullable object input accepts a call without
+ * input, and the zero value of its struct sends the same call. Thus Go declares the struct, not a
+ * named pointer type, and an input that later becomes nullable keeps its Go type.
+ */
+function goInputSchema(input: Schema | null): Schema {
+  if (input === null) return { type: "null" };
+  const nullable = nullableBranch(input);
+  return nullable?.type === "object" ? nullable : input;
+}
+
 function goDeclaration(name: string, schema: Schema): string {
   return `type ${exportedName(name)} ${goType(schema)}\n`;
 }
@@ -435,7 +446,7 @@ function generateGo(contract: DashboardContract): string {
       .map(([name, schema]) => goDeclaration(name, schema)),
     goDeclaration("DashboardRuntimeConfig", contract.html.runtimeConfig),
     ...Object.entries(contract.procedures).flatMap(([name, procedure]) => [
-      goDeclaration(`${name}Input`, procedure.input ?? { type: "null" }),
+      goDeclaration(`${name}Input`, goInputSchema(procedure.input)),
       goDeclaration(`${name}Output`, procedure.output ?? { type: "null" }),
     ]),
   ].join("\n");

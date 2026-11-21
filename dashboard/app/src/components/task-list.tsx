@@ -3,7 +3,7 @@ import { StatusLabel, StatusText } from "../status-badge.js";
 import type {
   DashboardCancellationRequest,
   DashboardTaskRow,
-  DashboardTaskFacets,
+  DashboardTaskFacetName,
   DashboardTaskSort,
   DashboardTasksPage,
   DashboardTasksCursorPage,
@@ -43,7 +43,12 @@ import {
   Prohibit,
   UserFocus,
 } from "@phosphor-icons/react";
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createTaskFacetLoader,
+  initialTaskFacetStates,
+  type TaskFacetStates,
+} from "../task-facets.js";
 import { type TaskLocationState } from "../task-location.js";
 import { Menu, MultiSelect, Select } from "../dropdown-activity.js";
 import type {
@@ -351,50 +356,34 @@ export function useTaskFacets({
   tags,
 }: Pick<DashboardTasksPage, "queue" | "worker" | "taskType" | "tags">) {
   const client = useDashboardClient();
-  const [facets, setFacets] = useState<DashboardTaskFacets | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const request = useRef<Promise<void> | null>(null);
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current += 1;
-    },
-    [],
+  const [states, setStates] = useState<TaskFacetStates>(initialTaskFacetStates);
+  const loader = useMemo(
+    () => createTaskFacetLoader((facet) => client.taskFacets({ facet }), setStates),
+    [client],
   );
-  const load = useCallback(() => {
-    if (facets || request.current) return;
-    const activeGeneration = generation.current;
-    setLoading(true);
-    setError(null);
-    request.current = client
-      .taskFacets()
-      .then((nextFacets) => {
-        if (generation.current === activeGeneration) setFacets(nextFacets);
-      })
-      .catch(() => {
-        if (generation.current === activeGeneration) {
-          setError("Workhorse could not load the filters. Reopen this menu to try again.");
-        }
-      })
-      .finally(() => {
-        if (generation.current === activeGeneration) {
-          request.current = null;
-          setLoading(false);
-        }
-      });
-  }, [client, facets]);
-  const values = facets ?? { queues: [], workers: [], taskTypes: [], tags: [] };
+  useEffect(() => () => loader.detach(), [loader]);
   return {
     facets: {
-      queues: includeSelectedOption(values.queues, queue),
-      workers: includeSelectedOption(values.workers, worker),
-      taskTypes: includeSelectedOption(values.taskTypes, taskType),
-      tags: includeSelectedOptions(values.tags, tags),
+      queues: includeSelectedOption([...(states.queues.values ?? [])], queue),
+      workers: includeSelectedOption([...(states.workers.values ?? [])], worker),
+      taskTypes: includeSelectedOption([...(states.taskTypes.values ?? [])], taskType),
+      tags: includeSelectedOptions([...(states.tags.values ?? [])], tags),
     },
-    loading,
-    error,
-    load,
+    states,
+    load: loader.load,
+  };
+}
+/** The props that let one filter menu load and report its own value list. */
+export function taskFacetMenuProps(
+  taskFacets: ReturnType<typeof useTaskFacets>,
+  facet: DashboardTaskFacetName,
+  emptyMessage: string,
+) {
+  const state = taskFacets.states[facet];
+  return {
+    onDropdownOpen: () => taskFacets.load(facet),
+    rightSection: state.loading ? <Loader size={14} /> : undefined,
+    nothingFoundMessage: state.loading ? "Loading values…" : (state.error ?? emptyMessage),
   };
 }
 export function TaskListingFilters({
@@ -410,7 +399,6 @@ export function TaskListingFilters({
   taskFacets: ReturnType<typeof useTaskFacets>;
   updateLocation: (updates: Partial<TaskLocationState>) => void;
 }) {
-  const nothingFoundMessage = taskFacets.loading ? "Loading filters…" : taskFacets.error;
   return (
     <Group gap="xs" wrap="wrap">
       <TextInput
@@ -427,36 +415,32 @@ export function TaskListingFilters({
         data={taskFacets.facets.tags}
         value={data.tags}
         onChange={(tags) => updateLocation({ tags })}
-        onDropdownOpen={taskFacets.load}
+        {...taskFacetMenuProps(taskFacets, "tags", "No tags found")}
         placeholder="Any tag"
         aria-label="Filter tasks by tags"
         searchable
         clearable
-        rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
-        nothingFoundMessage={nothingFoundMessage ?? "No tags found"}
         maxDropdownHeight={240}
         style={{ flex: "1 1 220px" }}
       />
       {(
         [
-          ["Queue", data.queue, taskFacets.facets.queues, "queue"],
-          ["Worker", data.worker, taskFacets.facets.workers, "worker"],
-          ["Task type", data.taskType, taskFacets.facets.taskTypes, "taskType"],
+          ["Queue", data.queue, "queues", "queue"],
+          ["Worker", data.worker, "workers", "worker"],
+          ["Task type", data.taskType, "taskTypes", "taskType"],
         ] as const
-      ).map(([placeholder, value, values, key]) => (
+      ).map(([placeholder, value, facet, key]) => (
         <Select
           key={key}
           size="xs"
-          data={values}
+          data={taskFacets.facets[facet]}
           value={value}
           onChange={(next) => updateLocation({ [key]: next })}
-          onDropdownOpen={taskFacets.load}
+          {...taskFacetMenuProps(taskFacets, facet, `No ${placeholder.toLowerCase()} found`)}
           placeholder={placeholder}
           aria-label={`Filter tasks by ${placeholder.toLowerCase()}`}
           searchable
           clearable
-          rightSection={taskFacets.loading ? <Loader size={14} /> : undefined}
-          nothingFoundMessage={nothingFoundMessage ?? `No ${placeholder.toLowerCase()} found`}
           style={{ flex: "1 1 150px" }}
         />
       ))}

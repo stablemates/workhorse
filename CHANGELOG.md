@@ -21,6 +21,32 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### Each task filter loads its own list
+
+When an operator opened one filter on the Tasks page or the Events page, the dashboard read the
+values of all four filters in one `taskFacets` call. All the filters showed a spinner, and a slow
+list held back the others. `dashboard_task_facets_v1` found the workers of the attempt history
+with one index seek for each worker through `dashboard_attempt_history_v1`. That view derives the
+fast-tier attempts from `fast_task_outcome` and `fast_task_runtime`, and no index there holds the
+worker. Thus each seek read each fast-tier row. On 200,000 fast-tier outcomes of 300 workers the
+call took 21 seconds, the 15-second read bound of the host ended it, and no filter showed a value.
+
+- `taskFacets` accepts the optional, nullable input key `facet`: `queues`, `workers`, `taskTypes`,
+  or `tags`. With it, the call reads only that list and returns an empty array for each other list.
+  Without it, the call returns all four lists as before. The output does not change.
+- Each filter menu now reads only its own list when it first opens. A failed list shows its own
+  error, and the other lists stay.
+- The worker list reads the attempt history through its `worker_id` index, and it reads each
+  fast-tier row once. The list keeps each worker that it gave before. The
+  1,000-value bound now applies to the full-tier history only, so the list can show more workers. On the same data the full call
+  takes 0.17 seconds.
+
+Migration 0107 changes the function body. The schema moves to version 106, and the floor stays 99.
+Schema version 105 and earlier ignore `facet`, and the dashboard uses only the list that it asked
+for.
+
 ## 0.15.0 — 2026-11-21
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

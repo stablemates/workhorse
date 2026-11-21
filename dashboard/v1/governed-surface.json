@@ -5265,7 +5265,26 @@
     },
     "taskFacets": {
       "mutation": false,
-      "request": {},
+      "request": {
+        "facet": {
+          "type": "null|string",
+          "branches": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "enum": [
+                "queues",
+                "tags",
+                "taskTypes",
+                "workers"
+              ]
+            }
+          ],
+          "required": false
+        }
+      },
       "response": {
         "queues": {
           "type": "array"

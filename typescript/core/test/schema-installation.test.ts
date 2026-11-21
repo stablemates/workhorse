@@ -792,6 +792,10 @@ describe("schema installation", () => {
         description:
           "delete the expired keys and released edges of a cleanup pass by their row address",
       },
+      {
+        version: 106,
+        description: "read each task filter on its own and read the workers of the fast tier once",
+      },
     ]);
 
     const protocols = await pool.query<{ version: number }>(
