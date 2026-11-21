@@ -1,4 +1,6 @@
 //! The Rust worker process the Workhorse demo runs beside its TypeScript, Python, and Go workers.
+pub mod log_file;
+
 use std::future::Future;
 use std::time::Duration;
 

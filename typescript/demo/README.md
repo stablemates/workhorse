@@ -46,13 +46,24 @@ The demo needs these prerequisites:
 
 No PostgreSQL extensions are required; recurring work runs through the workers themselves.
 
-Every demo run writes structured OpenTelemetry logs to
-`logs/<environment>/workhorse-demo-server.ndjson` and
-`logs/<environment>/workhorse-demo-worker.ndjson`. `WORKHORSE_DEMO_ENV` supplies the dashboard and
-telemetry label and the `<environment>` directory; it defaults to `development`. Each file rotates
-at 10 MiB and retains five
-archives. Set `WORKHORSE_DEMO_LOG_MAX_BYTES`, `WORKHORSE_DEMO_LOG_ARCHIVES`, or
-`WORKHORSE_DEMO_LOG_DIRECTORY` to override those defaults.
+Every demo process writes structured logs to `logs/<environment>/<service>.ndjson`, such as
+`logs/development/workhorse-demo-server.ndjson` and
+`logs/development/workhorse-demo-worker-python.ndjson`. All processes use one record format, so
+this command shows the records of all languages in time order:
+
+```bash
+cat logs/development/*.ndjson | jq -sc 'sort_by(.timestamp)[] | {timestamp, service: .resource["service.name"], severityText, eventName, body}'
+```
+
+`WORKHORSE_DEMO_ENV` supplies the dashboard and telemetry label and the `<environment>` directory;
+it defaults to `development`. Each file rotates at 10 MiB and retains five archives. Set
+`WORKHORSE_DEMO_LOG_MAX_BYTES`, `WORKHORSE_DEMO_LOG_ARCHIVES`, or `WORKHORSE_DEMO_LOG_DIRECTORY` to
+override those defaults.
+
+The console puts the short name of the process in front of each line, such as `go | ...`. The
+launcher also keeps the console output of each process in `logs/<environment>/<service>.console.log`,
+which holds compiler output and crashes too. [Demo log
+files](../../docs/architecture/telemetry.md#demo-log-files) gives the record format.
 
 The observability demo additionally exports logs, traces, and metrics to a local SigNoz collector. Install the
 supported SigNoz Foundry CLI, then start SigNoz and the instrumented demo from the repository root:

@@ -108,10 +108,13 @@ ENV UV_CONCURRENT_DOWNLOADS=${BUILD_CONCURRENCY}
 ENV UV_CONCURRENT_INSTALLS=${BUILD_CONCURRENCY}
 ENV UV_PYTHON_DOWNLOADS=never
 COPY python/pyproject.toml python/uv.lock ./python/
+# The `telemetry` extra installs the OpenTelemetry API. The demo worker gives the SDK a logs provider
+# that writes the demo log file, and the SDK emits its worker events only through that API.
 RUN uv export \
       --project python \
       --locked \
       --no-dev \
+      --extra telemetry \
       --no-emit-project \
       --quiet \
       --output-file /tmp/requirements.txt \
@@ -207,18 +210,22 @@ COPY --from=dotnet-build /opt/workhorse-dotnet /opt/workhorse-dotnet
 COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet
 COPY python/examples/demo_worker.py /opt/workhorse-python-worker.py
 ARG ALPINE_PYTHON_VERSION
-RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler
+# tzdata is the IANA time zone database. psycopg reads the TimeZone of each PostgreSQL session with
+# zoneinfo. Without the database, a server time zone such as America/New_York gives a warning, and
+# the Python worker reads timestamps in UTC.
+RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler tzdata
 RUN mkdir logs && chown node:node logs
 
 USER node
 # The image build stops here if the runtime contract breaks: the interpreter is not the pinned
-# version, a worker cannot load its SDK, the node user cannot write its log directory, or the node
-# user can write any other file under the application paths. BusyBox find has no `-writable`, so
+# version, a worker cannot load its SDK, the time zone database is missing, the node user cannot
+# write its log directory, or the node user can write any other file under the application paths. BusyBox find has no `-writable`, so
 # a file fails the check when node owns it, its group is node, or anyone can write it. `-B` keeps
 # Python from writing bytecode into the layer.
 RUN set -eu \
   && python3 -B -c "import platform, sys; expected = sys.argv[1].split('-r')[0]; actual = platform.python_version(); sys.exit(0 if actual == expected else f'python3 is {actual}, the pin is {expected}')" "${ALPINE_PYTHON_VERSION}" \
   && python3 -B -c "import workhorse._contracts" \
+  && python3 -B -c "import zoneinfo; zoneinfo.ZoneInfo('America/New_York')" \
   && BUNDLE_GEMFILE=/opt/workhorse-ruby/Gemfile ruby -rbundler/setup -e 'require "stablemates/workhorse"' \
   && node -e 'import("@stablemates/workhorse").then(() => import("@stablemates/workhorse-dashboard-server"))' \
   && /opt/java/openjdk/bin/java --dry-run -cp '/opt/workhorse-jvm/*' run.workhorse.examples.programs.DemoWorkerProgram \

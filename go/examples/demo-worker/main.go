@@ -195,7 +195,11 @@ func main() {
 	}
 	defer pool.Close()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logFile, err := newDemoLogFile()
+	if err != nil {
+		panic(err)
+	}
+	logger := demoLogger(logFile)
 	if waits {
 		if err := waitForSchema(runContext, workhorse.NewPGXExecutor(pool), logger); err != nil {
 			if runContext.Err() != nil {

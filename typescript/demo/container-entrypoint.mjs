@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readLines } from "./console-lines.cjs";
 
 // This entry point starts processes and installs nothing.
 //
@@ -15,6 +16,8 @@ import { spawn } from "node:child_process";
 const workerArguments = [
   "--require",
   "./telemetry.cjs",
+  "--import",
+  "./telemetry-register.mjs",
   "node_modules/@stablemates/workhorse/dist/src/cli/workhorse.js",
   "worker",
   "--config",
@@ -25,7 +28,13 @@ const processes = [
   {
     name: "server",
     command: process.execPath,
-    arguments: ["--require", "./telemetry.cjs", "dist/index.js"],
+    arguments: [
+      "--require",
+      "./telemetry.cjs",
+      "--import",
+      "./telemetry-register.mjs",
+      "dist/index.js",
+    ],
     environment: {
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-server",
     },
@@ -151,6 +160,33 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+// Each line of a process goes to the container log with the short name of the process in front,
+// such as `python     | ...`, as `scripts/dev.ts` writes it. Thus `docker logs` tells which process
+// wrote a line, although each worker writes its own console format.
+function consoleLabel(serviceName) {
+  return serviceName.replace(/^workhorse-demo-(worker-)?/, "");
+}
+
+const labelWidth = Math.max(
+  ...processes.map(
+    ({ environment }) => consoleLabel(environment.WORKHORSE_DEMO_SERVICE_NAME).length,
+  ),
+);
+const brokenOutputs = new Set();
+
+// A container log that closes must not end the entry point before it stops the processes.
+for (const output of [process.stdout, process.stderr]) {
+  output?.on("error", () => {
+    brokenOutputs.add(output);
+    stop("SIGTERM");
+  });
+}
+
+function forward(stream, tag, output) {
+  if (!stream) return;
+  readLines(stream, output, (line) => brokenOutputs.has(output) || output.write(`${tag}${line}\n`));
+}
+
 // Each process connects under its service name, so `pg_stat_activity` names the process that holds a
 // session (SM-1819). The name replaces an `application_name` in the URL. The other parameters keep
 // their text, because a form encoder writes a space as `+`, which libpq does not decode. A fragment
@@ -176,8 +212,11 @@ function launch({ name, command, arguments: arguments_, environment }) {
   }
   const child = spawn(command, arguments_, {
     env,
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "pipe"],
   });
+  const tag = `${consoleLabel(env.WORKHORSE_DEMO_SERVICE_NAME).padEnd(labelWidth)} | `;
+  forward(child.stdout, tag, process.stdout);
+  forward(child.stderr, tag, process.stderr);
   const exited = new Promise((resolve) => {
     child.once("error", (error) => {
       console.error(`Could not start the demo ${name}`, error);
@@ -204,7 +243,8 @@ async function serverAnswers() {
     if (stopping) return false;
     try {
       const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_000) });
-      if (response.ok) return true;
+      // A stop can come while the request runs. Then no worker starts.
+      if (response.ok) return !stopping;
     } catch {
       // Not listening yet.
     }

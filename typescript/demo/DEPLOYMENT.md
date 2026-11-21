@@ -56,7 +56,9 @@ the `node` user can only read and run them:
 - `/usr/local/bin/workhorse-go-demo-worker` and `/usr/local/bin/workhorse-rust-demo-worker`.
 
 The `node` user writes only to the log directory, `/opt/workhorse-demo/logs`, which
-`WORKHORSE_DEMO_LOG_DIRECTORY` names. If a deployment mounts a volume there, or points that variable
+`WORKHORSE_DEMO_LOG_DIRECTORY` names. Every demo process writes its structured log file there,
+including the Python, Go, Rust, Ruby, JVM, and .NET workers. The Python dependencies include the
+OpenTelemetry API, because the Python worker writes its file through that API. If a deployment mounts a volume there, or points that variable
 at another path, the `node` user must be able to write it. The image build runs a check as the
 `node` user before it finishes. The check fails when that user can write any other file in the paths
 above. It also fails when that user cannot write the log directory or cannot load a worker's SDK. The site image copies its
@@ -103,9 +105,14 @@ demo is broken, because the running image does not change. To update the pin:
 5. Commit the new pin.
 
 A new digest of the base image can move to a new Alpine branch. Then the pin must also move, in the
-same commit. The other runtime packages, `libpq`, `ruby`, and `ruby-bundler`, are not pinned. They
-come from the Alpine branch of the pinned base image digest. The `ruby-build` stage installs its gems
-on the same base, so its Ruby matches the runtime Ruby.
+same commit. The other runtime packages, `libpq`, `ruby`, `ruby-bundler`, and `tzdata`, are not
+pinned. They come from the Alpine branch of the pinned base image digest. The `ruby-build` stage
+installs its gems on the same base, so its Ruby matches the runtime Ruby.
+
+`tzdata` is the IANA time zone database. The Python worker reads the `TimeZone` setting of each
+PostgreSQL session with `zoneinfo`. Without the database, a server time zone such as
+`America/New_York` gives the warning `unknown PostgreSQL timezone`, and the worker reads timestamps
+in UTC. The image build stops if Python cannot load a named time zone.
 
 The demo image runs its Ruby worker on the Alpine `ruby` and `ruby-bundler` packages of the runtime
 stage's base. The `ruby-build` stage starts from that same base image, so its gems match the Ruby that

@@ -1,4 +1,9 @@
 use tokio::sync::watch;
+use tracing_subscriber::filter::{filter_fn, LevelFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
+use workhorse_demo_worker::log_file::{DemoLogFile, DemoLogLayer};
 use workhorse_demo_worker::{
     build_worker, connection_pool, poll_interval, wait_for_schema, waits_for_schema, worker_id,
 };
@@ -25,7 +30,14 @@ async fn signalled(mut receiver: watch::Receiver<bool>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().with_ansi(false).with_target(false).init();
+    // The console shows info and above. The demo log file also records the Workhorse debug events.
+    let console = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(LevelFilter::INFO);
+    let log_file = DemoLogFile::from_env()?
+        .map(|file| DemoLogLayer::new(file).with_filter(filter_fn(DemoLogLayer::records)));
+    tracing_subscriber::registry().with(console).with(log_file).init();
     let stop = termination()?;
 
     let url = std::env::var("DATABASE_URL_PRIMARY")

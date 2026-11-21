@@ -2,12 +2,10 @@
 
 // OpenTelemetry must initialize before Hono, pg, or the worker runtime loads. Keeping this as a
 // CommonJS preload makes that ordering explicit for both the TypeScript watcher and compiled app.
-const { resolve } = require("node:path");
 const { OTLPLogExporter } = require("@opentelemetry/exporter-logs-otlp-http");
 const { BatchLogRecordProcessor } = require("@opentelemetry/sdk-logs");
 const { NodeSDK, resources } = require("@opentelemetry/sdk-node");
-const { registerOpenTelemetry } = require("@stablemates/workhorse-otel");
-const { RotatingFileLogExporter } = require("./file-log-exporter.cjs");
+const { RotatingFileLogExporter, demoLogFile } = require("./file-log-exporter.cjs");
 
 const telemetryEnabled = process.env.WORKHORSE_DEMO_TELEMETRY === "true";
 const serviceName = process.env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo";
@@ -23,47 +21,10 @@ process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE ??= "delta";
 process.env.OTEL_NODE_RESOURCE_DETECTORS ??= "env,host,os,process,serviceinstance";
 process.env.OTEL_RESOURCE_ATTRIBUTES ??= `deployment.environment.name=${environment},deployment.environment=${environment}`;
 
-function safePathSegment(value) {
-  return value.replaceAll(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || "unknown";
-}
-
-function positiveInteger(value, fallback, name) {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  return parsed;
-}
-
-// The default root is the repository's `logs/` directory, two levels above this file. Resolving
-// from `__dirname` rather than the working directory keeps the destination stable no matter which
-// directory spawned the process.
-const logRoot = process.env.WORKHORSE_DEMO_LOG_DIRECTORY
-  ? resolve(process.env.WORKHORSE_DEMO_LOG_DIRECTORY)
-  : resolve(__dirname, "..", "..", "logs");
-const logPath = resolve(
-  logRoot,
-  safePathSegment(environment),
-  `${safePathSegment(serviceName)}.ndjson`,
-);
-const maxLogBytes = positiveInteger(
-  process.env.WORKHORSE_DEMO_LOG_MAX_BYTES,
-  10 * 1_024 * 1_024,
-  "WORKHORSE_DEMO_LOG_MAX_BYTES",
-);
-const retainedLogArchives = positiveInteger(
-  process.env.WORKHORSE_DEMO_LOG_ARCHIVES,
-  5,
-  "WORKHORSE_DEMO_LOG_ARCHIVES",
-);
+const logFile = demoLogFile(serviceName, environment, ".ndjson");
 const logRecordProcessors = [
   new BatchLogRecordProcessor({
-    exporter: new RotatingFileLogExporter({
-      path: logPath,
-      maxBytes: maxLogBytes,
-      archives: retainedLogArchives,
-    }),
+    exporter: new RotatingFileLogExporter(logFile),
   }),
 ];
 if (telemetryEnabled) {
@@ -95,11 +56,11 @@ const sdk = new NodeSDK({
   logRecordProcessors,
 });
 sdk.start();
-const unregisterOpenTelemetry = registerOpenTelemetry();
+// `telemetry-register.mjs` registers the Workhorse provider on the ESM instance of the SDK.
 
 let shuttingDown;
 function shutdown() {
-  unregisterOpenTelemetry();
+  globalThis[Symbol.for("workhorse.demo.unregisterOpenTelemetry")]?.();
   shuttingDown ??= sdk.shutdown();
   return shuttingDown;
 }

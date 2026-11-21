@@ -7,15 +7,17 @@
     "dist",
     "container-entrypoint.mjs",
     "telemetry.cjs",
-    "file-log-exporter.cjs"
+    "telemetry-register.mjs",
+    "file-log-exporter.cjs",
+    "console-lines.cjs"
   ],
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev:server": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server tsx watch --conditions workhorse-source --require ./telemetry.cjs src/index.ts",
-    "dev:worker": "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/worker-main.ts",
-    "start": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server node --require ./telemetry.cjs dist/index.js",
-    "start:worker": "NODE_OPTIONS=--require=./telemetry.cjs workhorse worker --config dist/worker.js",
+    "dev:server": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server tsx watch --conditions workhorse-source --require ./telemetry.cjs --import ./telemetry-register.mjs src/index.ts",
+    "dev:worker": "tsx watch --conditions workhorse-source --require ./telemetry.cjs --import ./telemetry-register.mjs src/worker-main.ts",
+    "start": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-server node --require ./telemetry.cjs --import ./telemetry-register.mjs dist/index.js",
+    "start:worker": "NODE_OPTIONS='--require=./telemetry.cjs --import=./telemetry-register.mjs' workhorse worker --config dist/worker.js",
     "start:worker:typescript": "WORKHORSE_DEMO_SERVICE_NAME=workhorse-demo-worker-typescript pnpm start:worker",
     "typecheck": "tsc -b tsconfig.typecheck.json"
   },

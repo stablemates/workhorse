@@ -50,7 +50,7 @@ describe("multilanguage demo worker topology", () => {
     expect(base("ruby-build")).toMatch(/^node:\d+-alpine@sha256:[0-9a-f]{64}$/);
     expect(base("ruby-build")).toBe(base("runtime"));
     expect(dockerfile).toContain("bundle config set --local frozen true");
-    expect(dockerfile).toMatch(/^RUN apk add --no-cache .*\bruby ruby-bundler$/m);
+    expect(dockerfile).toMatch(/^RUN apk add --no-cache .*\bruby ruby-bundler\b/m);
   });
 
   it("installs the Python dependencies with the runtime stage's pinned interpreter", async () => {
@@ -65,11 +65,22 @@ describe("multilanguage demo worker topology", () => {
     expect(base("python-build")).toBe(base("runtime"));
     expect(dockerfile.match(/^RUN apk add --no-cache .*\bpython3\b.*$/gm)).toEqual([
       "RUN apk add --no-cache python3=${ALPINE_PYTHON_VERSION}",
-      "RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler",
+      "RUN apk add --no-cache libpq python3=${ALPINE_PYTHON_VERSION} ruby ruby-bundler tzdata",
     ]);
     expect(dockerfile).toContain("--python /usr/bin/python3");
     expect(dockerfile).toContain('python3 -B -c "import workhorse._contracts"');
     expect(dockerfile).toContain("python3 is {actual}, the pin is {expected}");
+  });
+
+  it("gives the runtime the IANA time zone database", async () => {
+    const dockerfile = await readFile(resolve("Dockerfile"), "utf8");
+
+    // psycopg reads the TimeZone of each PostgreSQL session with zoneinfo. Without the database,
+    // a server time zone such as America/New_York gives a warning, and timestamps fall back to UTC.
+    expect(dockerfile).toMatch(/^RUN apk add --no-cache libpq .*\btzdata$/m);
+    expect(dockerfile).toContain(
+      `python3 -B -c "import zoneinfo; zoneinfo.ZoneInfo('America/New_York')"`,
+    );
   });
 
   it("declares one equal-capacity worker in each runtime", async () => {

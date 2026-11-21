@@ -980,16 +980,31 @@ pass can remove more rows than the rate limiter can admit between passes.
 
 #### Demo log files
 
-The demo preload always installs one `NodeSDK` and one rotating file log processor. It writes NDJSON
-to `logs/<environment>/<service>.ndjson` under the repository root. The preload resolves the root
-from its own location, not from the working directory.
+Each demo process writes its log records to one local NDJSON file. One record format and one path
+rule apply to every process, so an operator can read the records of all languages together.
 
-`WORKHORSE_DEMO_ENV` supplies these values and defaults to `development`:
+The path is `<root>/<environment>/<service>.ndjson`. `<service>` is the value of
+`WORKHORSE_DEMO_SERVICE_NAME`, such as `workhorse-demo-worker-go`. `WORKHORSE_DEMO_ENV` supplies
+these values and defaults to `development`:
 
 - the dashboard environment, `<environment>`
 - the OpenTelemetry `deployment.environment.name` and `deployment.environment` resource attributes
 
-The preload rotates the file before the next record would take the current file past 10,485,760
+Each line is one JSON object. Its keys come in this order:
+
+| Key                 | Value                                                                                                 |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `timestamp`         | The time of the record, in UTC with milliseconds, such as `2026-11-21T15:12:55.802Z`.                 |
+| `observedTimestamp` | The time when the process wrote the record, in the same format.                                       |
+| `severityText`      | `DEBUG`, `INFO`, `WARN`, `ERROR`, or `FATAL`.                                                         |
+| `severityNumber`    | The OpenTelemetry severity number: 5, 9, 13, 17, or 21.                                               |
+| `eventName`         | The Workhorse event name, such as `workhorse.task.completed`. A record without a name has no key.     |
+| `body`              | The text of the record.                                                                               |
+| `attributes`        | The attributes of the record, without `event.name`.                                                   |
+| `resource`          | `service.name`, the deployment environment, `host.name`, `process.pid`, and `telemetry.sdk.language`. |
+| `scope`             | The `name` of the logger or the instrumentation scope.                                                |
+
+A writer rotates the file before the next record would take the current file past 10,485,760
 bytes. It keeps five numbered archives. These variables override the defaults:
 
 | Variable                       | Overrides     |
@@ -998,11 +1013,68 @@ bytes. It keeps five numbered archives. These variables override the defaults:
 | `WORKHORSE_DEMO_LOG_MAX_BYTES` | byte limit    |
 | `WORKHORSE_DEMO_LOG_ARCHIVES`  | archive count |
 
-The server and worker use different `service.name` values, so they never write the same file.
+A process stops at startup if a limit is not a positive integer. A write that fails does not stop
+the worker. The writer reports the first failure to standard error.
+
+The processes use different `service.name` values, so no two processes write the same file.
+
+##### Node processes
+
+The demo preload `telemetry.cjs` installs one `NodeSDK` and one rotating file log processor. The
+preload resolves the default root from its own location: the `logs/` directory of the repository.
+It does not use the working directory.
+
+A second preload, `telemetry-register.mjs`, registers the Workhorse OpenTelemetry provider. It
+loads with `--import`, so it registers the provider on the ESM instance of `@stablemates/workhorse`
+that the application imports. Under the `tsx` loader of the development demo, a `require` from the
+CommonJS preload gets a second, CommonJS instance of the SDK sources. A provider on that instance
+receives no SDK record.
 
 If `WORKHORSE_DEMO_TELEMETRY = "true"`, the same SDK adds exactly one OTLP log processor plus
 automatic trace and metric instrumentation. Otherwise, the trace and metric exporters stay disabled.
 Local structured logs stay active.
+
+##### Other demo workers
+
+The Python, Go, Rust, Ruby, JVM, and .NET demo workers write the file only if
+`WORKHORSE_DEMO_LOG_DIRECTORY` names a directory. `scripts/dev.ts` sets it to the `logs/` directory
+of the repository, and the demo image sets it to `/opt/workhorse-demo/logs`. Each worker takes the
+records from the structured log channel of its SDK:
+
+| Worker | Source of the records                                                                                                                                                              |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Python | An OpenTelemetry logger provider, plus a `logging` handler for the records that the SDK writes to `logging`.                                                                       |
+| Go     | A `slog` handler next to the JSON console handler.                                                                                                                                 |
+| Rust   | A `tracing` layer. A record also gets the fields of its spans, apart from the `otel.*` fields.                                                                                     |
+| Ruby   | The `Logger` that the worker gives the SDK. The worker reads the event name and the attributes back from the text of the SDK.                                                      |
+| JVM    | An OpenTelemetry logs bridge for the events of the cross-language set, plus a `java.util.logging` handler for the other records. The handler skips an event that the bridge wrote. |
+| .NET   | An `ILoggerProvider`. The `EventId` name gives the event name, and the template values give the attributes.                                                                        |
+
+The Python provider also writes each record to `logging`, because the Python SDK writes its worker
+events only to the OpenTelemetry logs API. Without a provider, the Python worker shows no event.
+
+The files of the Node, Python, Ruby, and JVM processes hold every severity. The Go, Rust, and .NET
+files hold the debug records of Workhorse and the info records of every library. The consoles show
+info and above.
+
+##### Console output
+
+`scripts/dev.ts` reads the standard output and the standard error of each process. It writes each
+line to its own console with the short service name in front, such as `python | ...`. It also
+appends each line to `<root>/<environment>/<service>.console.log` with a UTC timestamp and the
+stream name. That file keeps the output that the structured log does not hold, such as compiler
+output and a crash. It rotates with the same limits. The demo image does not write this file.
+
+`container-entrypoint.mjs` also puts the short service name in front of each line, so the container
+log tells which process wrote a line. It writes no color codes and no console file.
+
+Both launchers split the output with `typescript/demo/console-lines.cjs`. A line longer than 65,536
+characters goes out in parts of at most that length, so a line without a line end cannot fill the
+memory of the launcher. A part does not cut a character in two.
+When the console or the container log cannot take more output, the launcher stops reading the
+process, so the process waits as it did when it wrote to the console itself. Each stream of a
+process is read on its own, so a line of standard output and a line of standard error can come in
+a different order than the process wrote them.
 
 ### Baseline queue metrics
 
