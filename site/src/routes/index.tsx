@@ -23,6 +23,7 @@ import {
 import { Rule } from "@/components/primitives";
 import { SiteFooter } from "@/components/site-footer";
 import { TheDerby } from "@/components/the-derby";
+import { comparisons, isPublished, productUrl } from "@/lib/comparisons";
 import { integrations } from "@/lib/integrations";
 import {
   landingFeatureSnippets,
@@ -947,6 +948,65 @@ function DerbySection() {
   );
 }
 
+/**
+ * Every published comparison, grouped by category, read from
+ * `site/comparisons.json` so the list cannot name a page that does not exist.
+ * A reader arriving from another queue looks for that queue's name before
+ * reading a feature tour, and these are the only landing links to the pages.
+ */
+const comparisonGroups = comparisons.categories
+  .map((category) => ({
+    id: category.id,
+    title: category.title,
+    products: comparisons.products.filter(
+      (product) => product.category === category.id && isPublished(product),
+    ),
+  }))
+  .filter((category) => category.products.length > 0);
+
+function ComparisonSection() {
+  return (
+    <section id="compare" className="mx-auto w-full max-w-7xl scroll-mt-24 px-5 pb-16 lg:px-8">
+      <Rule label="coming from another queue" />
+      <div className="mt-10 grid gap-8 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:gap-14">
+        <div>
+          <h2 className="text-balance text-2xl font-semibold leading-snug tracking-tight sm:text-[27px]">
+            Compare it with what you run today.
+          </h2>
+          <p className="mt-3 text-pretty text-[16px] leading-relaxed text-fd-muted-foreground">
+            Each page compares features against a stated version, links every fact to its source,
+            and says when the other product is the better choice.
+          </p>
+          <p className="mt-4">
+            <a href="/docs/compare" className="wh-link-underline text-[15px] font-medium">
+              All comparisons →
+            </a>
+          </p>
+        </div>
+        <div className="wh-panel overflow-hidden rounded-md">
+          {comparisonGroups.map((category) => (
+            <div key={category.id} className="wh-rule border-t px-5 py-4 first:border-t-0">
+              <h3 className="text-[14px] font-medium text-fd-muted-foreground">{category.title}</h3>
+              <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
+                {category.products.map((product) => (
+                  <li key={product.slug}>
+                    <a
+                      href={productUrl(product)}
+                      className="wh-link-underline text-[15px] font-medium"
+                    >
+                      Workhorse vs {product.name}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ClosingCall() {
   return (
     <section className="mx-auto w-full max-w-7xl px-5 pb-20 lg:px-8">
@@ -1141,6 +1201,9 @@ function HomePage() {
             </dl>
           </div>
         </section>
+
+        {/* ---------- Comparisons ---------- */}
+        <ComparisonSection />
 
         {/* ---------- Where to go ---------- */}
         <section className="wh-rule border-t">

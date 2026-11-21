@@ -124,6 +124,24 @@ change.
 - `scripts/comparisons.test.ts` checks the data and the page sections.
   `../scripts/comparison-names.test.ts` fails on a product name outside the
   permitted paths.
+- The landing page links every published product page from its "coming from
+  another queue" section, which reads the data file too. Those links are the only
+  path from the landing page to the product pages.
+
+## Search titles
+
+A docs page can set `searchTitle` in its frontmatter. It replaces the whole
+`<title>`, the Open Graph title, and the Twitter title. The H1 and the JSON-LD
+headline keep `title`. Use it when the heading names only a subject that people
+search for on its own: "Kysely" as a title competes with Kysely's own docs.
+
+- Phrase it as the reader's search, and keep it true to the page body. A
+  workflow-platform comparison names both categories and never calls Workhorse
+  a substitute (ADR 0104). Use "task", not "job", unless "job" is part of a
+  product name.
+- `scripts/docs-page.ts` rejects a blank title and one over 60 characters.
+  `lib/seo.test.ts` runs the same check on every page, and also checks that each
+  comparison description fits in 160 characters.
 
 ## The blog
 

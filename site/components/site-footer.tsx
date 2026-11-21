@@ -54,6 +54,7 @@ const columns = [
     label: "Build",
     links: [
       { href: "/docs/integrations", text: "Integrations" },
+      { href: "/docs/compare", text: "Comparisons" },
       { href: "/docs/examples", text: "Examples" },
       { href: "/docs/dashboard", text: "Dashboard" },
     ],

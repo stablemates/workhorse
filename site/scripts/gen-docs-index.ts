@@ -16,7 +16,8 @@ import {
   renderWhenToUse,
 } from "./agent-surfaces.js";
 import { loadPosts, renderFeed } from "./blog-posts.js";
-import { frontmatterValue, stripFrontmatter } from "./frontmatter.js";
+import { type DocsPageMetadata, docsPageMetadata } from "./docs-page.js";
+import { stripFrontmatter } from "./frontmatter.js";
 import { mdxToMarkdown } from "./mdx-to-markdown.js";
 import { readReleaseLines } from "./release-changelogs.js";
 import { loadSitePages } from "./site-pages.js";
@@ -81,12 +82,10 @@ const sidebarLabels: Readonly<Record<string, string>> = {
   api: "API",
 };
 
-interface PageRecord {
+interface PageRecord extends DocsPageMetadata {
   readonly slug: string;
   readonly url: string;
   readonly path: string;
-  readonly title: string;
-  readonly description: string;
 }
 
 const contentDir = new URL("../content/docs/", import.meta.url);
@@ -462,11 +461,8 @@ const markdownDocuments = new Map<string, string>();
 const pageRecords = await Promise.all(
   slugs.map(async (slug) => {
     const source = await readFile(new URL(pagePath(slug), contentDir), "utf8");
-    const title = frontmatterValue(source, "title") ?? slug;
-    const description = frontmatterValue(source, "description");
-    if (!description) {
-      throw new Error(`The docs page "${slug}" is missing a frontmatter description`);
-    }
+    const metadata = docsPageMetadata(slug, source);
+    const { title, description } = metadata;
 
     // The catalog tag becomes Markdown before the tab transform runs, so the
     // transform never meets a component the sidebar generator owns.
@@ -483,8 +479,7 @@ const pageRecords = await Promise.all(
       slug,
       url: slug === "index" ? "/docs" : `/docs/${slug}`,
       path: pagePath(slug),
-      title,
-      description,
+      ...metadata,
     };
     return { page, markdown: `# ${title}\n\n> ${description}\n\n${mdxToMarkdown(body, slug)}` };
   }),
