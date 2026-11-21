@@ -14,6 +14,9 @@ database that your application already uses, so it needs no broker and no server
 
 All four packages have the same version. Use the same version for each package that you add.
 
+Each package puts its public types in the namespace of its name. `Queue`, `Worker`, `Admin`, and
+`TaskDetail` are in `Workhorse`, so a file that uses them starts with `using Workhorse;`.
+
 ## Install
 
 ```bash

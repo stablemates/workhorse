@@ -14,16 +14,19 @@ import run.workhorse.testing.ScratchDatabase
 
 /**
  * Runs the Kotlin snippets of the site quickstart. Each test has its own database, because the
- * worker of the first snippet stops at a task that it has no handler for.
+ * worker of the step 3 program claims every task of the queue `default`.
  */
 @ExtendWith(ScratchDatabase::class)
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class QuickstartKotlinExamplesTest {
   @Test
-  fun theWorkerRunsTheWelcomeTask() {
+  fun theProgramRunsTheWelcomeTask() {
     IsolatedExampleDatabase.create("quickstart_kotlin_run").use { database ->
-      val task = checkNotNull(runBlocking { QuickstartKotlinExamples.runTask(database.jdbcUrl()) })
-      assertEquals("email.welcome", task.type())
+      val output = ExampleProgram.run("run.workhorse.examples.QuickstartKt", database.jdbcUrl())
+      assertEquals("SUCCEEDED {deliveredTo=ada@example.com}\n", output)
+      val tasks = database.tasks("email.welcome", "to", "ada@example.com")
+      assertEquals(1, tasks.size)
+      val task = database.detail(tasks.single())
       assertEquals(TaskState.SUCCEEDED, task.state())
       assertEquals(mapOf("deliveredTo" to "ada@example.com"), task.result())
     }

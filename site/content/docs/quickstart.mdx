@@ -173,6 +173,14 @@ Run this one time, as a deployment step. Runtime code must not install the schem
 A `Queue` accepts work. A `Worker` runs the work with the handler for its task type. This example
 puts the two in one file, so you can see the full lifecycle.
 
+Each program reads its database from an environment variable. The TypeScript, Python, Go, Rust, and
+Ruby programs read the PostgreSQL URL in `DATABASE_URL`. PgJDBC does not read that URL form. Thus,
+the Java and Kotlin programs read a JDBC URL from `JDBC_DATABASE_URL`. Npgsql reads no URL, so the
+C# program reads a connection string from `ConnectionStrings__Workhorse`. An ASP.NET Core
+application reads the same variable as `ConnectionStrings:Workhorse`.
+
+The C# program replaces the `Program.cs` of a project from `dotnet new console`.
+
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
     ```ts
@@ -348,67 +356,106 @@ puts the two in one file, so you can see the full lifecycle.
   </Tab>
   <Tab value="Java">
     ```java
-    PGSimpleDataSource dataSource = new PGSimpleDataSource();
-    dataSource.setURL(databaseUrl); // a JDBC URL, such as jdbc:postgresql://localhost/app
-    Queue queue = new Queue(ConnectionSource.of(dataSource));
-    UUID taskId = queue.enqueue("email.welcome", Map.of("to", "ada@example.com")).taskId();
+    import java.util.Map;
+    import java.util.Objects;
+    import java.util.UUID;
+    import org.postgresql.ds.PGSimpleDataSource;
+    import run.workhorse.Admin;
+    import run.workhorse.ConnectionSource;
+    import run.workhorse.Queue;
+    import run.workhorse.TaskDetail;
+    import run.workhorse.Worker;
 
-    try (Worker worker =
-        Worker.builder(dataSource)
-            .handle(
-                "email.welcome",
-                Map.class,
-                (context, payload) -> Map.of("deliveredTo", String.valueOf(payload.get("to"))))
-            .build()) {
-      worker.runOnce(); // one claim-and-run pass; production uses WorkerProcess.runWorkerProcess
+    public final class Quickstart {
+      public static void main(String[] args) {
+        // A JDBC URL, such as jdbc:postgresql://localhost/app?user=app&password=secret
+        String databaseUrl =
+            Objects.requireNonNull(System.getenv("JDBC_DATABASE_URL"), "set JDBC_DATABASE_URL");
+        PGSimpleDataSource dataSource = new PGSimpleDataSource();
+        dataSource.setURL(databaseUrl);
+        Queue queue = new Queue(ConnectionSource.of(dataSource));
+        UUID taskId = queue.enqueue("email.welcome", Map.of("to", "ada@example.com")).taskId();
+
+        try (Worker worker =
+            Worker.builder(dataSource)
+                .handle(
+                    "email.welcome",
+                    Map.class,
+                    (context, payload) -> Map.of("deliveredTo", String.valueOf(payload.get("to"))))
+                .build()) {
+          worker.runOnce(); // one claim-and-run pass; production uses WorkerProcess.runWorkerProcess
+        }
+
+        TaskDetail task = new Admin(ConnectionSource.of(dataSource)).getTask(taskId).orElseThrow();
+        System.out.println(task.state() + " " + task.result());
+      }
     }
-
-    TaskDetail task = new Admin(ConnectionSource.of(dataSource)).getTask(taskId).orElseThrow();
-    System.out.println(task.state() + " " + task.result());
     ```
   </Tab>
   <Tab value="Kotlin">
     ```kotlin
-    val dataSource = PGSimpleDataSource().apply { setURL(databaseUrl) } // a JDBC URL
-    val queue = Queue(ConnectionSource.of(dataSource))
-    val taskId = queue.enqueueSuspend("email.welcome", mapOf("to" to "ada@example.com")).taskId()
+    import kotlinx.coroutines.runBlocking
+    import org.postgresql.ds.PGSimpleDataSource
+    import run.workhorse.Admin
+    import run.workhorse.ConnectionSource
+    import run.workhorse.Queue
+    import run.workhorse.kotlin.enqueueSuspend
+    import run.workhorse.kotlin.getTaskSuspend
+    import run.workhorse.kotlin.workhorseWorker
 
-    workhorseWorker(dataSource) {
-        handle<Map<String, Any?>>("email.welcome") { _, payload ->
-          mapOf("deliveredTo" to payload["to"])
+    fun main() = runBlocking {
+      // A JDBC URL, such as jdbc:postgresql://localhost/app?user=app&password=secret
+      val databaseUrl = checkNotNull(System.getenv("JDBC_DATABASE_URL")) { "set JDBC_DATABASE_URL" }
+      val dataSource = PGSimpleDataSource().apply { setURL(databaseUrl) }
+      val queue = Queue(ConnectionSource.of(dataSource))
+      val taskId = queue.enqueueSuspend("email.welcome", mapOf("to" to "ada@example.com")).taskId()
+
+      workhorseWorker(dataSource) {
+          handle<Map<String, Any?>>("email.welcome") { _, payload ->
+            mapOf("deliveredTo" to payload["to"])
+          }
         }
-      }
-      .use { worker -> worker.runOnce() } // production uses WorkerProcess.runWorkerProcess
+        .use { worker -> worker.runOnce() } // production uses WorkerProcess.runWorkerProcess
 
-    val task = Admin(ConnectionSource.of(dataSource)).getTaskSuspend(taskId)
-    println("${task?.state()} ${task?.result()}")
+      val task = Admin(ConnectionSource.of(dataSource)).getTaskSuspend(taskId)
+      println("${task?.state()} ${task?.result()}")
+    }
     ```
   </Tab>
   <Tab value="C#">
     ```csharp
+    using Npgsql;
+    using Workhorse;
+
+    namespace Quickstart;
+
+    public static class Program
+    {
+        public static async Task Main()
+        {
+            // An Npgsql connection string, such as "Host=localhost;Database=app;Username=app;Password=secret"
+            var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Workhorse")
+                ?? throw new InvalidOperationException("set ConnectionStrings__Workhorse");
+            await using var dataSource = NpgsqlDataSource.Create(connectionString);
+            var queue = new Queue(dataSource);
+            var enqueued = await queue.EnqueueAsync("email.welcome", new WelcomeEmail("ada@example.com"));
+
+            await using (var worker = new Worker(dataSource, new WorkerOptions { Queues = ["default"] }))
+            {
+                worker.Handle<WelcomeEmail, Delivery>(
+                    "email.welcome",
+                    (context, payload) => Task.FromResult(new Delivery(payload.To)));
+                await worker.RunOnceAsync(); // one claim-and-run pass; production calls RunAsync(stoppingToken)
+            }
+
+            var task = await new Admin(dataSource).GetTaskAsync(enqueued.TaskId);
+            Console.WriteLine($"{task?.State} {task?.Result}");
+        }
+    }
+
     public sealed record WelcomeEmail(string To);
 
     public sealed record Delivery(string DeliveredTo);
-
-    public static async Task<TaskDetail?> RunTaskAsync(string connectionString)
-    {
-        // A connection string, such as "Host=localhost;Database=app;Username=app"
-        await using var dataSource = NpgsqlDataSource.Create(connectionString);
-        var queue = new Queue(dataSource);
-        var enqueued = await queue.EnqueueAsync("email.welcome", new WelcomeEmail("ada@example.com"));
-
-        await using (var worker = new Worker(dataSource, new WorkerOptions { Queues = ["default"] }))
-        {
-            worker.Handle<WelcomeEmail, Delivery>(
-                "email.welcome",
-                (context, payload) => Task.FromResult(new Delivery(payload.To)));
-            await worker.RunOnceAsync(); // one claim-and-run pass; production calls RunAsync(stoppingToken)
-        }
-
-        var task = await new Admin(dataSource).GetTaskAsync(enqueued.TaskId);
-        Console.WriteLine($"{task?.State} {task?.Result}");
-        return task;
-    }
     ```
   </Tab>
 </Tabs>

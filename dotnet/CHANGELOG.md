@@ -18,6 +18,12 @@ whole `enqueue_idempotency` or `task_dependency` table to delete the rows of one
 They now delete the rows that they locked by their `ctid`. The result does not change, and this SDK
 does not change. Migration 0106 moves the schema to version 105, and the floor stays 99.
 
+### The package README names the namespace
+
+The README that nuget.org shows for each package now says that its public types are in the
+namespace of its name, so `Queue` and `Worker` need `using Workhorse;` (SM-2061). The code does not
+change.
+
 ## 0.14.0 — 2026-11-13
 
 There is no 0.13.0. A task queue does not tempt fate.
