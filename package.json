@@ -256,6 +256,7 @@
   "packageManager": "pnpm@10.18.3",
   "pnpm": {
     "overrides": {
+      "@prisma/config>effect": "3.22.4",
       "deepmerge-ts": "^8.0.0",
       "gcp-metadata@8>gaxios": "^7.1.4",
       "js-yaml@4": "^4.3.2"
