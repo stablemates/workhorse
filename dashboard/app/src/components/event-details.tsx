@@ -1,6 +1,6 @@
 import type { DashboardEventDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import { Code, Group, Stack, Text } from "@mantine/core";
-import { ArrowSquareOut } from "@phosphor-icons/react";
+import { OpenInNewWindowButton } from "./open-in-new-window.js";
 import type { ReactNode } from "react";
 import { JsonValue } from "./task-detail-overview.js";
 import { TaskIdChip } from "./task-detail-relations.js";
@@ -21,18 +21,12 @@ export function EventDetails({
 }) {
   const taskId = (
     <Group gap="xs" wrap="nowrap">
-      <TaskIdChip id={event.taskId} />
+      <TaskIdChip id={event.taskId} copyPosition="start" />
       {event.taskType !== null ? (
-        <Text
-          component="a"
+        <OpenInNewWindowButton
           href={taskLinkHref(event.taskId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Open task ${event.taskId}`}
-          aria-label={`Open task ${event.taskId} in a new window`}
-        >
-          <ArrowSquareOut size={14} aria-hidden />
-        </Text>
+          label={`Open task ${event.taskId} in a new window`}
+        />
       ) : null}
     </Group>
   );

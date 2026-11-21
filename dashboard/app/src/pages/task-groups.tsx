@@ -9,13 +9,17 @@ import type {
 import {
   dashboardPageMax,
   dashboardTaskGroupEventLimit,
+  dashboardTaskGroupPageSizes,
   dashboardTaskGroupStateFilters,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import {
+  ActionIcon,
   Anchor,
   Badge,
+  Box,
   Button,
   Code,
+  Divider,
   Group,
   Modal,
   Paper,
@@ -29,16 +33,22 @@ import {
   TextInput,
   Title,
   Tooltip,
+  VisuallyHidden,
 } from "@mantine/core";
-import { useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { ArrowRight, DotsThreeVertical, Prohibit } from "@phosphor-icons/react";
 import { useDashboardClient, type TaskGroupsPageData } from "../core.js";
-import { useConfirmationActivity } from "../dropdown-activity.js";
+import { Menu, Select, useConfirmationActivity } from "../dropdown-activity.js";
 import { EmptyState, PageHeader } from "../components/task-list.js";
 import { notifyDashboard, notifyFailure } from "../notifications.js";
 import { formatExact, formatJson, formatRelative } from "../preferences.js";
 import { statusColor } from "../status-colors.js";
 import { formatCount } from "../count-format.js";
-import { taskGroupsLocationHref, type TaskGroupsLocationState } from "../task-groups-location.js";
+import {
+  taskGroupsLocationHref,
+  type TaskGroupPageSize,
+  type TaskGroupsLocationState,
+} from "../task-groups-location.js";
 import { randomUuid } from "../random-uuid.js";
 
 /** The navigation a task groups view needs from the shell. */
@@ -49,6 +59,8 @@ export interface TaskGroupsNavigation {
   followLink: (event: MouseEvent<HTMLElement>, path: string) => void;
   /** The route that opens one task in the task drawer. */
   taskPath: (taskId: string) => string;
+  /** The route of the task page, which shows one task on its own page. */
+  taskPagePath: (taskId: string) => string;
 }
 
 const stateFilterLabels: Record<DashboardTaskGroupStateFilter, string> = {
@@ -129,23 +141,99 @@ function TaskGroupProgress({
   );
 }
 
-function TaskGroupStateBadges({ group }: { group: DashboardTaskGroup }) {
+/**
+ * The progress of one group on its detail page: the bar, then one legend entry per count.
+ *
+ * Each entry has the color of its bar section, so the legend also explains the bar.
+ */
+function TaskGroupCountsSummary({ counts }: { counts: DashboardTaskGroupCounts }) {
+  const entries = (["succeeded", "failed", "canceled", "pending"] as const).map((name) => ({
+    name,
+    count: counts[name],
+    color: name === "pending" ? null : statusColor(name),
+  }));
   return (
-    <Group gap={6} wrap="nowrap">
-      <Badge variant="light" color={group.state === "finished" ? "gray" : "blue"}>
-        {group.state}
-      </Badge>
-      {group.result ? (
-        <Badge variant="light" color={statusColor(group.result)}>
-          {group.result}
-        </Badge>
-      ) : null}
-      {group.canceledAt ? (
-        <Badge variant="outline" color="gray">
-          canceled
-        </Badge>
-      ) : null}
-    </Group>
+    <Stack gap="sm">
+      <Group justify="space-between" align="baseline" gap="sm">
+        <Text fw={600} size="sm">
+          {taskGroupProgressLabel(counts)}
+        </Text>
+        <Text size="sm" c="dimmed">
+          {formatCount(counts.total)} member {counts.total === 1 ? "task" : "tasks"}
+        </Text>
+      </Group>
+      <Progress.Root size="lg" aria-label={taskGroupProgressLabel(counts)}>
+        {taskGroupProgressSections(counts).map((section) => (
+          <Tooltip
+            key={section.outcome}
+            label={`${formatCount(section.count)} ${section.outcome}`}
+            withArrow
+          >
+            <Progress.Section value={section.percent} color={section.color} />
+          </Tooltip>
+        ))}
+      </Progress.Root>
+      <Group gap="lg" wrap="wrap">
+        {entries.map((entry) => (
+          <Group key={entry.name} gap={6} wrap="nowrap">
+            <Box
+              aria-hidden
+              w={8}
+              h={8}
+              style={{
+                borderRadius: "50%",
+                flexShrink: 0,
+                background: entry.color
+                  ? `var(--mantine-color-${entry.color}-filled)`
+                  : "var(--mantine-color-default-border)",
+              }}
+            />
+            <Text size="sm" c="dimmed" tt="capitalize">
+              {entry.name}
+            </Text>
+            <Text size="sm" fw={600}>
+              {formatCount(entry.count)}
+            </Text>
+          </Group>
+        ))}
+      </Group>
+    </Stack>
+  );
+}
+
+/** The one badge of a group: what an operator reads first about it. */
+export function taskGroupStateBadge(group: DashboardTaskGroup): {
+  label: string;
+  color: string;
+  title: string;
+} {
+  // A cancellation always ends with the result failed, so "canceled" says more than "failed".
+  if (group.canceledAt !== null) {
+    return group.state === "finished"
+      ? {
+          label: "canceled",
+          color: statusColor("canceled"),
+          title: "Canceled. The result is failed.",
+        }
+      : {
+          label: "canceling",
+          color: statusColor("canceled"),
+          title: "Canceled. Active member tasks stop when their handlers observe the cancellation.",
+        };
+  }
+  // A result implies that the group is finished, so a finished group shows only its result.
+  if (group.state === "finished" && group.result) {
+    return { label: group.result, color: statusColor(group.result), title: "Finished" };
+  }
+  return { label: group.state, color: group.state === "finished" ? "gray" : "blue", title: "" };
+}
+
+function TaskGroupStateBadges({ group }: { group: DashboardTaskGroup }) {
+  const badge = taskGroupStateBadge(group);
+  return (
+    <Badge variant="light" color={badge.color} title={badge.title || undefined}>
+      {badge.label}
+    </Badge>
   );
 }
 
@@ -167,21 +255,53 @@ export function TaskGroupsList({
   location,
   navigation,
   navigate,
+  auditActor,
+  reload,
 }: {
   data: DashboardTaskGroupsPage;
   location: TaskGroupsLocationState;
   navigation: TaskGroupsNavigation;
   navigate: (href: string) => void;
+  auditActor: string;
+  reload: () => Promise<void>;
 }) {
   const groupPath = (groupId: string) =>
     taskGroupsLocationHref({ ...location, groupId, after: null });
+  const canCancel = useTaskGroupCancelCapability(
+    data.groups.find((group) => group.state !== "finished")?.id ?? null,
+  );
+  const [cancelingGroup, setCancelingGroup] = useState<DashboardTaskGroup | null>(null);
+  const lastPage = data.hasMore && data.page >= dashboardPageMax;
+  const pager = (label: string) => (
+    <Group gap="xs" wrap="nowrap" role="group" aria-label={label}>
+      <Button
+        variant="default"
+        size="xs"
+        disabled={data.page <= 1}
+        onClick={() => navigate(taskGroupsLocationHref({ ...location, page: data.page - 1 }))}
+      >
+        Previous page
+      </Button>
+      <Text size="sm" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+        Page {formatCount(data.page)}
+      </Text>
+      <Button
+        variant="default"
+        size="xs"
+        disabled={!data.hasMore || data.page >= dashboardPageMax}
+        onClick={() => navigate(taskGroupsLocationHref({ ...location, page: data.page + 1 }))}
+      >
+        Next page
+      </Button>
+    </Group>
+  );
   return (
     <Stack gap="lg">
       <PageHeader
         title="Task groups"
         description="A task group tracks a set of tasks as one unit. When every member task is finished, Workhorse enqueues the callbacks of the group."
       />
-      <Group justify="space-between">
+      <Group justify="space-between" gap="sm">
         <SegmentedControl
           value={location.state}
           data={dashboardTaskGroupStateFilters.map((value) => ({
@@ -198,6 +318,14 @@ export function TaskGroupsList({
             )
           }
         />
+        <Group gap="sm" wrap="wrap">
+          {pager("Task group pagination above table")}
+          <TaskGroupPageSizeSelect
+            label="Task groups per page"
+            location={location}
+            navigate={navigate}
+          />
+        </Group>
       </Group>
       {data.groups.length === 0 ? (
         <EmptyState>
@@ -211,6 +339,9 @@ export function TaskGroupsList({
             <Table verticalSpacing="sm" highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
+                  <Table.Th w={40}>
+                    <VisuallyHidden>Actions</VisuallyHidden>
+                  </Table.Th>
                   <Table.Th>Group</Table.Th>
                   <Table.Th>State</Table.Th>
                   <Table.Th>Progress</Table.Th>
@@ -223,6 +354,15 @@ export function TaskGroupsList({
               <Table.Tbody>
                 {data.groups.map((group) => (
                   <Table.Tr key={group.id}>
+                    <Table.Td>
+                      <TaskGroupRowActions
+                        group={group}
+                        canCancel={canCancel}
+                        openHref={navigation.href(groupPath(group.id))}
+                        onOpen={() => navigate(groupPath(group.id))}
+                        onCancel={() => setCancelingGroup(group)}
+                      />
+                    </Table.Td>
                     <Table.Td>
                       <Anchor
                         href={navigation.href(groupPath(group.id))}
@@ -255,30 +395,267 @@ export function TaskGroupsList({
           </ScrollArea>
         </Paper>
       )}
-      <Group justify="flex-end" gap="xs">
-        <Button
-          variant="default"
-          size="xs"
-          disabled={data.page <= 1}
-          onClick={() => navigate(taskGroupsLocationHref({ ...location, page: data.page - 1 }))}
+      {data.groups.length > 0 || data.page > 1 ? (
+        <Group justify="flex-end" gap="sm">
+          {lastPage ? (
+            <Text size="sm" c="dimmed">
+              Page {formatCount(data.page)} is the last page the list reads. Filter by state to see
+              other groups.
+            </Text>
+          ) : null}
+          {pager("Task group pagination below table")}
+        </Group>
+      ) : null}
+      <CancelTaskGroupModal
+        groupId={cancelingGroup?.id ?? null}
+        auditActor={auditActor}
+        onClose={() => setCancelingGroup(null)}
+        reload={reload}
+      />
+    </Stack>
+  );
+}
+
+/**
+ * Whether this dashboard can cancel task groups, or null while it is not known.
+ *
+ * The group list carries no capability, so the hook reads it from the detail of one group that is
+ * not finished. The capability belongs to the dashboard, not to the group, so one read is enough.
+ * With no such group, no row offers the action, and the hook reads nothing.
+ */
+function useTaskGroupCancelCapability(probeGroupId: string | null): boolean | null {
+  const client = useDashboardClient();
+  const [canCancel, setCanCancel] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (probeGroupId === null || canCancel !== null) return;
+    let current = true;
+    client
+      .taskGroupDetail({ id: probeGroupId, after: null, pageSize: dashboardTaskGroupPageSizes[0] })
+      .then((detail) => {
+        if (current) setCanCancel(detail.canCancel);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [client, probeGroupId, canCancel]);
+  return canCancel;
+}
+
+/** Why the row menu cannot cancel a group, or null when it can. */
+export function taskGroupCancelUnavailable(
+  group: DashboardTaskGroup,
+  canCancel: boolean | null,
+): string | null {
+  if (group.state === "finished") return "This group is finished.";
+  if (canCancel === null) return "Checking whether this dashboard can cancel task groups.";
+  if (!canCancel) return "This dashboard cannot cancel task groups.";
+  return null;
+}
+
+/** The row menu of one task group in the list. */
+function TaskGroupRowActions({
+  group,
+  canCancel,
+  openHref,
+  onOpen,
+  onCancel,
+}: {
+  group: DashboardTaskGroup;
+  canCancel: boolean | null;
+  openHref: string;
+  onOpen: () => void;
+  onCancel: () => void;
+}) {
+  const unavailable = taskGroupCancelUnavailable(group, canCancel);
+  return (
+    <Menu blocksRefresh position="bottom-start" withinPortal shadow="md" width={260}>
+      <Menu.Target>
+        <ActionIcon
+          size="sm"
+          variant="subtle"
+          color="gray"
+          aria-label={`Actions for task group ${group.id}`}
         >
-          Previous page
+          <DotsThreeVertical size={16} weight="bold" />
+        </ActionIcon>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Item
+          component="a"
+          href={openHref}
+          leftSection={<ArrowRight size={14} />}
+          onClick={(event: MouseEvent<HTMLElement>) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+            event.preventDefault();
+            onOpen();
+          }}
+        >
+          Open group
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<Prohibit size={14} />}
+          color={unavailable === null ? "red" : undefined}
+          disabled={unavailable !== null}
+          onClick={onCancel}
+        >
+          <Text size="sm" lh={1.3}>
+            Cancel group
+          </Text>
+          {unavailable === null ? null : (
+            <Text size="xs" c="dimmed" lh={1.3} mt={2} style={{ whiteSpace: "normal" }}>
+              {unavailable}
+            </Text>
+          )}
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
+
+/**
+ * The confirmation of a task group cancellation, which asks for the reason that the group events
+ * record. `groupId` null keeps the dialog closed.
+ */
+function CancelTaskGroupModal({
+  groupId,
+  auditActor,
+  onClose,
+  reload,
+}: {
+  groupId: string | null;
+  auditActor: string;
+  onClose: () => void;
+  reload: () => Promise<void>;
+}) {
+  const client = useDashboardClient();
+  const [reason, setReason] = useState("");
+  const [canceling, setCanceling] = useState(false);
+  const cancelInFlight = useRef(false);
+  // The id stays while the dialog animates closed, so its text does not empty first.
+  const shownGroupId = useRef(groupId);
+  if (groupId !== null) shownGroupId.current = groupId;
+  const opened = groupId !== null;
+  useConfirmationActivity(opened);
+  // Each opening starts with an empty reason.
+  useEffect(() => {
+    if (groupId !== null) setReason("");
+  }, [groupId]);
+
+  const cancelGroup = async () => {
+    if (groupId === null || cancelInFlight.current || reason.trim() === "") return;
+    cancelInFlight.current = true;
+    setCanceling(true);
+    try {
+      const canceled = await client.cancelTaskGroup({
+        id: groupId,
+        audit: { actor: auditActor, reason: reason.trim(), requestId: randomUuid() },
+      });
+      notifyDashboard({
+        title: canceled.state === "finished" ? "Task group finished" : "Task group canceled",
+        message:
+          canceled.state === "finished"
+            ? `Group ${shortId(groupId)} is finished with the result ${canceled.result ?? "unknown"}.`
+            : `Workhorse canceled the member tasks of group ${shortId(groupId)}. Active member tasks stop when their handlers observe the cancellation.`,
+        tone: "success",
+      });
+      onClose();
+    } catch (cause) {
+      notifyFailure("Task group not canceled", cause, "Workhorse could not cancel the task group");
+      return;
+    } finally {
+      cancelInFlight.current = false;
+      setCanceling(false);
+    }
+    try {
+      await reload();
+    } catch (cause) {
+      notifyFailure(
+        "Task group refresh failed",
+        cause,
+        "The cancellation completed, but the dashboard could not refresh",
+      );
+    }
+  };
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={() => {
+        if (!cancelInFlight.current) onClose();
+      }}
+      title="Cancel this task group?"
+      centered
+      closeOnClickOutside={!canceling}
+      closeOnEscape={!canceling}
+      withCloseButton={!canceling}
+    >
+      <Code block mb="sm">
+        {shownGroupId.current}
+      </Code>
+      <Text size="sm" mb="sm">
+        Workhorse seals this group, so no task can join it. Then it cancels each member task that is
+        not finished. An active member task stops when its handler observes the cancellation. The
+        group finishes with the result failed, and its onFinish and onFailure callbacks run. You
+        cannot undo a cancellation.
+      </Text>
+      <TextInput
+        data-autofocus
+        required
+        label="Reason"
+        description="Workhorse records this reason in the group events."
+        placeholder="Why are you canceling this task group?"
+        value={reason}
+        maxLength={2_000}
+        disabled={canceling}
+        onChange={(event) => setReason(event.currentTarget.value)}
+      />
+      <Group justify="flex-end" mt="lg">
+        <Button variant="default" disabled={canceling} onClick={onClose}>
+          Keep group
         </Button>
-        <Text size="sm" c="dimmed">
-          {data.hasMore && data.page >= dashboardPageMax
-            ? `Page ${data.page}, the last page the list reads. Filter by state to see other groups.`
-            : `Page ${data.page}`}
-        </Text>
         <Button
-          variant="default"
-          size="xs"
-          disabled={!data.hasMore || data.page >= dashboardPageMax}
-          onClick={() => navigate(taskGroupsLocationHref({ ...location, page: data.page + 1 }))}
+          color="red"
+          loading={canceling}
+          disabled={reason.trim() === ""}
+          onClick={() => void cancelGroup()}
         >
-          Next page
+          Cancel group
         </Button>
       </Group>
-    </Stack>
+    </Modal>
+  );
+}
+
+/** The page size of the group list and the member list. A change goes back to the first page. */
+function TaskGroupPageSizeSelect({
+  label,
+  location,
+  navigate,
+}: {
+  label: string;
+  location: TaskGroupsLocationState;
+  navigate: (href: string) => void;
+}) {
+  return (
+    <Select
+      size="xs"
+      w={76}
+      allowDeselect={false}
+      data={dashboardTaskGroupPageSizes.map(String)}
+      value={String(location.pageSize)}
+      onChange={(value) =>
+        navigate(
+          taskGroupsLocationHref({
+            ...location,
+            pageSize: Number(value ?? location.pageSize) as TaskGroupPageSize,
+            page: 1,
+            after: null,
+          }),
+        )
+      }
+      aria-label={label}
+    />
   );
 }
 
@@ -320,55 +697,13 @@ export function TaskGroupDetailView({
   auditActor: string;
   reload: () => Promise<void>;
 }) {
-  const client = useDashboardClient();
   const { group } = data;
   const [confirming, setConfirming] = useState(false);
-  const [reason, setReason] = useState("");
-  const [canceling, setCanceling] = useState(false);
-  const cancelInFlight = useRef(false);
-  useConfirmationActivity(confirming);
   const listPath = taskGroupsLocationHref({ ...location, groupId: null, after: null });
   const memberPage = (after: number | null) =>
     navigate(taskGroupsLocationHref({ ...location, after }));
   const previousAfter =
     location.after === null ? null : Math.max(location.after - location.pageSize, 0) || null;
-
-  const cancelGroup = async () => {
-    if (cancelInFlight.current || reason.trim() === "") return;
-    cancelInFlight.current = true;
-    setCanceling(true);
-    try {
-      const canceled = await client.cancelTaskGroup({
-        id: group.id,
-        audit: { actor: auditActor, reason: reason.trim(), requestId: randomUuid() },
-      });
-      notifyDashboard({
-        title: canceled.state === "finished" ? "Task group finished" : "Task group canceled",
-        message:
-          canceled.state === "finished"
-            ? `Group ${shortId(group.id)} is finished with the result ${canceled.result ?? "unknown"}.`
-            : `Workhorse canceled the member tasks of group ${shortId(group.id)}. Active member tasks stop when their handlers observe the cancellation.`,
-        tone: "success",
-      });
-      setConfirming(false);
-      setReason("");
-    } catch (cause) {
-      notifyFailure("Task group not canceled", cause, "Workhorse could not cancel the task group");
-      return;
-    } finally {
-      cancelInFlight.current = false;
-      setCanceling(false);
-    }
-    try {
-      await reload();
-    } catch (cause) {
-      notifyFailure(
-        "Task group refresh failed",
-        cause,
-        "The cancellation completed, but the dashboard could not refresh",
-      );
-    }
-  };
 
   return (
     <Stack gap="lg">
@@ -391,14 +726,7 @@ export function TaskGroupDetailView({
               This dashboard cannot cancel task groups.
             </Text>
           ) : (
-            <Button
-              color="red"
-              variant="light"
-              onClick={() => {
-                setReason("");
-                setConfirming(true);
-              }}
-            >
+            <Button color="red" variant="light" onClick={() => setConfirming(true)}>
               Cancel group
             </Button>
           )}
@@ -406,17 +734,8 @@ export function TaskGroupDetailView({
       </Group>
       <Paper withBorder p="md">
         <Stack gap="md">
-          <TaskGroupProgress counts={group.counts} size="lg" />
-          <SimpleGrid cols={{ base: 2, sm: 5 }}>
-            {(["total", "succeeded", "failed", "canceled", "pending"] as const).map((name) => (
-              <Stack key={name} gap={0}>
-                <Text size="xs" c="dimmed" tt="capitalize">
-                  {name}
-                </Text>
-                <Text fw={600}>{formatCount(group.counts[name])}</Text>
-              </Stack>
-            ))}
-          </SimpleGrid>
+          <TaskGroupCountsSummary counts={group.counts} />
+          <Divider />
           <SimpleGrid cols={{ base: 2, sm: 4 }}>
             {(
               [
@@ -465,9 +784,9 @@ export function TaskGroupDetailView({
                     <Table.Td>
                       {callback.taskId ? (
                         <Anchor
-                          href={navigation.href(navigation.taskPath(callback.taskId))}
+                          href={navigation.href(navigation.taskPagePath(callback.taskId))}
                           onClick={(event) =>
-                            navigation.followLink(event, navigation.taskPath(callback.taskId!))
+                            navigation.followLink(event, navigation.taskPagePath(callback.taskId!))
                           }
                           ff="monospace"
                           size="sm"
@@ -570,6 +889,11 @@ export function TaskGroupDetailView({
           </Paper>
         )}
         <Group justify="flex-end" gap="xs">
+          <TaskGroupPageSizeSelect
+            label="Member tasks per page"
+            location={location}
+            navigate={navigate}
+          />
           <Button
             variant="default"
             size="xs"
@@ -619,51 +943,12 @@ export function TaskGroupDetailView({
         </Paper>
       </Stack>
 
-      <Modal
-        opened={confirming}
-        onClose={() => {
-          if (!cancelInFlight.current) setConfirming(false);
-        }}
-        title="Cancel this task group?"
-        centered
-        closeOnClickOutside={!canceling}
-        closeOnEscape={!canceling}
-        withCloseButton={!canceling}
-      >
-        <Code block mb="sm">
-          {group.id}
-        </Code>
-        <Text size="sm" mb="sm">
-          Workhorse seals this group, so no task can join it. Then it cancels each member task that
-          is not finished. An active member task stops when its handler observes the cancellation.
-          The group finishes with the result failed, and its onFinish and onFailure callbacks run.
-          You cannot undo a cancellation.
-        </Text>
-        <TextInput
-          data-autofocus
-          required
-          label="Reason"
-          description="Workhorse records this reason in the group events."
-          placeholder="Why are you canceling this task group?"
-          value={reason}
-          maxLength={2_000}
-          disabled={canceling}
-          onChange={(event) => setReason(event.currentTarget.value)}
-        />
-        <Group justify="flex-end" mt="lg">
-          <Button variant="default" disabled={canceling} onClick={() => setConfirming(false)}>
-            Keep group
-          </Button>
-          <Button
-            color="red"
-            loading={canceling}
-            disabled={reason.trim() === ""}
-            onClick={() => void cancelGroup()}
-          >
-            Cancel group
-          </Button>
-        </Group>
-      </Modal>
+      <CancelTaskGroupModal
+        groupId={confirming ? group.id : null}
+        auditActor={auditActor}
+        onClose={() => setConfirming(false)}
+        reload={reload}
+      />
     </Stack>
   );
 }
@@ -689,6 +974,8 @@ export function TaskGroupsPage({
       location={location}
       navigation={navigation}
       navigate={navigate}
+      auditActor={auditActor}
+      reload={reload}
     />
   ) : (
     <TaskGroupDetailView

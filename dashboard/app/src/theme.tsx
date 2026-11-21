@@ -1,17 +1,13 @@
 import {
   ActionIcon,
-  Box,
   CheckIcon,
   createTheme,
   type CSSVariablesResolver,
-  Group,
   MantineProvider,
-  SegmentedControl,
-  Text,
   Tooltip,
 } from "@mantine/core";
 import { Menu } from "./dropdown-activity.js";
-import { Desktop, Moon, Palette, Sun } from "@phosphor-icons/react";
+import { Desktop, Moon, Sun } from "@phosphor-icons/react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DashboardNotifications } from "./notifications.js";
 import { readStoredValue, storeValue } from "./browser-storage.js";
@@ -144,64 +140,44 @@ const options: Array<{
   label: string;
   icon: ReactNode;
 }> = [
-  { value: "light", label: "Light", icon: <Sun size={14} /> },
-  { value: "dark", label: "Dark", icon: <Moon size={14} /> },
-  { value: "system", label: "System", icon: <Desktop size={14} /> },
+  { value: "light", label: "Light", icon: <Sun size={16} /> },
+  { value: "dark", label: "Dark", icon: <Moon size={16} /> },
+  { value: "system", label: "System", icon: <Desktop size={16} /> },
 ];
 
-function ThemeOptionLabel({ icon, label }: { icon: ReactNode; label: string }) {
-  return (
-    <Group gap={6} wrap="nowrap">
-      {icon}
-      <Text component="span" size="xs" fw={650}>
-        {label}
-      </Text>
-    </Group>
-  );
-}
-
+/**
+ * The theme switch: one icon button that shows the current choice and opens a menu of the three.
+ *
+ * It takes the space of one header control at every width. The accessible name states the current
+ * choice, so a screen reader announces it before the menu opens.
+ */
 export function ThemeSchemeSwitch() {
   const { preference, setPreference } = useWorkhorseTheme();
+  const current = options.find((option) => option.value === preference) ?? options[2]!;
+  const label = `Color theme: ${current.label}`;
 
   return (
-    <>
-      <Box visibleFrom="lg">
-        <SegmentedControl
-          size="xs"
-          value={preference}
-          onChange={(value) => setPreference(value as DashboardThemePreference)}
-          aria-label="Color theme"
-          className="theme-switch"
-          data={options.map((option) => ({
-            value: option.value,
-            label: <ThemeOptionLabel icon={option.icon} label={option.label} />,
-          }))}
-        />
-      </Box>
-      <Box hiddenFrom="lg">
-        <Menu position="bottom-end" withinPortal>
-          <Menu.Target>
-            <Tooltip label="Change color theme">
-              <ActionIcon variant="default" size="lg" aria-label="Change color theme">
-                <Palette size={18} />
-              </ActionIcon>
-            </Tooltip>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Label>Color theme</Menu.Label>
-            {options.map((option) => (
-              <Menu.Item
-                key={option.value}
-                leftSection={option.icon}
-                rightSection={preference === option.value ? <CheckIcon size={12} /> : null}
-                onClick={() => setPreference(option.value)}
-              >
-                {option.label}
-              </Menu.Item>
-            ))}
-          </Menu.Dropdown>
-        </Menu>
-      </Box>
-    </>
+    <Menu position="bottom-end" withinPortal>
+      <Menu.Target>
+        <Tooltip label={label}>
+          <ActionIcon variant="default" size="input-xs" aria-label={label}>
+            {current.icon}
+          </ActionIcon>
+        </Tooltip>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Color theme</Menu.Label>
+        {options.map((option) => (
+          <Menu.Item
+            key={option.value}
+            leftSection={option.icon}
+            rightSection={preference === option.value ? <CheckIcon size={12} /> : null}
+            onClick={() => setPreference(option.value)}
+          >
+            {option.label}
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }

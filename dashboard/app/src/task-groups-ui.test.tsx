@@ -24,6 +24,8 @@ const {
   TaskGroupsList,
   callbackFailureSummary,
   callbackPendingReason,
+  taskGroupCancelUnavailable,
+  taskGroupStateBadge,
   taskGroupProgressLabel,
   taskGroupProgressSections,
 } = await import("./pages/task-groups.js");
@@ -87,6 +89,7 @@ const navigation = {
   href: (path: string) => `/workhorse${path}`,
   followLink: () => undefined,
   taskPath: (taskId: string) => `/tasks?task=${taskId}`,
+  taskPagePath: (taskId: string) => `/task?id=${taskId}`,
 };
 
 function render(element: ReactNode): string {
@@ -109,6 +112,13 @@ describe("task group location", () => {
     expect(taskGroupsLocationHref(member)).toBe(`/groups?group=${groupId}&after=50`);
     expect(parseTaskGroupsLocation(`?group=${groupId}&after=50`)).toEqual(member);
     expect(taskGroupsLocationHref(defaultTaskGroupsLocation)).toBe("/groups");
+  });
+
+  it("shows 25 groups per page unless the address bar names another page size", () => {
+    expect(defaultTaskGroupsLocation.pageSize).toBe(25);
+    const larger = { ...defaultTaskGroupsLocation, pageSize: 50 as const };
+    expect(taskGroupsLocationHref(larger)).toBe("/groups?pageSize=50");
+    expect(parseTaskGroupsLocation("?pageSize=50")).toEqual(larger);
   });
 
   it("drops values that the procedures would refuse", () => {
@@ -151,11 +161,84 @@ describe("task group pages", () => {
         location: defaultTaskGroupsLocation,
         navigation,
         navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
       }),
     );
     expect(markup).toContain(`/workhorse/groups?group=${groupId}`);
     expect(markup).toContain("3 of 4 finished");
     expect(markup).toContain("1 pending");
+  });
+
+  it("puts a pager and a page size selector above the list", () => {
+    const markup = render(
+      createElement(TaskGroupsList, {
+        data: { state: "all", page: 1, pageSize: 25, hasMore: true, groups: [group()] },
+        location: defaultTaskGroupsLocation,
+        navigation,
+        navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
+      }),
+    );
+    expect(markup).toContain('aria-label="Task group pagination above table"');
+    expect(markup).toContain('aria-label="Task group pagination below table"');
+    expect(markup).toContain('aria-label="Task groups per page"');
+    expect(markup.indexOf("above table")).toBeLessThan(markup.indexOf("<table"));
+  });
+
+  it("shows the result of a finished group without a separate finished badge", () => {
+    const finished = group({
+      state: "finished",
+      result: "succeeded",
+      finishedAt: "2026-10-11T10:02:00.000Z",
+      counts: { total: 4, succeeded: 4, failed: 0, canceled: 0, pending: 0 },
+    });
+    const markup = render(
+      createElement(TaskGroupsList, {
+        data: { state: "all", page: 1, pageSize: 25, hasMore: false, groups: [finished] },
+        location: defaultTaskGroupsLocation,
+        navigation,
+        navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
+      }),
+    );
+    expect(markup).toMatch(/>succeeded<\/span>/);
+    expect(markup).not.toMatch(/>finished<\/span>/);
+  });
+
+  it("shows one badge for a canceled group instead of failed and canceled", () => {
+    const canceledAt = "2026-10-11T10:02:00.000Z";
+    expect(
+      taskGroupStateBadge(group({ state: "finished", result: "failed", canceledAt })).label,
+    ).toBe("canceled");
+    expect(taskGroupStateBadge(group({ state: "sealed", canceledAt })).label).toBe("canceling");
+    expect(taskGroupStateBadge(group({ state: "finished", result: "failed" })).label).toBe(
+      "failed",
+    );
+    expect(taskGroupStateBadge(group({ state: "open" })).label).toBe("open");
+  });
+
+  it("gives each group a row menu that offers the cancel only where it can succeed", () => {
+    const markup = render(
+      createElement(TaskGroupsList, {
+        data: { state: "all", page: 1, pageSize: 25, hasMore: false, groups: [group()] },
+        location: defaultTaskGroupsLocation,
+        navigation,
+        navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
+      }),
+    );
+    expect(markup).toContain(`aria-label="Actions for task group ${groupId}"`);
+    const finished = group({ state: "finished", result: "succeeded" });
+    expect(taskGroupCancelUnavailable(finished, true)).toBe("This group is finished.");
+    expect(taskGroupCancelUnavailable(group(), false)).toBe(
+      "This dashboard cannot cancel task groups.",
+    );
+    expect(taskGroupCancelUnavailable(group(), null)).toContain("Checking");
+    expect(taskGroupCancelUnavailable(group(), true)).toBeNull();
   });
 
   it("stops the pager at the last page the list reads", () => {
@@ -165,9 +248,11 @@ describe("task group pages", () => {
         location: { ...defaultTaskGroupsLocation, page: 100 },
         navigation,
         navigate: () => undefined,
+        auditActor: "operator",
+        reload: async () => undefined,
       }),
     );
-    expect(markup).toContain("Page 100, the last page the list reads.");
+    expect(markup).toContain("Page 100 is the last page the list reads.");
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>).)*Next page/s);
   });
 
@@ -225,7 +310,7 @@ describe("task group pages", () => {
         reload: async () => undefined,
       }),
     );
-    expect(markup).toContain(`/workhorse/tasks?task=${callbackId}`);
+    expect(markup).toContain(`/workhorse/task?id=${callbackId}`);
     expect(markup).toContain("Not enqueued, because a member task did not succeed");
     expect(markup).not.toContain("Cancel group");
   });
@@ -269,7 +354,7 @@ describe("task group pages", () => {
     // The page writes the stored message as escaped text.
     expect(markup).toContain("queue &quot;&lt;imports&gt;&quot; is in the fast tier");
     expect(markup).not.toContain("<imports>");
-    expect(markup).toContain(`/workhorse/tasks?task=${callbackId}`);
+    expect(markup).toContain(`/workhorse/task?id=${callbackId}`);
     // The result selects no onFailure callback, so it has no failure.
     expect(markup).toContain("Not enqueued, because every member task succeeded");
     expect(markup.match(/Not enqueued\. The enqueue failed/g)).toHaveLength(1);

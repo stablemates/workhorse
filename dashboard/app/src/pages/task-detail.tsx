@@ -3,7 +3,8 @@ import { TaskRowActions, TaskTags } from "../components/task-list.js";
 import { taskHref } from "../core.js";
 import { humanWaitQuickAction, type TaskActionTarget } from "../presentation.js";
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
-import { Badge, Box, Center, Code, Group, Loader, Paper, Stack, Text } from "@mantine/core";
+import { Anchor, Badge, Box, Center, Code, Group, Loader, Paper, Stack, Text } from "@mantine/core";
+import { OpenInNewWindowButton } from "../components/open-in-new-window.js";
 import { ResizableTaskDrawer } from "../components/resizable-task-drawer.js";
 import { StatusLabel } from "../status-badge.js";
 import { formatClock, formatDuration, formatExact, formatRelative } from "../preferences.js";
@@ -39,12 +40,32 @@ import {
   taskDrawerViewportProps,
 } from "../task-drawer.js";
 import { formatCount } from "../count-format.js";
-import { useLayoutEffect, useRef, type FocusEvent } from "react";
+import { useLayoutEffect, useRef, type FocusEvent, type MouseEvent } from "react";
+import type { TaskLocationState } from "../task-location.js";
 
 /** The task heading: it names the task and stays mounted while the task reloads. */
 const taskOverviewHeadingId = "task-overview-heading";
 
 type DashboardController = ReturnType<typeof useDashboardController>;
+
+/**
+ * What the task detail needs from the view that shows it.
+ *
+ * The task drawer and the task page show the same detail. They differ in how a linked task opens
+ * and in what a reload fetches.
+ */
+export interface TaskDetailHost {
+  /** Open another task, for example a dependency or a child task. */
+  openTask: (taskId: string) => void;
+  /** The href of a linked task. */
+  taskLinkHref: (taskId: string) => string;
+  runTaskNow: DashboardController["runTaskNow"];
+  /** Reload after an action changed the task. */
+  reload: () => Promise<void>;
+  navigate: (href: string) => void;
+  /** The task listing that a filter action changes. */
+  location: TaskLocationState;
+}
 
 interface TaskDetailDrawerProps {
   auditActor: string;
@@ -53,6 +74,8 @@ interface TaskDetailDrawerProps {
     closeOnEscape: boolean;
   };
   taskLinkHref: (taskId: string) => string;
+  /** The mounted href of the task page of one task, which opens in a new window. */
+  taskPageHref: (taskId: string) => string;
 }
 
 export function TaskDetailDrawer({
@@ -60,6 +83,7 @@ export function TaskDetailDrawer({
   controller,
   drawerProps,
   taskLinkHref,
+  taskPageHref,
 }: TaskDetailDrawerProps) {
   const {
     selectedTaskId,
@@ -70,6 +94,17 @@ export function TaskDetailDrawer({
     closeTaskDetail,
   } = controller;
   const body = taskDrawerBody({ selectedTaskId, selectedTask, taskDetailError });
+  const host: TaskDetailHost = {
+    openTask: inspectTask,
+    taskLinkHref,
+    runTaskNow: controller.runTaskNow,
+    reload: async () => {
+      await controller.loadPage();
+      await reloadSelectedTask();
+    },
+    navigate: controller.navigate,
+    location: controller.location,
+  };
   /** The last control in the detail that held focus, and the task it belongs to. */
   const focusedControl = useRef<{ taskId: string; element: Element } | null>(null);
   const trackFocus = (event: FocusEvent<HTMLElement>) => {
@@ -126,11 +161,10 @@ export function TaskDetailDrawer({
         <Box onFocusCapture={trackFocus}>
           <TaskDetailContent
             auditActor={auditActor}
-            controller={controller}
+            host={host}
             task={selectedTask}
-            taskLinkHref={taskLinkHref}
-            onOpenTask={inspectTask}
-            reload={reloadSelectedTask}
+            reloadTask={reloadSelectedTask}
+            taskPageHref={taskPageHref}
           />
         </Box>
       ) : body === "error" ? null : (
@@ -143,20 +177,24 @@ export function TaskDetailDrawer({
 }
 
 function TaskDetailContent({
-  controller,
+  host,
   auditActor,
   task,
-  taskLinkHref,
-  onOpenTask,
-  reload,
+  reloadTask,
+  taskPageHref,
+  headingComponent = "h3",
 }: {
   auditActor: string;
-  controller: DashboardController;
+  host: TaskDetailHost;
   task: DashboardTaskDetail;
-  taskLinkHref: (taskId: string) => string;
-  onOpenTask: DashboardController["inspectTask"];
-  reload: DashboardController["reloadSelectedTask"];
+  /** Reload only the task, for example after a signal. */
+  reloadTask: () => Promise<void>;
+  /** The href of the task page. With it, the detail offers to open the task in a new window. */
+  taskPageHref?: (taskId: string) => string;
+  /** The task page names the page with the task heading, so it uses `h1` there. */
+  headingComponent?: "h1" | "h3";
 }) {
+  const { taskLinkHref, openTask: onOpenTask } = host;
   return (
     <Stack gap="xl">
       {/* The overview answers "what task is this, and under which rules does it run?" as one
@@ -168,7 +206,7 @@ function TaskDetailContent({
             <Group gap="xs" wrap="nowrap" align="center">
               <Text
                 id={taskOverviewHeadingId}
-                component="h3"
+                component={headingComponent}
                 // Focus target when an action removes the control that held focus. It takes
                 // focus from a script only, so it does not join the tab order.
                 tabIndex={-1}
@@ -182,9 +220,15 @@ function TaskDetailContent({
               <TaskDetailActions
                 key={task.identity.id}
                 task={task}
-                controller={controller}
+                host={host}
                 auditActor={auditActor}
               />
+              {taskPageHref ? (
+                <OpenInNewWindowButton
+                  href={taskPageHref(task.identity.id)}
+                  label={`Open task ${task.identity.id} in a new window`}
+                />
+              ) : null}
             </Group>
             <Text c="dimmed" size="xs" title={formatExact(task.identity.createdAt)}>
               Queue {task.identity.queue} · created {formatRelative(task.identity.createdAt)}
@@ -233,7 +277,7 @@ function TaskDetailContent({
       </DrawerSection>
       <TaskOutcome task={task} />
       <TaskEnqueueSection task={task} />
-      <SignalTaskPanel task={task} auditActor={auditActor} reload={reload} />
+      <SignalTaskPanel task={task} auditActor={auditActor} reload={reloadTask} />
       <TaskProgress task={task} />
       <TaskCheckpoints task={task} />
       <DurableWaits task={task} />
@@ -291,11 +335,11 @@ function TaskDetailContent({
 
 function TaskDetailActions({
   task,
-  controller,
+  host,
   auditActor,
 }: {
   task: DashboardTaskDetail;
-  controller: DashboardController;
+  host: TaskDetailHost;
   auditActor: string;
 }) {
   const runtime = task.current.runtime;
@@ -321,17 +365,14 @@ function TaskDetailActions({
   };
   const actions = useTaskActions({
     canCompleteHumanWait: task.canCompleteHumanWait ?? false,
-    inspectTask: controller.inspectTask,
-    runTaskNow: controller.runTaskNow,
+    inspectTask: host.openTask,
+    runTaskNow: host.runTaskNow,
     auditActor,
-    reload: async () => {
-      await controller.loadPage();
-      await controller.reloadSelectedTask();
-    },
+    reload: host.reload,
     updateLocation: (updates) =>
-      controller.navigate(
+      host.navigate(
         taskHref({
-          ...controller.location,
+          ...host.location,
           ...updates,
           taskId: null,
           page: 1,
@@ -349,7 +390,7 @@ function TaskDetailActions({
           showOpenDetails={false}
           onAction={actions.runRowAction}
           capabilities={{
-            runNow: controller.runTaskNow !== null,
+            runNow: host.runTaskNow !== null,
             completeHumanWait: task.canCompleteHumanWait ?? false,
           }}
           pendingAction={
@@ -366,5 +407,43 @@ function TaskDetailActions({
         />
       </Group>
     </>
+  );
+}
+
+/**
+ * The task page: the task detail on its own page, outside the task drawer.
+ *
+ * It shows the same detail as the drawer, so a link can open one task in a new window and keep
+ * it open beside the dashboard.
+ */
+export function TaskDetailPage({
+  auditActor,
+  task,
+  host,
+  tasksHref,
+  followLink,
+}: {
+  auditActor: string;
+  task: DashboardTaskDetail;
+  host: TaskDetailHost;
+  /** The mounted href of the task listing. */
+  tasksHref: string;
+  followLink: (event: MouseEvent<HTMLElement>, path: string) => void;
+}) {
+  return (
+    <Stack gap="lg" className="task-drawer__content task-page">
+      <Anchor href={tasksHref} onClick={(event) => followLink(event, "/tasks")} size="sm">
+        ← All tasks
+      </Anchor>
+      <Paper withBorder p={{ base: "md", sm: "lg" }}>
+        <TaskDetailContent
+          auditActor={auditActor}
+          host={host}
+          task={task}
+          reloadTask={host.reload}
+          headingComponent="h1"
+        />
+      </Paper>
+    </Stack>
   );
 }

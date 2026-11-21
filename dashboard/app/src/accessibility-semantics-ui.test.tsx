@@ -291,7 +291,7 @@ describe("theme preference", () => {
     expect(readStoredThemePreference()).toBe("system");
   });
 
-  it("offers System next to Light and Dark, and selects it before a choice", async () => {
+  it("states System as the current theme before a choice", async () => {
     const setItem = vi.fn<(key: string, value: string) => void>();
     vi.stubGlobal("localStorage", { getItem: () => null, setItem });
     vi.stubGlobal("window", { matchMedia: () => media(true).query });
@@ -299,8 +299,7 @@ describe("theme preference", () => {
     const html = renderToStaticMarkup(
       createElement(WorkhorseThemeProvider, null, createElement(ThemeSchemeSwitch)),
     );
-    for (const label of ["Light", "Dark", "System"]) expect(html).toContain(`>${label}<`);
-    expect(html).toMatch(/value="system"[^>]*checked|checked[^>]*value="system"/);
+    expect(html).toContain('aria-label="Color theme: System"');
     expect(setItem).not.toHaveBeenCalled();
   });
 

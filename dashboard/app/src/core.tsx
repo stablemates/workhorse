@@ -12,6 +12,7 @@ import type {
   DashboardWorkersPage,
   DashboardSettingsPage,
   DashboardTaskGroupDetail,
+  DashboardTaskDetail,
   DashboardTaskGroupsPage,
 } from "@stablemates/workhorse-dashboard-server/wire";
 import { readStoredValue } from "./browser-storage.js";
@@ -162,6 +163,7 @@ export const activitySeriesColors = [
 ];
 export type PageRoute =
   | "/tasks"
+  | "/task"
   | "/events"
   | "/groups"
   | "/cron"
@@ -185,6 +187,7 @@ export type DurableDemoScenario =
   | "report-publication";
 export type PageData =
   | { route: "/tasks"; value: DashboardTasksPage | DashboardTasksCursorPage }
+  | { route: "/task"; value: DashboardTaskDetail }
   | { route: "/events"; value: DashboardEventsPage }
   | { route: "/groups"; value: TaskGroupsPageData }
   | { route: "/cron"; value: DashboardCronPage }
@@ -259,8 +262,29 @@ export function normalizeBasePath(basePath: string): string {
 export function mountedHref(basePath: string, href: string): string {
   return `${basePath}${href}` || "/";
 }
+const taskIdentity = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The route and query string of the task page of one task.
+ *
+ * The task is a query parameter, not a path segment, because the document loads its assets from
+ * paths relative to the route. A second path segment would move them.
+ */
+export function taskPageHref(taskId: string): string {
+  return `/task?${new URLSearchParams({ id: taskId }).toString()}`;
+}
+
+/** The task that the task page shows, or null when the location names no valid task. */
+export function parseTaskPageLocation(pathname: string, search: string): string | null {
+  if (pathname !== "/task") return null;
+  const id = new URLSearchParams(search).get("id")?.trim() ?? "";
+  return taskIdentity.test(id) ? id.toLowerCase() : null;
+}
+
 export function readLocation(basePath = ""): {
   route: PageRoute;
+  /** The task of the task page. It is null on every other route. */
+  taskPageId: string | null;
   events: EventsLocationState;
   groups: TaskGroupsLocationState;
 } & TaskLocationState {
@@ -270,20 +294,32 @@ export function readLocation(basePath = ""): {
       : window.location.pathname === basePath
         ? "/tasks"
         : window.location.pathname;
-  const route = pageRoutes.has(pathname as PageRoute) ? (pathname as PageRoute) : "/tasks";
+  const taskPageId = parseTaskPageLocation(pathname, window.location.search);
+  // The task page keeps its route with an id that is not valid, so the page can say so. A
+  // fallback to the task list would show the list under an address that names a task.
+  const route: PageRoute =
+    pathname === "/task"
+      ? "/task"
+      : pageRoutes.has(pathname as PageRoute)
+        ? (pathname as PageRoute)
+        : "/tasks";
   const storedPeriod = readStoredValue("workhorse-activity-period") as ActivityPeriod | null;
   const storedGroup = readStoredValue("workhorse-activity-group") as ActivityGroupBy | null;
   return {
     route,
+    taskPageId,
     events: parseEventsLocation(window.location.search),
     groups: parseTaskGroupsLocation(route === "/groups" ? window.location.search : ""),
-    ...parseTaskLocation(route === "/events" || route === "/groups" ? "" : window.location.search, {
-      period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
-      group:
-        storedGroup && activityGroupings.some(({ value }) => value === storedGroup)
-          ? storedGroup
-          : "task",
-    }),
+    ...parseTaskLocation(
+      route === "/events" || route === "/groups" || route === "/task" ? "" : window.location.search,
+      {
+        period: storedPeriod && activityPeriods.includes(storedPeriod) ? storedPeriod : "1h",
+        group:
+          storedGroup && activityGroupings.some(({ value }) => value === storedGroup)
+            ? storedGroup
+            : "task",
+      },
+    ),
   };
 }
 export function taskHref(state: TaskLocationState): string {

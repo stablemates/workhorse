@@ -1,5 +1,6 @@
 import type { DashboardTaskDetail } from "@stablemates/workhorse-dashboard-server/wire";
 import {
+  Anchor,
   ActionIcon,
   Badge,
   Box,
@@ -292,12 +293,22 @@ function shortTaskId(id: string): string {
   return id.slice(0, 8);
 }
 /** One task UUID shown shortened, recoverable on hover, and copyable in full. */
-export function TaskIdChip({ id }: { id: string }) {
+export function TaskIdChip({
+  id,
+  copyPosition = "end",
+}: {
+  id: string;
+  /** Where the copy control goes. A right-aligned value puts it first, so the id ends the row. */
+  copyPosition?: "start" | "end";
+}) {
+  const code = (
+    <Code fz="xs" title={id}>
+      {shortTaskId(id)}
+    </Code>
+  );
   return (
     <Group gap={4} wrap="nowrap" align="center">
-      <Code fz="xs" title={id}>
-        {shortTaskId(id)}
-      </Code>
+      {copyPosition === "end" ? code : null}
       <CopyButton value={id} timeout={2000}>
         {({ copied, copy }) => (
           <Tooltip label={copied ? "Copied" : "Copy task id"} withArrow>
@@ -313,6 +324,7 @@ export function TaskIdChip({ id }: { id: string }) {
           </Tooltip>
         )}
       </CopyButton>
+      {copyPosition === "start" ? code : null}
     </Group>
   );
 }
@@ -327,8 +339,7 @@ export function RelatedTaskLink({
   onOpenTask,
 }: { id: string } & LineageNavigationProps) {
   return (
-    <Text
-      component="a"
+    <Anchor
       href={taskLinkHref(id)}
       fz="xs"
       ff="monospace"
@@ -358,7 +369,7 @@ export function RelatedTaskLink({
       {/* The icon marks the identifier as a task link, not inert monospace text. */}
       <LinkSimple size={11} aria-hidden style={{ flexShrink: 0 }} />
       {shortTaskId(id)}
-    </Text>
+    </Anchor>
   );
 }
 export function RelatedTaskLinks({
