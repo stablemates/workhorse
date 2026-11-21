@@ -7,9 +7,9 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
-## Upgrade from 0.14.x to the next release
+## Upgrade from 0.14.x to 0.15.0
 
-The next release stops each cleanup pass from reading the whole key and dependency tables to delete
+0.15.0 stops each cleanup pass from reading the whole key and dependency tables to delete
 a few rows. The upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
 
 1. Run `workhorse schema migrate`. It applies migration 0106 and leaves the schema at version 105.
