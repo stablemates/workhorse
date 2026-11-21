@@ -109,12 +109,12 @@ describe("schema numbers in the documentation", () => {
     const file = "docs/compatibility.md";
     const heading = "## Packages and versioning";
     const where = `${file}, "${heading.slice(3)}"`;
-    // The sentence names every SDK without a TypeScript peer range, the JVM SDK too, and states the
-    // floor that each of them refuses to run below.
+    // The sentence names every SDK without a TypeScript peer range, the JVM and .NET SDKs too, and
+    // states the floor that each of them refuses to run below.
     const [protocol, schema] = stated(
       where,
       section(file, read(file), heading),
-      /the Ruby gem, and the JVM SDK declare no TypeScript peer\s+range\. SQL protocol (\d+) and schema\s+version (\d+) are their compatibility boundary instead\./,
+      /the Ruby gem, the JVM SDK, and the \.NET SDK declare no\s+TypeScript peer\s+range\. SQL protocol (\d+) and schema\s+version (\d+) are their compatibility boundary instead\./,
       "the compatibility boundary of the SDKs",
     );
     expect(protocol, `${where}: the boundary must be SQL protocol ${PROTOCOL_VERSION}`).toBe(
