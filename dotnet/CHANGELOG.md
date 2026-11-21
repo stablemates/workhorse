@@ -9,6 +9,16 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### Each task filter of the dashboard loads its own list
+
+The dashboard host forwards the new optional `taskFacets` input key `facet` (`queues`, `workers`,
+`taskTypes`, or `tags`) to `dashboard_task_facets_v1`, and the bundled dashboard reads one list for
+each filter menu. The worker list read each fast-tier row once for each worker, so the read bound
+of the host could end it, and no filter showed a value. It now reads each fast-tier row once,
+and the list keeps each worker that it gave before. Migration 0107 moves the schema to version 106, and the floor stays 99.
+
 ## 0.15.0 — 2026-11-21
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

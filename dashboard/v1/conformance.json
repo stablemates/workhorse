@@ -2078,6 +2078,95 @@
           }
         },
         {
+          "id": "task-facets-workers",
+          "procedure": "taskFacets",
+          "request": {
+            "json": {
+              "facet": "workers"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [],
+                "queues": [],
+                "workers": [
+                  "conformance-worker"
+                ],
+                "taskTypes": []
+              }
+            }
+          }
+        },
+        {
+          "id": "task-facets-tags",
+          "procedure": "taskFacets",
+          "request": {
+            "json": {
+              "facet": "tags"
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [
+                  "conformance"
+                ],
+                "queues": [],
+                "workers": [],
+                "taskTypes": []
+              }
+            }
+          }
+        },
+        {
+          "id": "task-facets-null",
+          "procedure": "taskFacets",
+          "request": {
+            "json": {
+              "facet": null
+            }
+          },
+          "expect": {
+            "status": 200,
+            "body": {
+              "json": {
+                "tags": [
+                  "conformance"
+                ],
+                "queues": [
+                  "conformance",
+                  "conformance-fast",
+                  "conformance-groups",
+                  "conformance-preserved",
+                  "conformance-purge",
+                  "conformance-redrive"
+                ],
+                "workers": [
+                  "conformance-worker"
+                ],
+                "taskTypes": [
+                  "conformance.cancel-target",
+                  "conformance.fail",
+                  "conformance.fast",
+                  "conformance.group-member",
+                  "conformance.human",
+                  "conformance.preserve",
+                  "conformance.purge",
+                  "conformance.ready",
+                  "conformance.redrive.batch",
+                  "conformance.redrive.one",
+                  "conformance.scheduled",
+                  "conformance.signal",
+                  "conformance.succeed"
+                ]
+              }
+            }
+          }
+        },
+        {
           "id": "activity",
           "procedure": "activity",
           "request": {

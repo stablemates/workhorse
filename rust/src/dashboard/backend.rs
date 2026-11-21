@@ -122,8 +122,12 @@ impl<E: Executor> Backend<E> {
             "meta" => Ok(json!({ "environment": self.environment })),
             "taskCounts" => self.json_query(sql::DASHBOARD_TASK_COUNTS_V1, None).await,
             "taskFacets" => {
-                let input = json!({ "configuredWorkers": self.configured_workers });
-                self.json_query(sql::DASHBOARD_TASK_FACETS_V1, Some(input)).await
+                let mut query = json!({ "configuredWorkers": self.configured_workers });
+                // A filter menu names its list, and the procedure then reads only that list.
+                if let Some(facet) = input.get("facet").and_then(Value::as_str) {
+                    query["facet"] = facet.into();
+                }
+                self.json_query(sql::DASHBOARD_TASK_FACETS_V1, Some(query)).await
             }
             "queues" => self.json_query(sql::DASHBOARD_QUEUES_V1, None).await,
             "tasks" => self.tasks(input).await,

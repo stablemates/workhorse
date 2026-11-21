@@ -84,8 +84,12 @@ module Stablemates
 
         def activity(input, _actor) = result(SqlCatalogue::DASHBOARD_ACTIVITY_V1, input)
 
-        def task_facets(_input, _actor)
-          result(SqlCatalogue::DASHBOARD_TASK_FACETS_V1, {"configuredWorkers" => @configured_workers})
+        def task_facets(input, _actor)
+          query = {"configuredWorkers" => @configured_workers}
+          # A filter menu names its list, and the procedure then reads only that list.
+          facet = input["facet"] if input.is_a?(Hash)
+          query["facet"] = facet if facet.is_a?(String)
+          result(SqlCatalogue::DASHBOARD_TASK_FACETS_V1, query)
         end
 
         def queues(_input, _actor) = result(SqlCatalogue::DASHBOARD_QUEUES_V1)

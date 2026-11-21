@@ -21,6 +21,7 @@ import {
   dashboardTaskEventTypes,
   dashboardRedriveBatchDefault,
   dashboardRedriveBatchMax,
+  dashboardTaskFacetNames,
   dashboardTaskFilters,
   dashboardTaskValueKinds,
   dashboardTaskPriorityMax,
@@ -182,6 +183,11 @@ const eventDetailInput = z.object({
   // that task and does not read each fast-tier row. A released page sends no task.
   taskId: z.uuid().nullable().default(null),
 });
+// A filter menu names its own list, and the call reads only that list. A released page sends no
+// input and gets all four lists.
+const taskFacetsInput = z
+  .object({ facet: z.enum(dashboardTaskFacetNames).nullable().default(null) })
+  .nullish();
 const taskFilter = z.enum(dashboardTaskFilters);
 const taskSort = z.enum(dashboardTaskSorts);
 const checkedDashboardTaskPriorityMax: typeof MAX_TASK_PRIORITY = dashboardTaskPriorityMax;
@@ -569,9 +575,11 @@ export const dashboardRouter = {
             Boolean(context.taskController?.completeHumanWait),
         ),
       ),
-    taskFacets: procedure.handler(({ context }) =>
-      readDashboardTaskFacets(context.database, context.configuredWorkers),
-    ),
+    taskFacets: procedure
+      .input(taskFacetsInput)
+      .handler(({ context, input }) =>
+        readDashboardTaskFacets(context.database, context.configuredWorkers, input?.facet ?? null),
+      ),
     activity: procedure
       .input(activityInput)
       .handler(({ context, input }) =>

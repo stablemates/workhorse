@@ -757,6 +757,13 @@ export const SCHEMA_MIGRATIONS: readonly SchemaMigrationStep[] = [
       "delete the expired keys and released edges of a cleanup pass by their row address",
     kind: "additive",
   },
+  {
+    fromVersion: 105,
+    toVersion: 106,
+    file: "0107-read-each-task-filter-on-its-own.sql",
+    description: "read each task filter on its own and read the workers of the fast tier once",
+    kind: "additive",
+  },
 ];
 
 /**

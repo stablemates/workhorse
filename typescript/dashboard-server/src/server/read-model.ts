@@ -19,6 +19,7 @@ import {
   DashboardSystemPage,
   DashboardSystemWindow,
   DashboardTaskCounts,
+  DashboardTaskFacetName,
   DashboardTaskFacets,
   DashboardTaskFilter,
   DashboardTaskSort,
@@ -260,11 +261,17 @@ async function projectTaskDurability<T extends { tasks: DashboardTasksPage["task
   };
 }
 
+/**
+ * Read the value lists of the task filters. With `facet`, the procedure reads only that list and
+ * returns an empty array for each other list. A schema before version 106 ignores `facet` and
+ * returns all four lists.
+ */
 export async function readDashboardTaskFacets(
   database: DashboardDatabase,
   configuredWorkers: readonly string[] = [],
+  facet: DashboardTaskFacetName | null = null,
 ): Promise<DashboardTaskFacets> {
-  const input = JSON.stringify({ configuredWorkers });
+  const input = JSON.stringify({ configuredWorkers, ...(facet === null ? {} : { facet }) });
   const rows = await database.execute<{ result: DashboardTaskFacets }>(sql`
     SELECT workhorse.dashboard_task_facets_v1(${input}::jsonb) AS result
   `);

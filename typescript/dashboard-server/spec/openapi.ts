@@ -94,7 +94,7 @@ export const procedureDocs: Record<ProcedureName, ProcedureDoc> = {
   taskFacets: {
     summary: "List the values the task filters offer",
     description:
-      "Returns the distinct queues, workers (including configured workers not yet seen), task types, and tags observed in retained tasks. Takes no input.",
+      "Returns the distinct queues, workers (including configured workers not yet seen), task types, and tags observed in retained tasks. The optional facet, one of queues, workers, taskTypes, or tags, reads only that list and returns an empty array for each other list. Without facet, all four lists are returned.",
   },
   activity: {
     summary: "Bucket task activity over a period",
@@ -647,11 +647,15 @@ export function composeDashboardOpenApi({
     }
     const fixture = successExchange(exchanges, name);
 
+    // An input that accepts null also accepts an envelope with no json, as each host does.
+    const inputAcceptsNull =
+      Array.isArray(contract.input?.anyOf) &&
+      (contract.input.anyOf as Json[]).some((branch) => branch.type === "null");
     const requestSchema: Json = contract.input
       ? {
           type: "object",
           properties: { json: rewriteSchema(contract.input, `${name}.input`) },
-          required: ["json"],
+          ...(inputAcceptsNull ? {} : { required: ["json"] }),
         }
       : {
           type: "object",
