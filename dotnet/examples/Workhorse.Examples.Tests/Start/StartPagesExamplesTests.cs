@@ -23,15 +23,25 @@ public sealed class StartPagesExamplesTests(ScratchDatabase scratch)
         Assert.Equal(CompatibilityCode.SchemaNotInstalled, error.Code);
     }
 
-    // The worker of the quickstart claims from `default`, so the test has its own database.
+    // The worker of the quickstart claims from `default`, so the test has its own database. The
+    // program reads its connection string from the environment, as the page tells the reader. No
+    // other test reads that variable, and .NET keeps the process environment in managed memory.
     [Fact(Timeout = 120_000)]
-    public async Task TheWorkerRunsTheWelcomeTask()
+    public async Task TheQuickstartProgramRunsTheWelcomeTask()
     {
         await using var database = await ExampleDatabase.CreateIsolatedAsync(scratch);
         var connectionString = await StartDatabase.ConnectionStringAsync(scratch, database);
-        var task = await QuickstartExamples.RunTaskAsync(connectionString).WaitAsync(TestContext.Current.CancellationToken);
-        Assert.NotNull(task);
-        Assert.Equal("email.welcome", task.Type);
+        Environment.SetEnvironmentVariable("ConnectionStrings__Workhorse", connectionString);
+        try
+        {
+            await Quickstart.Program.Main().WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ConnectionStrings__Workhorse", null);
+        }
+
+        var task = await database.TaskAsync("email.welcome", "to", "ada@example.com");
         Assert.Equal(TaskState.Succeeded, task.State);
         Assert.Equal("ada@example.com", task.Result!.Value.GetProperty("deliveredTo").GetString());
     }

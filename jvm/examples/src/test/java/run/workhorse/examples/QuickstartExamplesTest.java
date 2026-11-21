@@ -2,6 +2,7 @@ package run.workhorse.examples;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -16,16 +17,19 @@ import run.workhorse.testing.ScratchDatabase;
 
 /**
  * Runs the Java snippets of the site quickstart. Each test has its own database, because the worker
- * of the first snippet stops at a task that it has no handler for.
+ * of the step 3 program claims every task of the queue {@code default}.
  */
 @ExtendWith(ScratchDatabase.class)
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class QuickstartExamplesTest {
   @Test
-  void theWorkerRunsTheWelcomeTask() throws Exception {
+  void theProgramRunsTheWelcomeTask() throws Exception {
     try (IsolatedExampleDatabase database = IsolatedExampleDatabase.create("quickstart_java_run")) {
-      TaskDetail task = QuickstartExamples.runTask(database.jdbcUrl());
-      assertEquals("email.welcome", task.type());
+      String output = ExampleProgram.run(Quickstart.class.getName(), database.jdbcUrl());
+      assertEquals("SUCCEEDED {deliveredTo=ada@example.com}\n", output);
+      List<UUID> tasks = database.tasks("email.welcome", "to", "ada@example.com");
+      assertEquals(1, tasks.size());
+      TaskDetail task = database.detail(tasks.get(0));
       assertEquals(TaskState.SUCCEEDED, task.state());
       assertEquals(Map.of("deliveredTo", "ada@example.com"), task.result());
     }
