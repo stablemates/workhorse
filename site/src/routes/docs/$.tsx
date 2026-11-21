@@ -10,6 +10,7 @@ interface PageRecord {
   readonly path: string;
   readonly title: string;
   readonly description: string;
+  readonly searchTitle?: string;
 }
 
 const pages = docsIndex.pages as Record<string, PageRecord>;

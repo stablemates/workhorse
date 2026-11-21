@@ -4,6 +4,14 @@ interface PageMetadata {
   readonly url: string;
   readonly title: string;
   readonly description: string;
+  /**
+   * The whole `<title>` and Open Graph title, phrased as the search a reader
+   * types, when the page's own title names only the subject. "Kysely" is the
+   * right heading on the Kysely page and the wrong title in a result list,
+   * where it competes for readers who want Kysely itself. The heading and the
+   * JSON-LD headline keep `title`.
+   */
+  readonly searchTitle?: string;
 }
 
 interface ArticleOptions {
@@ -21,7 +29,7 @@ interface ArticleOptions {
  */
 function articleHead(page: PageMetadata, options: ArticleOptions) {
   const canonical = `${siteConfig.url}${page.url}`;
-  const title = `${page.title} — ${siteConfig.name}`;
+  const title = page.searchTitle ?? `${page.title} — ${siteConfig.name}`;
   const published = options.published ? `${options.published}T00:00:00Z` : undefined;
 
   return {
@@ -30,7 +38,7 @@ function articleHead(page: PageMetadata, options: ArticleOptions) {
       { name: "description", content: page.description },
       { property: "og:type", content: "article" },
       { property: "og:url", content: canonical },
-      { property: "og:title", content: page.title },
+      { property: "og:title", content: page.searchTitle ?? page.title },
       { property: "og:description", content: page.description },
       ...(published ? [{ property: "article:published_time", content: published }] : []),
       { name: "twitter:title", content: title },
