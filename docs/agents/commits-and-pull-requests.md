@@ -37,7 +37,7 @@ description instead.
 ## Write commit messages and pull request descriptions as documentation
 
 Commit messages and pull request descriptions follow
-[Simplified Technical English](simplified-technical-english.md). They use the terms `CONTEXT.md`
+[Simplified Technical English](simplified-technical-english.md). They use the terms `GLOSSARY.md`
 defines and follow
 [Keep benchmark comparisons private](demo-deployment-and-benchmarks.md#keep-benchmark-comparisons-private).
 

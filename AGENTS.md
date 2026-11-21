@@ -1,6 +1,6 @@
 # Working in this repository
 
-Instructions for coding agents and contributors. If the work changes domain behavior, read `CONTEXT.md`
+Instructions for coding agents and contributors. If the work changes domain behavior, read `GLOSSARY.md`
 and the relevant decision records. Finish only after every acceptance item is verified and the
 relevant repository checks pass. For historical issue references, read
 [tracker history](docs/tracker-history.md).
@@ -18,7 +18,7 @@ relevant repository checks pass. For historical issue references, read
 - `pnpm test` does not build the dashboard browser bundle or the TypeScript declarations. Run `pnpm build:runtime` or `pnpm build` first.
 - Before you push, run the whole `pnpm lint`.
 - An agent commit ends with one `Co-Authored-By:` trailer for each model that produced the change, with the exact model ID. An agent pull request has one commit.
-- Write all text in Simplified Technical English, and use the terms in `CONTEXT.md`.
+- Write all text in Simplified Technical English, and use the terms in `GLOSSARY.md`.
 
 ## Read before the task
 

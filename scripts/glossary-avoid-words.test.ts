@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { repositoryRoot } from "./packages.js";
 
-// `CONTEXT.md` is the project vocabulary. Each glossary term may list words to avoid, such as
+// `GLOSSARY.md` is the project vocabulary. Each glossary term may list words to avoid, such as
 // "job" for a task or "mode" for a tier. This check flags those words in the Markdown under
 // `docs/`, so a page cannot drift back to a retired term.
 //
@@ -217,7 +217,7 @@ function invalidEntries(allowlist: Allowlist, terms: readonly Term[]): string[] 
   for (const entry of allowlist.contexts) {
     const name = `context "${entry.context}" for "${entry.word}" in ${entry.files}`;
     if (!avoided.has(entry.word.toLowerCase())) {
-      problems.push(`${name} names a word no CONTEXT.md term avoids`);
+      problems.push(`${name} names a word no GLOSSARY.md term avoids`);
     }
     if (entry.reason.trim() === "") problems.push(`${name} gives no reason`);
     if (!entry.files.startsWith("docs/")) problems.push(`${name} matches files outside docs/`);
@@ -260,7 +260,7 @@ function glossaryFindings(
       else {
         findings.push(
           `${occurrence.file}:${occurrence.line} uses "${occurrence.word}"; ` +
-            `CONTEXT.md avoids it for ${occurrence.terms.map((term) => `**${term}**`).join(" and ")}`,
+            `GLOSSARY.md avoids it for ${occurrence.terms.map((term) => `**${term}**`).join(" and ")}`,
         );
       }
     }
@@ -317,11 +317,11 @@ describe("glossary avoid words", () => {
       "| ---- | ---------- |",
     ].join("\n");
     expect(glossaryFindings(["docs/a.md"], () => page, glossary, allow([]))).toEqual([
-      'docs/a.md:1 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:3 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:3 uses "work item"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:9 uses "Mode"; CONTEXT.md avoids it for **Tier**',
-      'docs/a.md:9 uses "activity"; CONTEXT.md avoids it for **Tier**',
+      'docs/a.md:1 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:3 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:3 uses "work item"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:9 uses "Mode"; GLOSSARY.md avoids it for **Tier**',
+      'docs/a.md:9 uses "activity"; GLOSSARY.md avoids it for **Tier**',
     ]);
   });
 
@@ -333,9 +333,9 @@ describe("glossary avoid words", () => {
       { word: "mode", files: "docs/*.md", context: "transaction mode", reason: "pool mode" },
     ];
     expect(glossaryFindings(["docs/a.md"], () => page, glossary, allow(contexts))).toEqual([
-      'docs/a.md:2 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:4 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:4 uses "Mode"; CONTEXT.md avoids it for **Tier**',
+      'docs/a.md:2 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:4 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:4 uses "Mode"; GLOSSARY.md avoids it for **Tier**',
     ]);
   });
 
@@ -349,9 +349,9 @@ describe("glossary avoid words", () => {
       { word: "job", files: "docs/*.md", context: "Active Job[\\s\\S]*job", reason: "too long" },
     ];
     expect(glossaryFindings(["docs/a.md"], () => page, glossary, allow(contexts))).toEqual([
-      'docs/a.md:1 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:1 uses "Job"; CONTEXT.md avoids it for **Task**',
-      'docs/a.md:3 uses "Job"; CONTEXT.md avoids it for **Task**',
+      'docs/a.md:1 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:1 uses "Job"; GLOSSARY.md avoids it for **Task**',
+      'docs/a.md:3 uses "Job"; GLOSSARY.md avoids it for **Task**',
       'stale context "Active Job[\\s\\S]*job" for "job" in docs/*.md',
     ]);
   });
@@ -360,7 +360,7 @@ describe("glossary avoid words", () => {
     const contexts = [{ word: "mode", files: "docs/b.md", context: "Active Job", reason: "x" }];
     expect(glossaryFindings(["docs/a.md"], () => "Active Job.", glossary, allow(contexts))).toEqual(
       [
-        'docs/a.md:1 uses "Job"; CONTEXT.md avoids it for **Task**',
+        'docs/a.md:1 uses "Job"; GLOSSARY.md avoids it for **Task**',
         'stale context "Active Job" for "mode" in docs/b.md',
       ],
     );
@@ -378,7 +378,7 @@ describe("glossary avoid words", () => {
       ),
     ).toEqual([
       'context "\\w*jobs?" for "job" in docs/*.md matches the bare word, so it cannot tell a sense apart',
-      'context "a task" for "task" in docs/*.md names a word no CONTEXT.md term avoids',
+      'context "a task" for "task" in docs/*.md names a word no GLOSSARY.md term avoids',
       'context "a task" for "task" in docs/*.md gives no reason',
       'context "pool mode" for "mode" in site/*.md matches files outside docs/',
     ]);
@@ -399,7 +399,7 @@ describe("glossary avoid words", () => {
       ),
     ).toEqual([
       "historical path docs/guides/** is not one of docs/decisions/**, docs/benchmarks/**",
-      'docs/guides/a.md:1 uses "Job"; CONTEXT.md avoids it for **Task**',
+      'docs/guides/a.md:1 uses "Job"; GLOSSARY.md avoids it for **Task**',
       "stale historical path docs/benchmarks/**",
     ]);
   });
@@ -415,7 +415,7 @@ describe("glossary avoid words", () => {
       readRepositoryFile("scripts/glossary-allowlist.json"),
     ) as Allowlist;
     expect(
-      glossaryFindings(files, readRepositoryFile, readRepositoryFile("CONTEXT.md"), allowlist),
+      glossaryFindings(files, readRepositoryFile, readRepositoryFile("GLOSSARY.md"), allowlist),
     ).toEqual([]);
   });
 });
