@@ -5,7 +5,10 @@ import {
 } from "@stablemates/workhorse-dashboard-server/wire";
 import type { DashboardTaskGroupStateFilter } from "@stablemates/workhorse-dashboard-server/wire";
 
-type TaskGroupPageSize = (typeof dashboardTaskGroupPageSizes)[number];
+export type TaskGroupPageSize = (typeof dashboardTaskGroupPageSizes)[number];
+
+/** The page size of the group list and the member list when the address bar names none. */
+const defaultTaskGroupPageSize: TaskGroupPageSize = 25;
 
 /**
  * What the task groups page shows, as the address bar states it.
@@ -26,7 +29,7 @@ export interface TaskGroupsLocationState {
 export const defaultTaskGroupsLocation: TaskGroupsLocationState = {
   state: "all",
   page: 1,
-  pageSize: 50,
+  pageSize: defaultTaskGroupPageSize,
   groupId: null,
   after: null,
 };
@@ -50,7 +53,8 @@ export function parseTaskGroupsLocation(search: string | URLSearchParams): TaskG
   return {
     state: dashboardTaskGroupStateFilters.find((value) => value === state) ?? "all",
     page: boundedInteger(parameters.get("page"), 1, dashboardPageMax) ?? 1,
-    pageSize: dashboardTaskGroupPageSizes.find((value) => value === pageSize) ?? 50,
+    pageSize:
+      dashboardTaskGroupPageSizes.find((value) => value === pageSize) ?? defaultTaskGroupPageSize,
     groupId: groupIdentity.test(groupId) ? groupId.toLowerCase() : null,
     after: boundedInteger(parameters.get("after"), 1, maxMemberPosition),
   };
@@ -66,7 +70,8 @@ export function taskGroupsLocationHref(state: TaskGroupsLocationState): string {
     if (state.state !== "all") parameters.set("state", state.state);
     if (state.page !== 1) parameters.set("page", String(state.page));
   }
-  if (state.pageSize !== 50) parameters.set("pageSize", String(state.pageSize));
+  if (state.pageSize !== defaultTaskGroupPageSize)
+    parameters.set("pageSize", String(state.pageSize));
   const query = parameters.toString();
   return query ? `/groups?${query}` : "/groups";
 }

@@ -73,6 +73,7 @@ import {
   systemWindowStorageKey,
   systemWindows,
   taskHref,
+  taskPageHref,
   useDashboardClient,
 } from "../core.js";
 import {
@@ -116,6 +117,9 @@ const WorkersPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("../pages/settings/index.js").then((module) => ({ default: module.SettingsPage })),
 );
+const TaskDetailPage = lazy(() =>
+  import("../pages/task-detail.js").then((module) => ({ default: module.TaskDetailPage })),
+);
 
 /** What a load that decided to write nothing hands back. */
 const applyNothing = () => undefined;
@@ -128,6 +132,7 @@ export function readStoredRefreshInterval(): DashboardRefreshIntervalValue {
     : defaultDashboardRefreshInterval;
 }
 export function routeTitle(route: PageRoute): string {
+  if (route === "/task") return "task";
   if (route === "/events") return "events";
   if (route === "/groups") return "task groups";
   if (route === "/cron") return "schedules";
@@ -139,6 +144,7 @@ export function routeTitle(route: PageRoute): string {
 }
 /** The page name, as the navigation shows it. */
 export function routeHeading(route: PageRoute): string {
+  if (route === "/task") return "Task details";
   if (route === "/events") return "Events";
   if (route === "/groups") return "Task groups";
   if (route === "/cron") return "Schedules";
@@ -380,6 +386,8 @@ export function useDashboardController(
   const groupsKey = taskGroupsListingKey(location.groups);
   const groupsRef = useRef(location.groups);
   groupsRef.current = location.groups;
+  // The task page loads the task that its path names.
+  const { taskPageId } = location;
 
   /**
    * Fetch one page and hand back what applying its answer would do.
@@ -391,7 +399,14 @@ export function useDashboardController(
   const preparePageLoad = useCallback(
     async ({ background = false }: { background?: boolean } = {}): Promise<() => void> => {
       if (shouldDiscardBackgroundRefresh(background)) return applyNothing;
-      const key = JSON.stringify([route, listingKey, systemWindow, eventsKey, groupsKey]);
+      const key = JSON.stringify([
+        route,
+        listingKey,
+        systemWindow,
+        eventsKey,
+        groupsKey,
+        taskPageId,
+      ]);
       if (background && refreshRequests.has(key)) return applyNothing;
       const activeRequest = ++requestId.current;
       // The answer is judged against the listing that asked for it. While a pager click is in
@@ -481,6 +496,13 @@ export function useDashboardController(
                         }),
                       },
               };
+            } else if (route === "/task") {
+              if (taskPageId === null) {
+                throw new Error(
+                  "This address names no valid task id. A task page address has the form /task?id=<task id>.",
+                );
+              }
+              pageData = { route: "/task", value: await client.taskDetail({ id: taskPageId }) };
             } else if (route === "/cron") {
               pageData = { route: "/cron", value: await client.cron() };
             } else if (route === "/queues") {
@@ -552,6 +574,7 @@ export function useDashboardController(
       systemWindow,
       eventsKey,
       groupsKey,
+      taskPageId,
       replace,
       shouldDiscardBackgroundRefresh,
       refreshRequests,
@@ -934,8 +957,9 @@ export function useDashboardController(
         });
         // A keyed kind may replay to a task that predates this click, so the answer names what
         // happened and offers the task it resolved to rather than only refreshing the listing.
+        // The listing stays where the operator is. The notification offers the new task, so a
+        // filter or a later page that leaves it out does not hide it.
         notifyEnqueueTest(enqueued, { openTask: inspectTask });
-        if (location.filter !== "all" || location.page !== 1) navigate("/tasks");
         await loadPage();
       } catch (cause) {
         notifyFailure("Demo task not enqueued", cause, "Workhorse could not enqueue the demo task");
@@ -943,16 +967,7 @@ export function useDashboardController(
         runningDemoTask.stop();
       }
     },
-    [
-      auditActor,
-      demoTools,
-      inspectTask,
-      loadPage,
-      location.filter,
-      location.page,
-      navigate,
-      runningDemoTask,
-    ],
+    [auditActor, demoTools, inspectTask, loadPage, runningDemoTask],
   );
   const inspectEvent = useCallback(
     (event: DashboardEventRow) => {
@@ -1174,10 +1189,36 @@ export function useDashboardController(
           href: (path) => mountedHref(basePath, path),
           followLink: handleLink,
           taskPath: (taskId) => taskLocationHref({ ...parseTaskLocation(""), taskId }),
+          taskPagePath: taskPageHref,
         }}
         navigate={navigate}
         auditActor={auditActor}
         reload={loadPage}
+      />
+    );
+  } else if (loadState.data?.route === "/task" && loadState.data.value.identity.id !== taskPageId) {
+    // A link from one task page to another keeps the route, so the old task would stay on screen
+    // under the new address until the new task arrives.
+    content = (
+      <Center mih="60vh">
+        <Loader size="sm" />
+      </Center>
+    );
+  } else if (loadState.data?.route === "/task") {
+    content = (
+      <TaskDetailPage
+        auditActor={auditActor}
+        task={loadState.data.value}
+        tasksHref={mountedHref(basePath, "/tasks")}
+        followLink={handleLink}
+        host={{
+          openTask: (id) => navigate(taskPageHref(id)),
+          taskLinkHref: (id) => mountedHref(basePath, taskPageHref(id)),
+          runTaskNow,
+          reload: loadPage,
+          navigate,
+          location,
+        }}
       />
     );
   } else if (loadState.data?.route === "/cron") {

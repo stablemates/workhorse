@@ -69,6 +69,7 @@ import {
   mountedHref,
   taskFilters,
   taskHref,
+  taskPageHref,
 } from "../core.js";
 import { EventDetails } from "../components/event-details.js";
 import { formatCount } from "../count-format.js";
@@ -328,6 +329,10 @@ export function DashboardContent({
   const lineageTaskHref = useCallback(
     (id: string) => mountedHref(basePath, taskHref({ ...location, taskId: id })),
     [basePath, location],
+  );
+  const standaloneTaskHref = useCallback(
+    (id: string) => mountedHref(basePath, taskPageHref(id)),
+    [basePath],
   );
 
   return (
@@ -694,6 +699,7 @@ export function DashboardContent({
             controller={controller}
             drawerProps={taskDetailDrawerProps}
             taskLinkHref={lineageTaskHref}
+            taskPageHref={standaloneTaskHref}
           />
         </Suspense>
       ) : null}
@@ -712,7 +718,7 @@ export function DashboardContent({
             {eventDetailError}
           </Text>
         ) : selectedEvent ? (
-          <EventDetails event={selectedEvent} taskLinkHref={lineageTaskHref} />
+          <EventDetails event={selectedEvent} taskLinkHref={standaloneTaskHref} />
         ) : (
           <Center mih={200}>
             <Loader size="sm" />

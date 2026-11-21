@@ -78,8 +78,9 @@ body {
   width: 158px;
 }
 
-.theme-switch {
-  border: 1px solid var(--mantine-color-default-border);
+/* The task page shows the task detail at a width that keeps the label column readable. */
+.task-page {
+  max-width: 960px;
 }
 
 .dashboard-refresh-control {
@@ -500,9 +501,23 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
     margin-left: auto;
   }
 
-  .dashboard-header__workspace {
+  /* A full-width break, so the controls always start the second row, also when they would fit. */
+  .dashboard-header::after {
+    content: "";
     order: 2;
-    width: calc(100% - 11.5rem);
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  /*
+   * The switcher grows to its own width and shrinks first when the row has no room. It starts from
+   * zero, because a row wraps by the start widths of its items, so it shares the row with the
+   * refresh control instead of moving that control to a third row.
+   */
+  .dashboard-header__workspace {
+    order: 3;
+    flex: 1 1 0;
+    max-width: 15rem;
     min-width: 0;
   }
 
@@ -511,13 +526,13 @@ html[data-mantine-color-scheme="dark"] .workhorse-brand__wordmark {
   }
 
   .dashboard-refresh-control {
-    order: 3;
+    order: 4;
     margin-left: auto;
   }
 
   /* The pinned-listing notice rides the same row as the control it explains, after it. */
   .dashboard-header__pinned {
-    order: 3;
+    order: 4;
   }
 }
 
