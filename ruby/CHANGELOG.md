@@ -3,7 +3,21 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
-## Unreleased
+## 0.15.0 — 2026-11-21
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema, then roll out the new processes.** Run `workhorse schema migrate`. Migration
+0106 moves the schema from version 104 to version **105**. It replaces two function bodies and changes
+no stored rows. The SDK compatibility floor stays at **99**, so a 0.14 process keeps working on
+version 105, and the upgrade is a rolling deployment.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-014x-to-0150) give each step.
 
 ### Cleanup no longer reads the whole key and dependency tables
 

@@ -97,6 +97,7 @@
   "sql/migrations/0103-take-enqueue-locks-in-key-tier-row-order.sql": "a5b69619f3c0a0bd01de304d4751cd8918c06ae7f224447c1f6a212ade2ac798",
   "sql/migrations/0104-keep-each-hold-end-and-start-health-walks-after-held-rows.sql": "1d0cc06c68f3c1f306ea65b3a4a0304055f9d30d36e3b8dc1262d47370425ab9",
   "sql/migrations/0105-seek-the-task-of-an-event-detail-record.sql": "34f5892ff6a6f6b840bc8519cb56c90dd9a9eb22eea7178be758659e76427e07",
+  "sql/migrations/0106-delete-pruned-keys-and-edges-by-row-address.sql": "721b96f13b79375fe697295899a296fe04a4c6c5efd002b461b1ee2d6871ba0c",
   "sql/releases/0006.sql": "5f96a8e70b44c13dc74e8716c849da2bad4cea03510ebfb18181deaf7d6db91b",
   "sql/releases/0009.sql": "41de08c9a7126d243da21f93d2ad844098c515b643f809cf45f7a54099e4e5e4",
   "sql/releases/0023.sql": "338125155cba473f7bbc7638926fb93dfd53467e684a6495a7b0c6ef702ab229",
@@ -109,5 +110,6 @@
   "sql/releases/0086.sql": "c2781c4e89f3fd313c9f8ece6bc12e1261558dea92dcc94905b2bd0c3fcfda47",
   "sql/releases/0089.sql": "2b8e9ca33d75f0c8a97256093fd0b466ac3ff05d6df22e3aec6c78f814366985",
   "sql/releases/0091.sql": "ff8334a13039973397490066f269729b82b4cd2bdca53b8150217dab4d6151ec",
-  "sql/releases/0104.sql": "aea2913736dd0982e1e412f2777da5c86091e564925bb1c95307d98eb9f5369a"
+  "sql/releases/0104.sql": "aea2913736dd0982e1e412f2777da5c86091e564925bb1c95307d98eb9f5369a",
+  "sql/releases/0105.sql": "d9eae06c220fb9fa025474d4ee1d7aa144c154b84bf56223bb04f7d65ebf8c68"
 }
