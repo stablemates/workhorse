@@ -443,8 +443,8 @@ rest are optional TypeScript packages.
 
 The ten TypeScript packages are versioned in lockstep and released from a single `vX.Y.Z` tag. An
 optional TypeScript package always declares the core version it was released with as a peer range.
-The Python package, the Go module, the Rust crate, the Ruby gem, and the JVM SDK declare no TypeScript peer
-range. SQL protocol 5 and schema version 99 are their compatibility boundary instead. Their version numbers
+The Python package, the Go module, the Rust crate, the Ruby gem, the JVM SDK, and the .NET SDK declare no
+TypeScript peer range. SQL protocol 5 and schema version 99 are their compatibility boundary instead. Their version numbers
 still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
@@ -458,7 +458,7 @@ remove, retype, or reinterpret a shipped view, so a core release remains compati
 dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
 from the minor line to the major line; see [Retention and removal](versioning.md#retention-and-removal).
 
-The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, or JVM
+The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, JVM, or .NET
 host supplies its own published version when it renders the application. Thus the dashboard reports
 the package that serves it. A version-only release does not change the bundle.
 
@@ -551,7 +551,7 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   the payload.
 - **The dashboard wire contract is versioned separately.** `dashboard/v1` pins the oRPC envelopes,
   HTML placeholders, request order, and procedure schemas. The TypeScript, Python, Go, Rust, Ruby,
-  and JVM backends use them. An application should embed a shipped backend. It should not call
+  JVM, and .NET backends use them. An application should embed a shipped backend. It should not call
   those procedures as a public operator API.
 
 <picture>
@@ -561,7 +561,7 @@ The durable protocol is the PostgreSQL schema, not the TypeScript API. Its guara
   <img src="../site/public/diagrams/schema-compatibility-light.png" width="960" alt="schemaCompatibilityRefusal tests in this order; the first failed test decides">
 </picture>
 
-The TypeScript, Python, Go, Rust, Ruby, and JVM clients and workers implement this protocol. Python
+The TypeScript, Python, Go, Rust, Ruby, JVM, and .NET clients and workers implement this protocol. Python
 runs the same canonical SQL fixtures and request mapping through Psycopg, plus transaction
 integration through Psycopg async and asyncpg. Its synchronous and asynchronous workers share one
 lifecycle core; the asynchronous surface uses native Psycopg or asyncpg query and notification

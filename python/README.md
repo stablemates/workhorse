@@ -25,6 +25,13 @@ An AI agent should read [the Workhorse documentation index](https://workhorse.ru
 pip install stablemates-workhorse
 ```
 
+The package brings Psycopg, which loads libpq from the host. Some hosts have no libpq, for example a
+slim container image. On such a host, also install the binary Psycopg package, which includes libpq:
+
+```bash
+pip install stablemates-workhorse "psycopg[binary]"
+```
+
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash

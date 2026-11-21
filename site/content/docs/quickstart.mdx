@@ -29,6 +29,14 @@ Install the package for the language of your application.
     pip install stablemates-workhorse
     ```
 
+    The package brings Psycopg, which loads libpq from the host. Some hosts have no libpq, for
+    example a slim container image. On such a host, also install the binary Psycopg package, which
+    includes libpq:
+
+    ```bash
+    pip install stablemates-workhorse "psycopg[binary]"
+    ```
+
     Your application never installs the schema. A deployment step installs it once, and that step
     runs on Node.js.
 

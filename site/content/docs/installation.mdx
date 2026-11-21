@@ -35,7 +35,8 @@ installation.
 ## Add the package
 
 Each SDK is a package for the language of your application. Install the SDK. Each package includes
-its default PostgreSQL driver.
+its default PostgreSQL driver. The Python driver also needs libpq, the PostgreSQL client library. The
+Python tab tells you what to install when the host has no libpq.
 
 <Tabs items={["TypeScript", "Python", "Go", "Rust", "Ruby", "Java", "Kotlin", "C#"]}>
   <Tab value="TypeScript">
@@ -49,6 +50,14 @@ its default PostgreSQL driver.
 
     ```bash
     pip install stablemates-workhorse
+    ```
+
+    The package brings Psycopg, which loads libpq from the host. Some hosts have no libpq, for
+    example a slim container image. On such a host, also install the binary Psycopg package, which
+    includes libpq:
+
+    ```bash
+    pip install stablemates-workhorse "psycopg[binary]"
     ```
 
     If your application uses asyncpg and not Psycopg, use the `asyncpg` extra.

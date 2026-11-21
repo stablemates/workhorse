@@ -53,11 +53,12 @@ passes. Thus, you can plan an upgrade before a release removes the version.
 
 CI runs the tests at two levels:
 
-- Pull requests and pushes run each language suite one time, for fast feedback. Node.js, Python,
-  and Ruby use their newest version. Go uses its minimum, and Rust uses its pinned version. All of
-  them use the newest PostgreSQL.
-- The weekly run tests each Node.js, Python, and Ruby version with each PostgreSQL version. It runs
-  Go and Rust with each PostgreSQL version.
+- Pull requests and pushes run each language suite for fast feedback. Node.js, Python, and Ruby
+  use their newest version. Go uses its minimum, and Rust uses its pinned version. The JVM suite
+  runs on the Java minimum and on the newest tested Java release. The .NET suite runs on each tested
+  .NET release. All of them use the newest PostgreSQL.
+- The weekly run tests each Node.js, Python, Ruby, Java, and .NET version with each PostgreSQL
+  version. It runs Go and Rust with each PostgreSQL version.
 
 A regression on a supported version blocks the release.
 
@@ -90,8 +91,8 @@ because a release cannot know a version that did not exist when it was published
 ## Plan for a minimum that rises
 
 A minimum is the oldest supported version of a runtime. Workhorse raises a minimum only in a minor
-release. It does so only after the version reaches its end of life at its upstream project. The
-Node.js, Python, Go, Ruby, Rails, and PostgreSQL projects decide this date, not Workhorse. If a
+release. It does so only after the version reaches its end of life at its upstream project. That
+project decides this date, not Workhorse. If a
 version is still supported upstream, it stays in the table, also if its removal makes the matrix
 shorter.
 
@@ -102,7 +103,7 @@ PostgreSQL major upgrade is a database migration that you must plan, not a packa
 A release that you already installed does not change. It continues to run with the database that
 you built it for. A runtime that Workhorse no longer supports gets no future releases.
 
-The dependency ranges of `pg`, Psycopg, asyncpg, and pgx follow the same rule. Each change is a
+The dependency ranges of `pg`, Psycopg, asyncpg, pgx, PgJDBC, and Npgsql follow the same rule. Each change is a
 minor release. A change can widen a range for a new upstream major, or narrow it to remove a retired
 one.
 
@@ -125,9 +126,9 @@ commands are in that package:
 - `workhorse schema contract`
 - `workhorse schema status`
 
-A Python, Go, Rust, Ruby, Java, or Kotlin deployment runs these commands with `npx`, at the SDK
-version of its application. Thus, the machine that runs your deployment needs Node.js, also if your
-application does not.
+A Python, Go, Rust, Ruby, Java, Kotlin, or .NET deployment runs these commands with `npx`, at the
+SDK version of its application. Thus, the machine that runs your deployment needs Node.js, also if
+your application does not.
 
 This is a decision, not a missing feature. Migration is the code that has the most effect on
 safety, so it exists one time, not one time for each SDK. It runs as one deployment step, not from
@@ -157,7 +158,8 @@ The minimum with no maximum inside a major line makes a rolling upgrade possible
 
 Assert compatibility when a process starts, before it claims or changes work. Use
 `assertSchemaCompatible` in TypeScript, `assert_schema_compatible` in Python,
-`AssertSchemaCompatible` in Go, and `assert_compatible` in Rust and Ruby.
+`AssertSchemaCompatible` in Go, `assert_compatible` in Rust and Ruby, `assertCompatible` in Java,
+`assertCompatibleSuspend` in Kotlin, and `AssertCompatibleAsync` in C#.
 [Installation](/docs/installation) shows each call and the errors of a refusal.
 
 `workhorse schema migrate` applies forward-only steps that never change, from the supported
@@ -167,13 +169,13 @@ no migration history. You must reset it.
 
 ## Use one protocol in all SDKs
 
-Python, Go, Rust, Ruby, and the JVM SDK use the versioned SQL functions and the JSON fixtures in
-`protocol/v1/` as their compatibility limit. The fixtures make sure that each client refuses an
+Python, Go, Rust, Ruby, the JVM SDK, and the .NET SDK use the versioned SQL functions and the JSON
+fixtures in `protocol/v1/` as their compatibility limit. The fixtures make sure that each client refuses an
 incompatible schema or protocol before it changes data. Then they check canonical requests, results,
 transitions, and structured errors.
 
 The dashboard transport has its own contract, `dashboard/v1`. The TypeScript, Python, Go, Rust,
-Ruby, and JVM backends use its shared procedure schemas, HTML placeholders, request order, and HTTP
+Ruby, JVM, and .NET backends use its shared procedure schemas, HTML placeholders, request order, and HTTP
 fixtures.
 
 - To give operators access, embed a shipped backend.
@@ -245,9 +247,10 @@ dashboard contracts, and exported types describe the same source revision. The
 [changelog](https://github.com/stablemates/workhorse/blob/main/CHANGELOG.md) records breaking
 changes and the schema version that each release needs.
 
-Each release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, and
-Maven Central, from one source commit. The current release is `0.15.0`. Earlier beta versions stay on the
-registries that published them. Maven Central serves the JVM artifacts from `0.9.0`.
+Each release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
+Central, and nuget.org, from one source commit. The current release is `0.15.0`. Earlier beta
+versions stay on the registries that published them. Maven Central serves the JVM artifacts from
+`0.9.0`, and nuget.org serves the .NET packages from `0.10.0`.
 Each changelog gives their dates and their source commits. [Releases](/docs/releases) shows the
 current version of each line, its date, and whether it still gets fixes.
 
@@ -261,7 +264,7 @@ The dashboard and core can use different patch releases in the same minor line. 
 server reads versioned views and functions that core owns. Thus, a core patch stays compatible if
 its migration keeps those contracts.
 
-The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, or JVM
+The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, JVM, or .NET
 host supplies its own published version when it renders the application. Thus, the dashboard reports
 the package that serves it, and a release that changes only the version does not change the bundle.
 
@@ -306,8 +309,9 @@ RubyGems trusted publishing uploads the gem if its version matches the tag.
 The repository is public, and these paths run. Pull requests and pushes to `main` run the suite of
 each language one time. The weekly schedule runs the full compatibility matrix, each suite
 variation, and the packed-install and package checks. Branch protection requires the stable
-`CI / required` check. The protected npm, PyPI, crates.io, RubyGems, and Maven Central environments
-require a second person to approve publication.
+`CI / required` check. The protected npm, PyPI, crates.io, RubyGems, Maven Central, and
+nuget.org environments each require a reviewer to approve publication. The one maintainer is that
+reviewer, so the approval is a second step, not a second person.
 
 Support shows correctness under the tested matrix. It does not promise a throughput level for your
 database, payloads, handlers, or deployment topology.
