@@ -138,15 +138,22 @@ func (service *backend) taskCounts(ctx context.Context, _ any, _ string) (any, e
 	)
 }
 
-func (service *backend) taskFacets(ctx context.Context, _ any, _ string) (any, error) {
+func (service *backend) taskFacets(ctx context.Context, input any, _ string) (any, error) {
 	workers := service.configuredWorkers
 	if workers == nil {
 		workers = []string{}
 	}
+	query := map[string]any{"configuredWorkers": workers}
+	// A filter menu names its list, and the procedure then reads only that list.
+	if value, ok := input.(map[string]any); ok {
+		if facet, ok := value["facet"].(string); ok {
+			query["facet"] = facet
+		}
+	}
 	return service.jsonQuery(
 		ctx,
 		"SELECT workhorse.dashboard_task_facets_v1($1::jsonb) AS result",
-		string(mustJSON(map[string]any{"configuredWorkers": workers})),
+		string(mustJSON(query)),
 	)
 }
 

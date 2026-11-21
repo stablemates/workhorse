@@ -1231,7 +1231,7 @@
       "post": {
         "operationId": "dashboard_taskFacets",
         "summary": "List the values the task filters offer",
-        "description": "Returns the distinct queues, workers (including configured workers not yet seen), task types, and tags observed in retained tasks. Takes no input.",
+        "description": "Returns the distinct queues, workers (including configured workers not yet seen), task types, and tags observed in retained tasks. The optional facet, one of queues, workers, taskTypes, or tags, reads only that list and returns an empty array for each other list. Without facet, all four lists are returned.",
         "tags": [
           "reads"
         ],
@@ -1242,14 +1242,47 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "An empty envelope; the procedure takes no input.",
-                "properties": {}
+                "properties": {
+                  "json": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "facet": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "queues",
+                                  "workers",
+                                  "taskTypes",
+                                  "tags"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
               },
               "examples": {
                 "conformance": {
                   "summary": "Request",
-                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-facets.",
-                  "value": {}
+                  "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-facets-tags.",
+                  "value": {
+                    "json": {
+                      "facet": "tags"
+                    }
+                  }
                 }
               }
             }
@@ -1274,38 +1307,15 @@
                 "examples": {
                   "conformance": {
                     "summary": "Response",
-                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-facets.",
+                    "description": "Taken from conformance.json. Generated identifiers, timestamps, and measurements are replaced by placeholders: 00000000-0000-7000-8000-000000000000 stands for a UUID, 2026-01-01T00:00:00.000Z for a timestamp, 0 and \"string\" for a measured number or text. Fixture: task-facets-tags.",
                     "value": {
                       "json": {
                         "tags": [
                           "conformance"
                         ],
-                        "queues": [
-                          "conformance",
-                          "conformance-fast",
-                          "conformance-groups",
-                          "conformance-preserved",
-                          "conformance-purge",
-                          "conformance-redrive"
-                        ],
-                        "workers": [
-                          "conformance-worker"
-                        ],
-                        "taskTypes": [
-                          "conformance.cancel-target",
-                          "conformance.fail",
-                          "conformance.fast",
-                          "conformance.group-member",
-                          "conformance.human",
-                          "conformance.preserve",
-                          "conformance.purge",
-                          "conformance.ready",
-                          "conformance.redrive.batch",
-                          "conformance.redrive.one",
-                          "conformance.scheduled",
-                          "conformance.signal",
-                          "conformance.succeed"
-                        ]
+                        "queues": [],
+                        "workers": [],
+                        "taskTypes": []
                       }
                     }
                   }

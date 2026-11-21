@@ -261,10 +261,15 @@ class DashboardBackend:
         )[0]["result"]
         return _iso(json.loads(value) if isinstance(value, str | bytes) else value)
 
-    def task_facets(self, _input: object, _actor: str) -> object:
+    def task_facets(self, input: object, _actor: str) -> object:
+        query: dict[str, object] = {"configuredWorkers": list(self._configured_workers)}
+        # A filter menu names its list, and the procedure then reads only that list.
+        facet = input.get("facet") if isinstance(input, dict) else None
+        if isinstance(facet, str):
+            query["facet"] = facet
         return self._json_result(
             "SELECT workhorse.dashboard_task_facets_v1(%s::jsonb) AS result",
-            (json.dumps({"configuredWorkers": list(self._configured_workers)}),),
+            (json.dumps(query),),
         )
 
     def queues(self, _input: object, _actor: str) -> object:

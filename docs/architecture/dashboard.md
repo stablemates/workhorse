@@ -847,24 +847,38 @@ of `dashboard_activity_v1` applies the same guard.
 
 ### Facets
 
-`dashboard_task_facets_v1(p_input jsonb)` accepts `configuredWorkers`. It returns the complete
-version 1 facet JSON document:
+`dashboard_task_facets_v1(p_input jsonb)` accepts `configuredWorkers` and the optional `facet`:
+`queues`, `workers`, `taskTypes`, or `tags`. Without `facet`, it returns the complete version 1
+facet JSON document. With `facet`, it reads only that list and returns an empty array for each other
+list. Each filter menu of the Tasks page and of the Events page sends its own `facet` when it first
+opens, so the browser waits for each list on its own. A host that serves all procedures on one
+connection, as [Read timeouts](#read-timeouts) states, still runs the reads one after another. Schema version 105 and earlier ignore `facet`
+and return all four lists. The page then uses only the list that it asked for.
 
-| Facet       | Sources                                                                                                              | Bound                            |
-| ----------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `queues`    | sorted distinct values from `dashboard_task_query_v1` and `dashboard_queue_control_v1`                               | 1,000 values from the index scan |
-| `workers`   | the configured list, `dashboard_worker_registry_v1`, `dashboard_task_runtime_v1`, and `dashboard_attempt_history_v1` | 1,000 values from the index scan |
-| `taskTypes` | `dashboard_task_query_v1`                                                                                            | 1,000 values                     |
-| `tags`      | the newest 10,000 rows of `dashboard_task_v1`                                                                        | at most 1,000 distinct values    |
+| Facet       | Sources                                                                                                                                                                            | Bound                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `queues`    | sorted distinct values from `dashboard_task_query_v1` and `dashboard_queue_control_v1`                                                                                             | 1,000 values from the index scan |
+| `workers`   | the configured list, `dashboard_worker_registry_v1`, `dashboard_task_runtime_v1`, `attempt_history`, each row of `fast_task_runtime` and `fast_task_outcome`, and fast-tier errors | 1,000 values from the index scan |
+| `taskTypes` | `dashboard_task_query_v1`                                                                                                                                                          | 1,000 values                     |
+| `tags`      | the newest 10,000 rows of `dashboard_task_v1`                                                                                                                                      | at most 1,000 distinct values    |
 
 The queue and type lists are recursive scans. Each seeks the next distinct value through
 `task_query_queue_created_idx` and `task_query_type_created_idx`. Each costs one index seek per
 distinct value and stops at 1,000 values.
 
-The worker list also reads `dashboard_attempt_history_v1` through the same recursive scan over
+The worker list reads `attempt_history` through the same recursive scan over
 `attempt_history_worker_idx`. That index exists on every partition, so each distinct worker costs
 one seek per partition. The list also stops at 1,000 values. Thus, if a worker ran tasks and then
 left the registry, the list still offers it as a filter while Workhorse retains its history.
+
+The scan does not read `dashboard_attempt_history_v1`. That view also derives the fast-tier attempts
+from `fast_task_outcome` and `fast_task_runtime`, and no index there holds the worker. Each seek
+through the view thus read each fast-tier row once for each worker, and the read bound of the host
+ended the call on a large fast tier. The fast tier is now read once: the worker of each
+`fast_task_runtime` and `fast_task_outcome` row, and the worker of each earlier attempt that their
+errors record. The list keeps each worker that the view gave. The 1,000-value bound applies to the full-tier
+history only, so the list can show more workers than before. Its cost grows with the number of
+fast-tier rows, not with that number times the number of workers.
 
 The tag sample walks `task_created_retention_idx` newest first and returns at most 1,000 distinct
 values. No index supports a distinct array scan. Thus the bound keeps facet latency independent of

@@ -137,6 +137,23 @@ describe("dashboard/v1/openapi.json", () => {
     }
   });
 
+  // A procedure whose input accepts null also accepts an envelope with no json, as every host
+  // does. A released page sends that envelope to taskFacets.
+  it("requires json only when the procedure input does not accept null", () => {
+    for (const { name, operation } of operations) {
+      const input = procedures.procedures[name]!.input as Json | null;
+      if (input === null) continue;
+      const nullable =
+        Array.isArray(input.anyOf) &&
+        (input.anyOf as Json[]).some((branch) => branch.type === "null");
+      const schema = operation.requestBody.content["application/json"]!.schema;
+      expect({ name, required: schema.required }).toEqual({
+        name,
+        required: nullable ? undefined : ["json"],
+      });
+    }
+  });
+
   it("lists every host and envelope error on every operation", () => {
     for (const { name, operation } of operations) {
       expect(Object.keys(operation.responses)).toEqual([

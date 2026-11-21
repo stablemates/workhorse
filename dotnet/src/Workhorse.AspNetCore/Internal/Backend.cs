@@ -86,8 +86,8 @@ internal sealed class Backend
         ["tasksCursor"] = (input, _, token) =>
             ResultAsync(DashboardSqlCatalogue.DashboardTasksCursorV1, With(input, ("canCompleteHumanWait", !_readOnly)), token),
         ["activity"] = (input, _, token) => ResultAsync(DashboardSqlCatalogue.DashboardActivityV1, input, token),
-        ["taskFacets"] = (_, _, token) =>
-            ResultAsync(DashboardSqlCatalogue.DashboardTaskFacetsV1, new JsonObject { ["configuredWorkers"] = _configuredWorkers.DeepClone() }, token),
+        ["taskFacets"] = (input, _, token) =>
+            ResultAsync(DashboardSqlCatalogue.DashboardTaskFacetsV1, TaskFacetsQuery(input), token),
         ["queues"] = (_, _, token) => ResultAsync(DashboardSqlCatalogue.DashboardQueuesV1, null, token),
         ["cron"] = (_, _, token) =>
             ResultAsync(DashboardSqlCatalogue.DashboardCronV1, new JsonObject { ["maintenanceLoops"] = _maintenanceLoops.DeepClone() }, token),
@@ -523,6 +523,18 @@ internal sealed class Backend
     internal static string Write(JsonNode node) => node.ToJsonString();
 
     private static string Found(string? value, string message) => value ?? throw DashboardRpcException.NotFound(message);
+
+    // A filter menu names its list, and the procedure then reads only that list.
+    private JsonObject TaskFacetsQuery(JsonObject input)
+    {
+        var query = new JsonObject { ["configuredWorkers"] = _configuredWorkers.DeepClone() };
+        if (input["facet"] is JsonValue facet && facet.TryGetValue<string>(out var name))
+        {
+            query["facet"] = name;
+        }
+
+        return query;
+    }
 
     private static JsonObject With(JsonObject input, params (string Name, bool Value)[] flags)
     {

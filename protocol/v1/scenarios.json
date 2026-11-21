@@ -2795,7 +2795,7 @@
             {
               "value": {
                 "promotionLagMs": 10000,
-                "schemaVersion": 105,
+                "schemaVersion": 106,
                 "terminalCleanupBacklogMs": 21600000
               }
             }

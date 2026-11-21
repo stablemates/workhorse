@@ -7,6 +7,31 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
+## Upgrade from 0.15.x to the next release
+
+The next release makes each task filter of the dashboard read its own list, and it stops the
+worker list from reading each fast-tier row once for each worker. The upgrade is a rolling
+deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate`. It applies migration 0107 and leaves the schema at version 106.
+2. Roll out the new processes in any order.
+
+A 0.15.0 database is at schema version 105. The migration replaces one function body and changes
+no stored rows:
+
+| Migration                                   | Schema version | Changes                                                                                                               |
+| ------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `0107-read-each-task-filter-on-its-own.sql` | 106            | `dashboard_task_facets_v1` reads only the list that the optional `facet` key names, and reads each fast-tier row once |
+
+Migration 0107 adds no function that an SDK calls. It does not raise the floor, so it stays 99. The
+worker list reads each fast-tier row once, not once for each worker, and keeps each worker
+that it gave before. The 1,000-value bound now applies to the full-tier history only.
+
+A dashboard host of the next release sends `facet` to `dashboard_task_facets_v1`. Schema version
+105 and earlier ignore that key and return all four lists, so the host still fills each filter. A
+0.15 process keeps working on schema version 106, because a migration inside a major line only
+adds.
+
 ## Upgrade from 0.14.x to 0.15.0
 
 0.15.0 stops each cleanup pass from reading the whole key and dependency tables to delete

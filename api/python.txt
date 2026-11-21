@@ -6089,7 +6089,7 @@ class TaskDetailInput(dict)
 
 type TaskDetailOutput = DashboardTaskDetail
 
-type TaskFacetsInput = None
+type TaskFacetsInput = dict[str, object] | None
 
 type TaskFacetsOutput = DashboardTaskFacets
 

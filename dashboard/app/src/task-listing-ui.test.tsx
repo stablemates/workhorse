@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { taskEventsLinkProps } from "./task-events-link.js";
+import { initialTaskFacetStates } from "./task-facets.js";
 
 Object.defineProperty(globalThis, "localStorage", {
   value: { getItem: () => null, setItem: () => undefined },
@@ -90,8 +91,7 @@ describe("task listing identity", () => {
       setSearchInput: () => undefined,
       taskFacets: {
         facets: { queues: [], workers: [], taskTypes: [], tags: [] },
-        loading: false,
-        error: null,
+        states: initialTaskFacetStates,
         load: () => undefined,
       },
       updateLocation: () => undefined,

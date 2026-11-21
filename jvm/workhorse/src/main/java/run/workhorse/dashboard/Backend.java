@@ -135,10 +135,14 @@ final class Backend {
     procedures.put("activity", (input, actor) -> result(SqlCatalogue.DASHBOARD_ACTIVITY_V1, input));
     procedures.put(
         "taskFacets",
-        (input, actor) ->
-            result(
-                SqlCatalogue.DASHBOARD_TASK_FACETS_V1,
-                orderedMap("configuredWorkers", configuredWorkers)));
+        (input, actor) -> {
+          Map<String, @Nullable Object> query = orderedMap("configuredWorkers", configuredWorkers);
+          // A filter menu names its list, and the procedure then reads only that list.
+          if (input.get("facet") instanceof String facet) {
+            query.put("facet", facet);
+          }
+          return result(SqlCatalogue.DASHBOARD_TASK_FACETS_V1, query);
+        });
     procedures.put("queues", (input, actor) -> result(SqlCatalogue.DASHBOARD_QUEUES_V1));
     procedures.put(
         "cron",

@@ -21,7 +21,6 @@ import {
   Box,
   Button,
   Group,
-  Loader,
   Pagination,
   Paper,
   ScrollArea,
@@ -40,6 +39,7 @@ import {
   EmptyState,
   includeSelectedOption,
   includeSelectedOptions,
+  taskFacetMenuProps,
   useTaskFacets,
 } from "../components/task-list.js";
 import { formatDuration, formatExact, formatRelative } from "../preferences.js";
@@ -222,7 +222,6 @@ export function EventsPage({
       aria-label={label}
     />
   );
-  const facetMessage = eventFacets.loading ? "Loading filters…" : eventFacets.error;
   const rangeDescription =
     query.from !== null && query.to !== null
       ? `between ${formatExact(query.from)} and ${formatExact(query.to)}`
@@ -347,9 +346,7 @@ export function EventsPage({
             data={queueOptions}
             value={query.queue}
             onChange={(value) => filter({ queue: value })}
-            onDropdownOpen={eventFacets.load}
-            rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
-            nothingFoundMessage={facetMessage ?? "No queues found"}
+            {...taskFacetMenuProps(eventFacets, "queues", "No queues found")}
           />
           <Select
             size="xs"
@@ -361,9 +358,7 @@ export function EventsPage({
             data={typeOptions}
             value={query.taskType}
             onChange={(value) => filter({ taskType: value })}
-            onDropdownOpen={eventFacets.load}
-            rightSection={eventFacets.loading ? <Loader size={14} /> : undefined}
-            nothingFoundMessage={facetMessage ?? "No task types found"}
+            {...taskFacetMenuProps(eventFacets, "taskTypes", "No task types found")}
           />
           <Select
             size="xs"
@@ -375,8 +370,7 @@ export function EventsPage({
             data={workerOptions}
             value={query.worker}
             onChange={(worker) => filter({ worker })}
-            onDropdownOpen={eventFacets.load}
-            nothingFoundMessage={facetMessage ?? "No workers found"}
+            {...taskFacetMenuProps(eventFacets, "workers", "No workers found")}
           />
           <MultiSelect
             size="xs"
