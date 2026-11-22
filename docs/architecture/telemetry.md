@@ -523,6 +523,15 @@ handler span carries these attributes:
 - `workhorse.task.attempt`
 - the bounded `workhorse.handler.outcome`
 
+The handler span outcome has the values of the TypeScript span, not the metric outcome. A
+`fail_v1` or `release_owned_v1` answer sets the status that PostgreSQL returned, such as `ready`,
+`scheduled`, or `released`. A reconciliation sets the cause that it settled. A lost lease is `stale`,
+and an attempt timeout is `timeout_exceeded`. A cancellation that a heartbeat or an expiry
+request delivered is `canceled` only after PostgreSQL accepts its acknowledgement. A refused
+acknowledgement is `stale`, and a failed request is `unknown`. The span outcome can differ from the
+metric outcome: an attempt without an outcome has the metric outcome `unknown`, but its span keeps
+the last status that PostgreSQL returned, such as `stale`, or `unknown` when no status came.
+
 The `workhorse.retry` span is a child of the handler span. It carries `workhorse.task.id`,
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.retry.outcome`, as the TypeScript
 span does. `startRetrySpan` in `go/telemetry.go` starts it in two cases:
@@ -644,7 +653,10 @@ A one-pass call, such as `runOnce()` or `run_once`, is not a run. Each of the se
 `workhorse.worker.stopped` only when it ends without an error.
 `workhorse.task.execution_finished` states a known outcome. If the settlement of an attempt fails,
 also the acknowledgement of a cancellation, the attempt has no outcome, and the worker writes no
-execution record for it. It still writes `workhorse.handler.finished`.
+execution record for it. A cancellation that a heartbeat delivered and that PostgreSQL refuses to
+acknowledge also leaves the attempt without an outcome. The worker still writes
+`workhorse.handler.finished`. A write after the shutdown that settled the attempt gives it an
+outcome, so the worker writes the execution record also then.
 
 The TypeScript dashboard calls the queue for a cancel, a signal, or a human decision, so the queue
 writes `workhorse.task.cancellation_processed`, `workhorse.task.signal_processed`, or

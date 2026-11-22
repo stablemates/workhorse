@@ -24,6 +24,16 @@ The release of a task without a handler now records `workhorse.handler.duration`
 has no outcome, as the other workers do. Before, it wrote the handler log records but recorded no
 handler metric.
 
+### A refused acknowledgement of a delivered cancellation has no outcome
+
+A heartbeat or an expiry request delivers a cancellation, and `acknowledge_cancel_v1` refuses it.
+The worker settled nothing, but counted the attempt as `lease_lost` and wrote that outcome in
+`workhorse.task.execution_finished`. The attempt now has no outcome, as in TypeScript, Python,
+Ruby, the JVM, and .NET: its duration records `unknown`, the executions counter does not count it,
+and the worker writes no execution record. The run continues. During the reconciliation of a
+refused settlement, a refused acknowledgement after `fail_v1`, `release_owned_v1`, or
+`expire_owned_v1` answered `cancel_requested` still reports `lease_lost`.
+
 ### A failing log subscriber no longer changes an operation
 
 A log record must never change the result of an operation. Before, a `tracing` subscriber that

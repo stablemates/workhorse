@@ -2264,8 +2264,9 @@ The SDKs differ in what a refusal does after the handler has returned.
     them goes to a reconciliation, as [A stale failure or release](#a-stale-failure-or-release)
     describes.
   - Go `reconcileRejectedSettlement` returns the cause that it settled as the handler outcome of
-    the span and of `workhorse.handler.executions`: `deadline_exceeded`, `timeout`, or `canceled`.
-    Only a `stale` or `not_due` answer keeps `lease_lost`. `settleAfterShutdown` reports the same
+    `workhorse.handler.executions`: `deadline_exceeded`, `timeout`, or `canceled`. The span gets the
+    TypeScript name of that cause, such as `timeout_exceeded`. Only a `stale` or `not_due` answer
+    keeps `lease_lost`, which is `stale` on the span. `settleAfterShutdown` reports the same
     outcomes. A `stale` answer from `fail_v1` or `release_owned_v1` goes to the same
     reconciliation. A lease that expired under an unchanged fence can still settle a due deadline
     or attempt timeout (SM-1811).
@@ -2316,10 +2317,10 @@ fence before the attempt ends (SM-1811, SM-1884):
 | .NET       | `Worker.ReconcileRefusalAsync`, called from `SettleStatusAsync` |
 
 The reconciliation calls `expire_owned_v1`, or `expire_owned_telemetry_v1` in Python, Ruby, the
-JVM, and .NET. The answer gives the handler outcome. The SDKs that emit the
-`workhorse.task.execution_finished` log record the metric outcome there. .NET emits no such log.
-The span column states the values of TypeScript, Python, Ruby, the JVM, and .NET. Go writes the
-metric outcome on its handler span.
+JVM, and .NET. The answer gives the handler outcome. Each SDK writes the metric outcome in the
+`workhorse.task.execution_finished` log record for a known outcome.
+The span column states the values of TypeScript, Python, Go, Ruby, the JVM, and .NET. The Rust
+handler span has no outcome attribute.
 
 | `expire_owned_v1` answer                                | Metric outcome      | Span outcome        |
 | ------------------------------------------------------- | ------------------- | ------------------- |
@@ -2328,8 +2329,12 @@ metric outcome on its handler span.
 | `cancel_requested`, and `acknowledge_cancel_v1` accepts | `canceled`          | `canceled`          |
 | any other answer                                        | `lease_lost`        | `stale`             |
 
-- Go and Rust call `acknowledge_cancel_v1` before `expire_owned_v1`. They ask `expire_owned_v1`
-  again after a `not_due` answer, for up to 1 s. Python, Ruby, the JVM, and .NET ask once.
+- Go and Rust call `acknowledge_cancel_v1` before `expire_owned_v1`. Rust asks `expire_owned_v1`
+  again after a `not_due` answer, for up to 1 s. Python, Go, Ruby, the JVM, and .NET ask once, as
+  TypeScript does when no expiration request is in flight.
+- If the `expire_owned_v1` request or the acknowledgement fails, the reconciliation settles
+  nothing. The attempt then has no outcome in each SDK, and the error ends the run, as for any
+  settlement write that fails.
 - `acknowledge_cancel_v1` refuses after `expires_at` passed. Thus a cancellation request does not
   settle after a lapsed lease, and the task stays with lease recovery.
 - Ruby, the JVM, and .NET use the same reconciliation after a refused completion.
@@ -2355,8 +2360,15 @@ metric outcome on its handler span.
   catches the error, and the run continues.
 
 If `fail_v1` or `release_owned_v1` answers `cancel_requested` and `acknowledge_cancel_v1` refuses,
-the worker also settles nothing. TypeScript, Python, Ruby, the JVM, and .NET then report
-`lease_lost` on the metric, and `stale` on the span (SM-1863, SM-1884).
+the worker also settles nothing. Each SDK then reports `lease_lost` on the metric. TypeScript,
+Python, Go, Ruby, the JVM, and .NET report `stale` on the span (SM-1863, SM-1884).
+
+A heartbeat or an expiry request can deliver a cancellation while the handler runs. If
+`acknowledge_cancel_v1` then refuses it, the attempt has no outcome in each SDK: its duration
+records `unknown`, `workhorse.handler.executions` does not count it, and the worker writes no
+`workhorse.task.execution_finished` record. The run continues. The handler span outcome is
+`canceled` only after PostgreSQL accepts the acknowledgement. A refused acknowledgement is `stale`,
+and a failed request is `unknown`. The Rust handler span has no outcome attribute.
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.
