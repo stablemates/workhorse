@@ -563,6 +563,10 @@ class WorkerLogsDatabaseTest {
     LogRecordData finished = only("workhorse.handler.finished");
     assertEquals(taskId.toString(), value(finished, Names.TASK_ID));
     assertEquals(List.of(), recording.logs("workhorse.task.execution_finished"));
+    // As in TypeScript, the duration records the outcome unknown, and the executions counter does
+    // not count the attempt.
+    assertEquals(List.of("unknown"), outcomes("workhorse.handler.duration"));
+    assertEquals(List.of(), outcomes("workhorse.handler.executions"));
   }
 
   /**
@@ -639,6 +643,19 @@ class WorkerLogsDatabaseTest {
     LogRecordData finished = only("workhorse.handler.finished");
     assertEquals(taskId.toString(), value(finished, Names.TASK_ID));
     assertEquals(List.of(), recording.logs("workhorse.task.execution_finished"));
+    // As in TypeScript, the duration records the outcome unknown, and the executions counter does
+    // not count the attempt.
+    assertEquals(List.of("unknown"), outcomes("workhorse.handler.duration"));
+    assertEquals(List.of(), outcomes("workhorse.handler.executions"));
+  }
+
+  /** The {@code workhorse.handler.outcome} of each point of the metric {@code name}. */
+  private List<@Nullable String> outcomes(String name) {
+    return recording.metrics().stream()
+        .filter(metric -> metric.getName().equals(name))
+        .flatMap(metric -> metric.getData().getPoints().stream())
+        .map(point -> point.getAttributes().get(AttributeKey.stringKey(Names.HANDLER_OUTCOME)))
+        .toList();
   }
 
   /** {@code source}, which refuses every connection. */

@@ -482,12 +482,19 @@ RSpec.describe "The worker log events" do
     it "writes no workhorse.task.execution_finished for an attempt without an outcome" do
       claimed = Struct.new(:id, :type, :attempt, :queue).new(task, "send", 1, "mail")
       attributes = {"workhorse.queue.name" => "mail"}.merge(W::Telemetry.task_span_attributes(claimed))
+      measured = []
+      allow(W::Telemetry).to receive(:add) { |name, _amount, metric = {}| measured << [name, metric] }
+      allow(W::Telemetry).to receive(:record) { |name, _amount, metric = {}| measured << [name, metric] }
       # The arbiter has no outcome, as after a settlement statement that failed.
       worker(pool_class.new).send(:finish_telemetry, claimed, nil, W::Arbiter.new, {span_outcome: nil, errors: []},
         Process.clock_gettime(Process::CLOCK_MONOTONIC), attributes)
 
       expect(logger.named("workhorse.handler.finished").size).to eq(1)
       expect(logger.named("workhorse.task.execution_finished")).to eq([])
+      # As in TypeScript, the duration records the outcome unknown, and the executions counter does
+      # not count the attempt.
+      expect(measured.map(&:first)).to eq(%w[workhorse.handler.duration workhorse.handler.runtime])
+      expect(measured.first.last["workhorse.handler.outcome"]).to eq("unknown")
     end
 
     it "writes workhorse.worker.polling_only at warn once for a run without a listener" do

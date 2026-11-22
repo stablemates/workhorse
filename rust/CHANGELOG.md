@@ -11,6 +11,19 @@ adds.
 
 ## Unreleased
 
+### An attempt without an outcome is not an execution
+
+An attempt whose settlement fails has no outcome. The TypeScript worker records its
+`workhorse.handler.duration` with the outcome `unknown`, and `workhorse.handler.executions` does not
+count it. The Rust worker counted it as an execution with the outcome `unknown`, so a dashboard of
+the execution count showed an outcome that the documented list does not have. The worker now
+counts no execution for such an attempt. The duration and `workhorse.handler.runtime` stay.
+
+The release of a task without a handler now records `workhorse.handler.duration` and
+`workhorse.handler.executions` with the outcome `released`, and `workhorse.handler.runtime`, which
+has no outcome, as the other workers do. Before, it wrote the handler log records but recorded no
+handler metric.
+
 ### A failing log subscriber no longer changes an operation
 
 A log record must never change the result of an operation. Before, a `tracing` subscriber that

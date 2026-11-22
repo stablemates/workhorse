@@ -346,7 +346,11 @@ func (metrics *workerMetrics) recordHandler(
 		attribute.String(taskTypeAttribute, task.Type),
 		attribute.String(handlerOutcomeAttribute, string(outcome)),
 	)
-	metrics.handlerExecutions.Add(ctx, 1, attributes)
+	// An attempt without an outcome has a duration, but TypeScript does not count it as an
+	// execution.
+	if outcome != handlerOutcomeUnknown {
+		metrics.handlerExecutions.Add(ctx, 1, attributes)
+	}
 	metrics.handlerDuration.Record(ctx, durationMS, attributes)
 	metrics.handlerRuntime.Add(ctx, durationMS, taskMetricOptions(task))
 }

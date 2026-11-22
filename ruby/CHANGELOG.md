@@ -5,6 +5,14 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### An attempt without an outcome is not an execution
+
+An attempt whose settlement fails has no outcome. The TypeScript worker records its
+`workhorse.handler.duration` with the outcome `unknown`, and `workhorse.handler.executions` does not
+count it. The Ruby worker counted it as an execution with the outcome `unknown`, so a dashboard of
+the execution count showed an outcome that the documented list does not have. The worker now
+counts no execution for such an attempt. The duration and `workhorse.handler.runtime` stay.
+
 ### The queue builds no record for a disabled logger
 
 The queue now checks the level of its logger before it builds the attributes of a record. A logger

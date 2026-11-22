@@ -11,6 +11,14 @@ adds.
 
 ## Unreleased
 
+### An attempt without an outcome is not an execution
+
+An attempt whose settlement fails has no outcome. The TypeScript worker records its
+`workhorse.handler.duration` with the outcome `unknown`, and `workhorse.handler.executions` does not
+count it. The JVM worker counted it as an execution with the outcome `unknown`, so a dashboard of
+the execution count showed an outcome that the documented list does not have. The worker now
+counts no execution for such an attempt. The duration and `workhorse.handler.runtime` stay.
+
 ### A logger failure no longer changes an operation result
 
 A log record observes an operation, so it must not change the operation. Before this change, an

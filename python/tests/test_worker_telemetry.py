@@ -404,6 +404,32 @@ def _counter_values(name: str) -> dict[tuple[tuple[str, Any], ...], float]:
     }
 
 
+def _histogram_counts(name: str) -> dict[tuple[tuple[str, Any], ...], int]:
+    """The cumulative count of each attribute set of the histogram `name`. Empty before any data."""
+    if METRIC_READER.get_metrics_data() is None:
+        return {}
+    return {
+        tuple(sorted(point.attributes.items())): point.count
+        for metric in _metrics()
+        if metric.name == name
+        for point in metric.data.data_points
+    }
+
+
+def _added_by_outcome(
+    before: Mapping[tuple[tuple[str, Any], ...], float],
+    after: Mapping[tuple[tuple[str, Any], ...], float],
+    task_type: str,
+) -> dict[str, float]:
+    """The increase of each `workhorse.handler.outcome` of `task_type` from `before` to `after`."""
+    return {
+        dict(attributes)["workhorse.handler.outcome"]: value - before.get(attributes, 0)
+        for attributes, value in after.items()
+        if dict(attributes).get("workhorse.task.type") == task_type
+        and value != before.get(attributes, 0)
+    }
+
+
 def test_a_failed_heartbeat_round_counts_by_reason_and_the_task_completes(
     database_url: str,
 ) -> None:
@@ -1388,8 +1414,14 @@ def test_only_a_run_writes_the_start_and_stop_records(database_url: str) -> None
 def test_a_failed_settlement_writes_no_execution_record(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TypeScript writes task.execution_finished only for a known outcome, so no SDK writes unknown."""
+    """TypeScript writes task.execution_finished only for a known outcome, so no SDK writes unknown.
+
+    The attempt has no outcome, so workhorse.handler.executions does not count it. Its duration
+    has the outcome unknown, as in TypeScript.
+    """
     LOG_EXPORTER.clear()
+    executions_before = _counter_values("workhorse.handler.executions")
+    durations_before = _histogram_counts("workhorse.handler.duration")
     queue_name = _queue_name("settlement")
     with psycopg.connect(database_url) as connection:
         task_id = Queue(connection, queue_name).enqueue("settlement.fails", {})
@@ -1422,6 +1454,10 @@ def test_a_failed_settlement_writes_no_execution_record(
         for record in _log_records("workhorse.task.execution_finished")
         if record.attributes["workhorse.task.id"] == task_id
     ]
+    executions = _counter_values("workhorse.handler.executions")
+    assert _added_by_outcome(executions_before, executions, "settlement.fails") == {}
+    durations = _histogram_counts("workhorse.handler.duration")
+    assert _added_by_outcome(durations_before, durations, "settlement.fails") == {"unknown": 1}
 
 
 @pytest.mark.parametrize("acknowledgement", ["fails", "refused"])
@@ -1431,9 +1467,12 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
     """TypeScript writes the canceled outcome only after PostgreSQL accepts the acknowledgement.
 
     The heartbeat submits the cancellation first. If acknowledge_cancel_v1 then fails or refuses,
-    the worker settled nothing, so it writes no task.execution_finished record.
+    the worker settled nothing, so it writes no task.execution_finished record, and
+    workhorse.handler.executions does not count the attempt.
     """
     LOG_EXPORTER.clear()
+    executions_before = _counter_values("workhorse.handler.executions")
+    durations_before = _histogram_counts("workhorse.handler.duration")
     queue_name = _queue_name(f"cancel-{acknowledgement}")
     with psycopg.connect(database_url) as connection:
         task_id = Queue(connection, queue_name).enqueue("cancel.unacknowledged", {})
@@ -1480,6 +1519,10 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
         for record in _log_records("workhorse.task.execution_finished")
         if record.attributes["workhorse.task.id"] == task_id
     ]
+    executions = _counter_values("workhorse.handler.executions")
+    assert _added_by_outcome(executions_before, executions, "cancel.unacknowledged") == {}
+    durations = _histogram_counts("workhorse.handler.duration")
+    assert _added_by_outcome(durations_before, durations, "cancel.unacknowledged") == {"unknown": 1}
 
 
 def test_a_run_writes_its_start_record_before_readiness_and_registration(

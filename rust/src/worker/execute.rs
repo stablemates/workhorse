@@ -259,15 +259,7 @@ impl Inner {
         };
         let outcome = *settled.as_ref().unwrap_or(&"unknown");
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-        let attributes = [
-            ("workhorse.queue.name", Attribute::Text(&task.queue)),
-            ("workhorse.task.type", Attribute::Text(&task.task_type)),
-            ("workhorse.handler.outcome", Attribute::Text(outcome)),
-        ];
-        self.metrics.add(Counter::HandlerExecutions, 1.0, &attributes);
-        // The runtime counter has no outcome, so each queue and task type is one series.
-        self.metrics.add(Counter::HandlerRuntime, elapsed, &attributes[..2]);
-        self.metrics.record(Histogram::HandlerDuration, elapsed, &attributes);
+        self.record_handler_metrics(&task, outcome, elapsed);
         if outcome != "succeeded" && outcome != "unknown" {
             span.record("otel.status_code", "error");
         }
@@ -289,8 +281,29 @@ impl Inner {
             Err(_) => None,
         };
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        // The release is the handler activation, so it records the handler metrics, as the
+        // TypeScript worker does.
+        self.record_handler_metrics(task, outcome.unwrap_or("unknown"), elapsed);
         self.log_handler_finished(task, &span, outcome, elapsed);
         released.map(drop)
+    }
+
+    /// Records `workhorse.handler.duration`, `workhorse.handler.runtime`, and
+    /// `workhorse.handler.executions` for one activation. A settlement that failed leaves the
+    /// attempt without an outcome. As in TypeScript, its duration records `unknown`, and
+    /// `workhorse.handler.executions` does not count it.
+    fn record_handler_metrics(&self, task: &ClaimedTask, outcome: &str, elapsed: f64) {
+        let attributes = [
+            ("workhorse.queue.name", Attribute::Text(&task.queue)),
+            ("workhorse.task.type", Attribute::Text(&task.task_type)),
+            ("workhorse.handler.outcome", Attribute::Text(outcome)),
+        ];
+        if outcome != "unknown" {
+            self.metrics.add(Counter::HandlerExecutions, 1.0, &attributes);
+        }
+        // The runtime counter has no outcome, so each queue and task type is one series.
+        self.metrics.add(Counter::HandlerRuntime, elapsed, &attributes[..2]);
+        self.metrics.record(Histogram::HandlerDuration, elapsed, &attributes);
     }
 
     /// Writes `workhorse.handler.started`. Each record carries the task identity itself: an

@@ -1710,7 +1710,11 @@ module Stablemates
         metric = Telemetry.task_metric_attributes(task)
         Telemetry.record("workhorse.handler.duration", duration, metric.merge("workhorse.handler.outcome" => outcome))
         Telemetry.add("workhorse.handler.runtime", duration, metric)
-        Telemetry.add("workhorse.handler.executions", 1, metric.merge("workhorse.handler.outcome" => outcome))
+        # An attempt whose settlement failed has no outcome. As in TypeScript, the duration records it
+        # as unknown, and the executions counter does not count it.
+        unless outcome == "unknown"
+          Telemetry.add("workhorse.handler.executions", 1, metric.merge("workhorse.handler.outcome" => outcome))
+        end
         log(:debug, "workhorse.handler.finished", "Task handler finished",
           attributes.merge("workhorse.handler.duration_ms" => duration))
         # An attempt whose settlement failed has no outcome. TypeScript writes no execution record

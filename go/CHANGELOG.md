@@ -10,6 +10,31 @@ adds.
 
 ## Unreleased
 
+### An attempt without an outcome is not an execution
+
+An attempt whose settlement fails has no outcome. The TypeScript worker records its
+`workhorse.handler.duration` with the outcome `unknown`, and `workhorse.handler.executions` does not
+count it. The Go worker counted it as an execution with the outcome `unknown`, so a dashboard of
+the execution count showed an outcome that the documented list does not have. The worker now
+counts no execution for such an attempt. The duration and `workhorse.handler.runtime` stay.
+
+A failed completion also kept the outcome `succeeded`, because the worker set the outcome before
+`complete_v1` ran. Thus `workhorse.handler.executions` counted a success for a task that did not
+complete, and the handler span had the outcome `succeeded`. The outcome is now set only after
+PostgreSQL accepts the completion. The same is true for a cancellation acknowledgement, an
+expiry, the cancellation acknowledgement of a reconciliation, and a settlement after the shutdown
+cancellation: a write that fails before the attempt has an outcome leaves it without one. Before,
+such an attempt counted as `canceled`, `deadline_exceeded`, `timeout`, or `lease_lost`. A stale
+answer shows a lost lease, which needs no write. Thus an attempt that got a stale answer keeps the
+outcome `lease_lost`, also when a later request of its reconciliation fails. A refused
+acknowledgement of a released task, and a stale failure write after the shutdown, now count as
+`lease_lost`, not `canceled`.
+
+A panic outside the handler, such as in the `Error` method of a handler error, fails the attempt
+through `fail_v1`. The worker now counts that attempt with the outcome of the write, such as
+`retry`. Before, it recorded no outcome. The release of a task without a handler now also records
+its duration and runtime when the release fails.
+
 ### The worker records follow the TypeScript triggers
 
 A worker log record must come in the same cases in each SDK, so that one alert reads the workers
