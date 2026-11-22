@@ -10,6 +10,7 @@ import (
 	"time"
 
 	workhorse "github.com/stablemates/workhorse/go"
+	"github.com/stablemates/workhorse/go/internal/cancellationmetric"
 )
 
 func document(input any) (map[string]any, error) {
@@ -192,6 +193,8 @@ func (service *backend) cancelTask(ctx context.Context, input any, actor string)
 	if state == nil {
 		state = "not_found"
 	}
+	// The queue counts and logs this result, so the dashboard writes the same count and record.
+	cancellationmetric.Record(ctx, fmt.Sprint(row["status"]))
 	logOperation(ctx, "workhorse.task.cancellation_processed", "Task cancellation processed",
 		slog.Any("workhorse.task.id", value["id"]), slog.Any("workhorse.task.state", state),
 		slog.Any("workhorse.operation.status", row["status"]))

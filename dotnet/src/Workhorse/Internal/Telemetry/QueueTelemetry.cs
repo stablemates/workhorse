@@ -2,9 +2,34 @@ using System.Diagnostics;
 
 namespace Workhorse.Internal.Telemetry;
 
-/// <summary>The <c>workhorse.enqueue</c> span of the queue, as the TypeScript and JVM queues set it.</summary>
+/// <summary>
+/// The <c>workhorse.enqueue</c> span and the <c>workhorse.tasks.cancellation</c> counter of the
+/// queue, as the TypeScript and JVM queues record them.
+/// </summary>
 internal static class QueueTelemetry
 {
+    /// <summary>
+    /// Counts one <c>cancel_v1</c> result by its durable <paramref name="status"/>. The queue calls
+    /// this after PostgreSQL made the cancellation durable, so a listener that throws does not
+    /// change the cancel result, and the count is lost.
+    /// </summary>
+    internal static void Cancellation(string status)
+    {
+        // The first access to Instrumentation publishes its instruments, and a listener can throw
+        // there too, so the check is inside the guard.
+        try
+        {
+            if (Instrumentation.TasksCancellation.Enabled)
+            {
+                Instrumentation.TasksCancellation.Add(1, new KeyValuePair<string, object?>(Names.CancellationStatus, status));
+            }
+        }
+        catch (Exception)
+        {
+            // A meter listener can throw. The cancel result does not change.
+        }
+    }
+
     /// <summary>
     /// Starts the span around one enqueue or one batch enqueue. It names the queue when every
     /// request names the same one, the task type of a single request, and the count. A request

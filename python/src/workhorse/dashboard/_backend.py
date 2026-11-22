@@ -542,8 +542,8 @@ class DashboardBackend:
             """,
             (value["id"], actor, audit.get("reason")),
         )[0]
-        # The queue writes these records, so the dashboard writes the same ones (TypeScript calls
-        # the queue).
+        # The queue counts and logs this result, so the dashboard writes the same count and record
+        # (TypeScript calls the queue).
         _log_cancellation_processed(row, str(value["id"]))
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")

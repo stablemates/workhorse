@@ -65,6 +65,7 @@ from ._telemetry import (
     emit_log as _emit_log,
     inject_trace_context as _inject_trace_context,
     log_enabled as _log_enabled,
+    record_cancellation as _record_cancellation,
 )
 from .errors import (
     HumanWaitIdempotencyConflictError,
@@ -952,7 +953,11 @@ def _health_document(value: object) -> QueueHealth:
 
 
 def _log_cancellation_processed(row: Mapping[str, object], task_id: str) -> None:
-    """Log the cancel_v1 result of one task. The dashboard backend writes the same record."""
+    """Count and log the cancel_v1 result of one task.
+
+    The dashboard backend writes the same count and record.
+    """
+    _record_cancellation(str(row["status"]))
     if not _log_enabled("INFO"):
         return
     _emit_log(

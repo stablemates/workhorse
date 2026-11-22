@@ -190,6 +190,9 @@ module Stablemates
         optional_string(reason, "reason")
         assert_compatible
         row = exactly_one(@executor.rows(SqlCatalogue::CANCEL_V1, [task_id, requested_by, reason]), "cancel_v1")
+        # As in TypeScript, the count takes the raw status before the result is checked, so a status
+        # of a newer protocol is also counted.
+        Telemetry.record_cancellation(row.fetch("status"))
         result_status = status(:cancel, row.fetch("status"), CANCEL_STATUSES)
         state = row.fetch("state") && status(:cancel, row.fetch("state"), TASK_STATES)
         log(:info, "workhorse.task.cancellation_processed", "Task cancellation processed") do

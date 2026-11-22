@@ -88,10 +88,9 @@ public sealed class TelemetrySurfaceTests
     /// <summary>The TypeScript batch completion span. The .NET worker gives each completion its own span.</summary>
     private static readonly string[] FusedCompletion = ["workhorse.complete.batch_size"];
 
-    /// <summary>The cancel, redrive, schedule sync, and enqueue outcome names, which SM-1609 owns for every SDK.</summary>
+    /// <summary>The redrive, schedule sync, and enqueue outcome names, which SM-1609 owns for every SDK.</summary>
     private static readonly string[] QueueAndAdmin =
     [
-        "workhorse.cancellation.status",
         "workhorse.operation.status",
         "workhorse.redrive.dry_run",
         "workhorse.redrive.status",
@@ -101,7 +100,6 @@ public sealed class TelemetrySurfaceTests
         "workhorse.schedule.synchronize",
         "workhorse.task.count",
         "workhorse.task.state",
-        "workhorse.tasks.cancellation",
         "workhorse.tasks.enqueue.outcomes",
         "workhorse.tasks.enqueued",
         "workhorse.tasks.redrive",

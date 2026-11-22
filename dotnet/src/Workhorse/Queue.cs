@@ -445,6 +445,13 @@ public sealed partial class Queue
                     [Parameters.Uuid(taskId), Parameters.Text(options.RequestedBy), Parameters.Text(options.Reason)],
                     cancellationToken).ConfigureAwait(false);
                 var row = TaskGroups.ExactlyOne(rows, "cancel_v1");
+                // As in TypeScript, the count takes the raw status before the result is checked, so a
+                // status of a newer protocol is also counted.
+                if (row.Text("status") is { } rawStatus)
+                {
+                    QueueTelemetry.Cancellation(rawStatus);
+                }
+
                 var status = Wire.Required<CancelStatus>("cancel", row.Text("status"));
                 TaskState? state = row.Text("state") is { } text ? Wire.Required<TaskState>("cancel", text) : null;
                 if (_shared.Logger.IsEnabled(LogLevel.Information))

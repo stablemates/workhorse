@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
+from functools import cache
 from typing import Literal, Protocol, cast
 
 import psycopg
@@ -210,6 +211,19 @@ _heartbeat_round_failures = _counter(
     "Worker heartbeat rounds that failed before PostgreSQL gave a verdict",
     "{round}",
 )
+# The cancellation counter is created on its first count, inside the guard of
+# record_cancellation, so a meter that rejects it cannot stop the import of the SDK. A test can set
+# _cancellations to replace it.
+_cancellations: _Counter | None = None
+
+
+@cache
+def _cancellation_counter() -> _Counter:
+    return _counter(
+        "workhorse.tasks.cancellation", "Task cancellation requests by durable result", "{request}"
+    )
+
+
 _schedules_fired = _counter(
     "workhorse.schedule.fired", "Recurring schedule occurrences durably fired", "{occurrence}"
 )
@@ -380,6 +394,17 @@ def record_failure(task: TaskRecord, outcome: str) -> None:
 
 def record_retry(task: TaskRecord) -> None:
     _retried.add(1, task_metric_attributes(task))
+
+
+def record_cancellation(status: str) -> None:
+    """Count one ``cancel_v1`` result by its durable status.
+
+    The count observes a cancellation that PostgreSQL already made durable. If the meter raises,
+    the cancel result must not change, so the failure stops here and the count is lost.
+    """
+    with suppress(Exception):
+        counter = _cancellations if _cancellations is not None else _cancellation_counter()
+        counter.add(1, {"workhorse.cancellation.status": status})
 
 
 def record_heartbeat_failure(status: str) -> None:

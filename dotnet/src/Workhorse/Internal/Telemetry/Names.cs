@@ -33,6 +33,7 @@ internal static class Names
     internal const string SpanRecovery = "workhorse.recovery";
 
     internal const string AttemptOutcome = "workhorse.attempt.outcome";
+    internal const string CancellationStatus = "workhorse.cancellation.status";
     internal const string ClaimResult = "workhorse.claim.result";
     internal const string CompleteAccepted = "workhorse.complete.accepted";
     internal const string EnqueueCount = "workhorse.enqueue.count";

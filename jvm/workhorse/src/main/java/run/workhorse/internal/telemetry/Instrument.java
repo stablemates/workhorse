@@ -39,6 +39,11 @@ public enum Instrument {
       Kind.COUNTER,
       "{round}",
       "Worker heartbeat rounds that failed before PostgreSQL gave a verdict"),
+  TASKS_CANCELLATION(
+      "workhorse.tasks.cancellation",
+      Kind.COUNTER,
+      "{request}",
+      "Task cancellation requests by durable result"),
   SCHEDULE_FIRED(
       "workhorse.schedule.fired",
       Kind.COUNTER,

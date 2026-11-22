@@ -512,7 +512,8 @@ impl<E: Executor> Backend<E> {
         let rows = self.rows(sql::CANCEL_V1, &[&id, &actor, &reason]).await?;
         let row = exactly_one(&rows, "cancel_v1")?;
         let status: String = column(row, "status")?;
-        // The queue writes this record, so a dashboard action writes it too.
+        // The queue counts and logs this result, so a dashboard action does too.
+        crate::telemetry::record_cancellation(&status);
         crate::queue::log_cancellation_processed(
             id,
             column::<Option<String>>(row, "state")?.as_deref(),

@@ -24,6 +24,7 @@ module Stablemates
           "Worker heartbeats rejected by PostgreSQL ownership or timing checks", "{heartbeat}"],
         "workhorse.worker.heartbeat.round_failure" => [:counter,
           "Worker heartbeat rounds that failed before PostgreSQL gave a verdict", "{round}"],
+        "workhorse.tasks.cancellation" => [:counter, "Task cancellation requests by durable result", "{request}"],
         "workhorse.schedule.fired" => [:counter, "Recurring schedule occurrences durably fired", "{occurrence}"],
         "workhorse.maintenance.runs" => [:counter, "Workhorse maintenance phase executions", "{run}"],
         "workhorse.maintenance.rows" => [:counter, "Rows affected by Workhorse maintenance phases", "{row}"],
@@ -138,6 +139,15 @@ module Stablemates
 
       def record(name, amount, attributes = {})
         instrument(name)&.record(amount, attributes: attributes)
+      end
+
+      # Counts one cancel_v1 result by its durable status. The queue and the dashboard backend call
+      # this after PostgreSQL made the cancellation durable, so an error of the meter does not
+      # change the cancel result.
+      def record_cancellation(status)
+        add("workhorse.tasks.cancellation", 1, {"workhorse.cancellation.status" => status.to_s})
+      rescue
+        nil
       end
 
       # Counts one heartbeat round that failed before PostgreSQL returned a status for its leases.
