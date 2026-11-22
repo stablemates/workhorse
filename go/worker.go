@@ -3981,29 +3981,35 @@ func (worker *Worker) validateResultContract(
 // The release runs under a handler span and writes the records of an execution around it, as the
 // TypeScript worker does: workhorse.handler.started, workhorse.handler.missing, the execution record
 // of the release outcome, and workhorse.handler.finished.
+//
+// A lost lease ends this activation only, as on the execution path and in TypeScript. Lease
+// recovery owns the task, so release records lease_lost and returns no error, and the worker
+// continues to claim. Another error of the release settled nothing, so it stays an error of the run.
 func (worker *Worker) release(ctx context.Context, executor Executor, task ClaimedTask) (resultError error) {
 	startedAt := time.Now()
 	ctx, span := startHandlerSpan(ctx, task)
 	worker.logHandlerStarted(ctx, task)
 	outcome := handlerOutcomeUnknown
 	defer func() {
-		// A lost lease is a known outcome, as on the execution path. A refused acknowledgement of a
-		// cancel_requested release also lost the lease, so its outcome is lease_lost, not canceled.
-		if errors.Is(resultError, ErrStaleLease) {
-			outcome = handlerOutcomeLeaseLost
-		}
 		finishHandlerSpan(ctx, span, outcome, resultError)
 		duration := time.Since(startedAt)
-		settled := resultError == nil || errors.Is(resultError, ErrStaleLease)
+		settled := resultError == nil
 		// A release that fails, also its cancellation acknowledgement, has no outcome. Its
 		// duration records unknown, and the executions counter does not count it.
-		// A stale answer already showed a lost lease, which needs no write, so that outcome stays.
 		metricOutcome := outcome
-		if !settled && outcome != handlerOutcomeLeaseLost {
+		if !settled {
 			metricOutcome = handlerOutcomeUnknown
 		}
 		worker.metrics.recordHandler(ctx, task, metricOutcome, duration)
 		worker.logHandlerFinished(ctx, task, outcome, settled, duration)
+	}()
+	// This defer runs before the telemetry defer. A refused acknowledgement of a cancel_requested
+	// release also lost the lease, so its outcome is lease_lost, not canceled.
+	defer func() {
+		if errors.Is(resultError, ErrStaleLease) {
+			outcome = handlerOutcomeLeaseLost
+			resultError = nil
+		}
 	}()
 	logWorkerEvent(
 		ctx,

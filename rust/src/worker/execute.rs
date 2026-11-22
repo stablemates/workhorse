@@ -272,17 +272,20 @@ impl Inner {
 
     /// Returns a claimed task that has no handler to its queue without an attempt. The worker
     /// writes the records of an execution around the release, as the TypeScript worker does.
+    ///
+    /// A lost lease ends this activation only, as on the execution path and in TypeScript. Lease
+    /// recovery owns the task, so the release records `lease_lost` and returns `Ok`, and the
+    /// worker continues to claim. Another error of the release settled nothing, so it stays an
+    /// error of the run.
     pub(super) async fn release_missing(&self, task: &ClaimedTask) -> Result<(), Error> {
         let started = Instant::now();
         let span = telemetry::handler_span(task);
         self.log_handler_started(task, &span);
-        let released = self.release(task, true).instrument(span.clone()).await;
-        // A lost lease is a known outcome. The caller still gets the error, as before.
-        let outcome = match &released {
-            Ok(outcome) => Some(*outcome),
-            Err(Error::LeaseLost { .. }) => Some("lease_lost"),
-            Err(_) => None,
+        let released = match self.release(task, true).instrument(span.clone()).await {
+            Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
+            other => other,
         };
+        let outcome = released.as_ref().ok().copied();
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         // The release is the handler activation, so it records the handler metrics, as the
         // TypeScript worker does.

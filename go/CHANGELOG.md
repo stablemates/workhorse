@@ -10,6 +10,20 @@ adds.
 
 ## Unreleased
 
+### A lost lease of a release does not stop the worker
+
+A worker claims a task that it has no handler for, and it releases the task through
+`release_owned_v1`. The release loses its lease: `release_owned_v1` answers `stale` and the
+reconciliation finds no cause, or it answers `cancel_requested` and PostgreSQL refuses the
+acknowledgement. TypeScript, Python, Ruby, the JVM, and .NET record the outcome `lease_lost` for
+that activation and continue to claim. The Go worker recorded the same outcome, but `release`
+returned the lost lease, so `Run` and `RunOnce` ended with it.
+
+Now the lost lease ends that activation only, and the worker continues. The handler metrics, the
+`workhorse.task.execution_finished` record, and the span outcome `stale` do not change. The handler
+span of the release no longer gets the error status for a lost lease, as on the execution path and
+in TypeScript. A release that fails in PostgreSQL is still an error of the run.
+
 ### The queue counts each cancellation request
 
 An operator charts `workhorse.tasks.cancellation` by `workhorse.cancellation.status` to see how many

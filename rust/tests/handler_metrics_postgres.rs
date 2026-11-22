@@ -4,8 +4,9 @@
 //! The TypeScript worker records the duration of an attempt without an outcome with the outcome
 //! `unknown`, and `workhorse.handler.executions` does not count it. It records the metrics of a
 //! release with the outcome `released`. A cancellation that a heartbeat delivers and that
-//! PostgreSQL refuses to acknowledge has no outcome. This file is its own test binary with one
-//! test, so no other test changes the global meter provider while it runs.
+//! PostgreSQL refuses to acknowledge has no outcome. A release whose cancellation acknowledgement
+//! PostgreSQL refuses lost its lease, so its outcome is `lease_lost`. This file is its own test
+//! binary with one test, so no other test changes the global meter provider while it runs.
 #![cfg(feature = "opentelemetry")]
 
 mod support;
@@ -91,7 +92,30 @@ async fn the_handler_metrics_of_a_failed_settlement_and_of_a_release() {
     let worked = tokio::time::timeout(Duration::from_secs(30), canceling.run_once()).await.unwrap();
     assert!(worked.unwrap(), "the worker claimed no task");
 
+    // release_owned_v1 answers cancel_requested, and acknowledge_cancel_v1 still refuses it. The
+    // release lost its lease, so its outcome is lease_lost, and the pass ends without an error, as
+    // in TypeScript.
+    client
+        .batch_execute(
+            r"
+            CREATE OR REPLACE FUNCTION workhorse.release_owned_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint)
+              RETURNS text LANGUAGE sql AS $body$ SELECT 'cancel_requested'::text $body$;
+            ",
+        )
+        .await
+        .unwrap();
+    let lost_queue = "rust-release-lease-lost-metrics";
+    let lost = Queue::connect(database.url(), lost_queue).await.unwrap();
+    lost.enqueue("missing", &json!({}), EnqueueOptions::default()).await.unwrap();
+    let losing = worker_on(database.url(), lost_queue);
+    losing.handle("other", |_: Value, _| async { Ok(json!("done")) });
+    let worked = tokio::time::timeout(Duration::from_secs(30), losing.run_once()).await.unwrap();
+    assert!(!worked.unwrap(), "the release made progress");
+
     meter_provider.force_flush().unwrap();
+    assert_eq!(outcomes(&metrics, "workhorse.handler.executions", lost_queue), vec!["lease_lost"]);
+    assert_eq!(outcomes(&metrics, "workhorse.handler.duration", lost_queue), vec!["lease_lost"]);
     assert_eq!(
         outcomes(&metrics, "workhorse.handler.executions", refused_queue),
         Vec::<String>::new()
