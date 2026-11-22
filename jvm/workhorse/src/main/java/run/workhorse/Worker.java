@@ -3031,7 +3031,12 @@ public final class Worker implements AutoCloseable {
       }
     } catch (RuntimeException | Error error) {
       settlementError = error;
-      telemetry.handlerError(error.getClass().getName());
+      // As in TypeScript, a lost lease is an outcome of the attempt, not an error of the span. Only
+      // a handler error, which the failure records before fail_v1, or a failed statement gives the
+      // span the error status.
+      if (!(error instanceof LeaseLostException)) {
+        telemetry.handlerError(error.getClass().getName());
+      }
       throw error;
     } finally {
       Outcome outcome = arbiter.reportedOutcome();

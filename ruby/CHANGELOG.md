@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### A lost lease is not an error of the handler span
+
+A heartbeat delivers a cancellation, and PostgreSQL then refuses `acknowledge_cancel_v1`. Or the
+lease is lost while no handler error came first. The worker gave the `workhorse.handler` span the
+error status with the type `LeaseLostError`. A lost lease alone now gives the span no error status
+and no exception event, as in TypeScript and .NET.
+
+A handler error keeps the error status, also when PostgreSQL then reports a lost lease. Before,
+the span then named `LeaseLostError`, not the error of the handler. A failed statement also keeps
+the error status. As in TypeScript, the span records the handler error first and the error of a
+failed `fail_v1` second. Before, the order was the reverse.
+
 ### The SDK records into a meter provider that the application replaces
 
 The SDK kept each instrument from its first measurement for the life of the process. The default

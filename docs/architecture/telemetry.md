@@ -595,6 +595,50 @@ A worker probes an unfamiliar queue with a fast claim. If the queue is on the fu
 Workhorse emits at most eight attributes on one span. It exports `TRACE_ATTRIBUTE_COUNT_LIMIT = 8`
 so that SDK span limits can match it.
 
+#### Handler span status
+
+The `workhorse.handler` span gets the error status and an `exception` event in these cases only:
+
+1. The handler fails, and the worker sends the failure to `fail_v1`. The worker records the handler
+   error on the span before the write. Thus the span keeps the error status also when PostgreSQL
+   then reports a lost lease, or when the write fails.
+2. A statement of the settlement fails, such as `fail_v1`, `release_owned_v1`,
+   `acknowledge_cancel_v1`, or `expire_owned_v1`.
+3. In Python, Ruby, and the JVM, the handler raises or throws an error that the worker does not
+   settle, and the run ends with it: a `BaseException` that is not an `Exception` in Python, an
+   `Exception` that is not a `StandardError` in Ruby, or a `java.lang.Error` in the JVM.
+
+If cases 1 and 2 both occur, the TypeScript, Python, Go, and Ruby spans record the handler error
+first and the error of the statement second. The JVM and .NET spans record only the handler error.
+
+A lost lease is an outcome of the attempt, not an error. If no handler error came first, the span
+then has the outcome `stale` and no error status. This rule applies to each of these cases:
+
+- A heartbeat answer or the lease watchdog ends the lease while the handler runs.
+- A heartbeat delivers a cancellation, and PostgreSQL refuses `acknowledge_cancel_v1`.
+- `fail_v1` or `release_owned_v1` answers `cancel_requested`, and PostgreSQL refuses the
+  acknowledgement.
+- `fail_v1` or `release_owned_v1` answers `stale`, and the reconciliation settles no cause.
+
+The worker raises or throws its lost-lease error, such as `StaleLeaseError` in Python,
+`LeaseLostError` in Ruby, or `LeaseLostException` in the JVM and .NET. That error is not a span
+error. A handler that stops for a cancellation, a deadline, an attempt timeout, a durable wait, or
+the shutdown also gives no error status.
+
+The TypeScript, Python, Go, Ruby, JVM, and .NET workers follow this rule, also for a task without
+a handler. These differences stay:
+
+- TypeScript sends a refused completion to `fail_v1` as an error of the handler, with the text
+  `Completion rejected because the lease is stale or expired`. It does not do this when PostgreSQL
+  accepts a cancellation acknowledgement first, or when the attempt already has an outcome, for
+  example a cancellation or `lease_expired` from a late heartbeat answer. In each other case, its span has the error
+  status after a refused completion. The Python, Go, Ruby, JVM, and .NET workers reconcile a refused
+  completion through `expire_owned_v1`, as [the lifecycle](lifecycle.md) states, so a lost lease
+  after a refused completion gives no error status.
+- The Rust worker sets the error status from the outcome, as [Rust spans](#rust-spans) states.
+  Thus a lost lease, a cancellation, and a release give the error status, and a failed statement
+  does not.
+
 #### Go spans
 
 The Go worker emits the `workhorse.handler` consumer span and the `workhorse.retry` span. It reads
@@ -658,7 +702,9 @@ The Rust worker emits the `workhorse.handler` consumer span and the `workhorse.r
 `opentelemetry` feature, a `tracing-opentelemetry` layer that the application installs exports them.
 The handler span carries `workhorse.queue.name`, `workhorse.task.id`, `workhorse.task.type`, and
 `workhorse.task.attempt`. If the outcome is not `succeeded` or `unknown`, the worker sets the span
-status to error.
+status to error. This rule differs from the rule of the other workers, which
+[Handler span status](#handler-span-status) states. The span of a task without a handler gets no
+status.
 
 The `workhorse.retry` span is a child of the handler span. It carries `workhorse.task.id`,
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.retry.outcome`, as the TypeScript
@@ -758,7 +804,8 @@ recovery settles the task later:
 | The statement fails   | `unknown`    | `unknown`                    | not counted                    |
 
 The table describes the TypeScript, Python, Go, Ruby, JVM, and .NET workers, and the metrics of the
-Rust worker. When the statement fails, the TypeScript span gets no outcome, as after any failed
+Rust worker. A refused acknowledgement gives the span no error status, as
+[Handler span status](#handler-span-status) states. When the statement fails, the TypeScript span gets no outcome, as after any failed
 settlement, and the Python, Go, Ruby, JVM, and .NET spans get `unknown`. The Rust handler span
 carries no outcome, as [Rust spans](#rust-spans) states. The table covers the direct settlement of a
 delivered cancellation. During the reconciliation of a refused settlement, a refused acknowledgement

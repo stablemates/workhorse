@@ -3931,7 +3931,6 @@ class Worker:
                 )
             except BaseException as error:
                 raised = error
-                _record_span_error(handler_span, error.__class__.__name__)
                 raise
             finally:
                 duration_ms = (monotonic() - started_at) * 1_000
@@ -3950,8 +3949,13 @@ class Worker:
                     outcome = "unknown"
                     handler_outcome = "stale" if isinstance(raised, StaleLeaseError) else "unknown"
                 handler_span.set_attribute("workhorse.handler.outcome", handler_outcome)
+                # As in TypeScript, the handler error comes first, because the worker records it
+                # before fail_v1. A failed statement comes after it. A lost lease is an outcome of
+                # the attempt, not an error of the span.
                 if span_errors:
                     _record_span_error(handler_span, span_errors[0])
+                if raised is not None and not isinstance(raised, StaleLeaseError):
+                    _record_span_error(handler_span, raised.__class__.__name__)
                 _record_handler_execution(task, outcome, duration_ms)
                 # As in TypeScript, the execution record comes first, at the settlement, and
                 # handler.finished comes last. An attempt whose settlement failed has no outcome.
@@ -4249,6 +4253,11 @@ class Worker:
                 # returned (ADR 0117).
                 self._release_after_shutdown(task, arbiter, span_outcome)
                 return
+            # As in TypeScript, the span records the handler error before fail_v1, so it keeps the
+            # error also when PostgreSQL then reports a lost lease or the write fails.
+            span_errors.append(
+                _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
+            )
             try:
                 failure_outcome, failure_state = self._settle_failure(task, error)
             except StaleLeaseError:
@@ -4256,9 +4265,6 @@ class Worker:
                 arbiter.submit("lease_expired")
                 raise
             span_outcome["value"] = failure_state
-            span_errors.append(
-                _REDACTED_ERROR_NAME if task.redact_error_details else type(error).__name__
-            )
             arbiter.submit(failure_outcome)
             return
         if finish_ownership_lifecycle():

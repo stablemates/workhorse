@@ -539,15 +539,28 @@ def _move_fence(database_url: str, task_id: str) -> None:
         )
 
 
-@pytest.mark.parametrize("settlement", ["fail", "release", "unacknowledged-cancel"])
+def _exception_types(span: Any) -> list[object]:
+    return [
+        (event.attributes or {}).get("exception.type")
+        for event in span.events
+        if event.name == "exception"
+    ]
+
+
+@pytest.mark.parametrize(
+    "settlement",
+    ["fail", "release", "unacknowledged-cancel", "heartbeat", "unacknowledged-release"],
+)
 def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
     database_url: str, monkeypatch: pytest.MonkeyPatch, settlement: str
 ) -> None:
     """A stale answer from fail_v1 or release_owned_v1 reports lease_lost, not unknown (SM-1863).
 
-    The fence moves before the write, or fail_v1 answers cancel_requested and the acknowledgement
-    fails. The worker settles nothing, and lease recovery owns the task. The span, the executions
-    metric, and the execution_finished log state that lost lease.
+    The fence moves before the write or while the heartbeat renews, or fail_v1 or release_owned_v1
+    answers cancel_requested and the acknowledgement is refused. The worker settles nothing, and
+    lease recovery owns the task. The span, the executions metric, and the execution_finished log
+    state that lost lease. As in TypeScript, a lost lease does not give the span the error status.
+    Only a handler error does, and the span keeps that error also when the lease is lost after it.
     """
     SPAN_EXPORTER.clear()
     LOG_EXPORTER.clear()
@@ -576,6 +589,36 @@ def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
 
         worker.handle(task_type, cancel_then_fail)
         monkeypatch.setattr(worker, "_acknowledge_cancel", lambda _task: False)
+    elif settlement == "heartbeat":
+        worker = Worker(
+            worker_pool,
+            queue=queue_name,
+            worker_id=f"python-stale-{settlement}",
+            lease_ms=3_000,
+            heartbeat_ms=100,
+        )
+
+        def lose_lease(_payload: object, context: HandlerContext) -> None:
+            _move_fence(database_url, task_id)
+            eventually(
+                lambda: context.cancellation.cancelled,
+                "the heartbeat never reported the lost lease",
+                timeout_s=10,
+            )
+
+        worker.handle(task_type, lose_lease)
+    elif settlement == "unacknowledged-release":
+        # No handler is registered. release_owned_v1 answers cancel_requested, and PostgreSQL
+        # refuses the acknowledgement.
+        send_release = workhorse.worker._fenced_write_rows
+
+        def release_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+            if statement is workhorse.worker._STATEMENTS.release_owned:
+                return [{"status": "cancel_requested"}]
+            return send_release(executor, statement, parameters)
+
+        monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", release_rows)
+        monkeypatch.setattr(worker, "_acknowledge_cancel", lambda _task: False)
     else:
         # No handler is registered, so the worker releases the claim through release_owned_v1.
         send = workhorse.worker._fenced_write_rows
@@ -594,6 +637,12 @@ def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
         if span.name == "workhorse.handler" and span.attributes["workhorse.task.id"] == task_id
     )
     assert handler_span.attributes["workhorse.handler.outcome"] == "stale"
+    if settlement in {"fail", "unacknowledged-cancel"}:
+        assert handler_span.status.status_code is StatusCode.ERROR
+        assert _exception_types(handler_span) == ["RuntimeError"]
+    else:
+        assert handler_span.status.status_code is StatusCode.UNSET
+        assert _exception_types(handler_span) == []
     executions = _counter_values("workhorse.handler.executions")
     added = {
         dict(attributes)["workhorse.handler.outcome"]: value - executions_before.get(attributes, 0)
@@ -609,6 +658,41 @@ def test_a_stale_settlement_reports_a_lost_lease_as_the_handler_outcome(
         and record.log_record.attributes["workhorse.task.id"] == task_id
     ]
     assert finished == ["lease_lost"]
+
+
+def test_a_failed_failure_write_records_the_handler_error_first(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TypeScript records the handler error before fail_v1, and then the error of the statement."""
+    SPAN_EXPORTER.clear()
+    queue_name = _queue_name("failed-failure-write")
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, queue_name).enqueue("failure.write", {})
+        connection.commit()
+    send = workhorse.worker._fenced_write_rows
+
+    def fenced_write_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+        if statement is workhorse.worker._STATEMENTS.fail:
+            raise psycopg.OperationalError("the failure write failed")
+        return send(executor, statement, parameters)
+
+    monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", fenced_write_rows)
+
+    def fail(_payload: object, _context: HandlerContext) -> None:
+        raise RuntimeError("the handler failed")
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id="python-failed-failure-write")
+    worker.handle("failure.write", fail)
+    with suppress(psycopg.OperationalError):
+        worker.run_once()
+
+    [handler_span] = [
+        span
+        for span in SPAN_EXPORTER.get_finished_spans()
+        if span.name == "workhorse.handler" and span.attributes["workhorse.task.id"] == task_id
+    ]
+    assert handler_span.status.status_code is StatusCode.ERROR
+    assert _exception_types(handler_span) == ["RuntimeError", "OperationalError"]
 
 
 # The lapsed-lease cases of the Go test worker_refused_completion_outcome_test.go: the boundary that
@@ -1764,7 +1848,8 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
     the worker settled nothing, so it writes no task.execution_finished record, and
     workhorse.handler.executions does not count the attempt. The handler span gets the outcome
     canceled only after PostgreSQL accepts the acknowledgement. A failed acknowledgement gives it
-    the outcome unknown and the error status, and a refused one gives it the outcome stale.
+    the outcome unknown and the error status. A refused one gives it the outcome stale and, as in
+    TypeScript, no error status, because the handler stopped for the cancellation.
     """
     LOG_EXPORTER.clear()
     SPAN_EXPORTER.clear()
@@ -1830,6 +1915,8 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
         assert handler_span.status.status_code is StatusCode.ERROR
     else:
         assert handler_span.attributes["workhorse.handler.outcome"] == "stale"
+        assert handler_span.status.status_code is StatusCode.UNSET
+        assert _exception_types(handler_span) == []
 
 
 def test_the_execution_record_comes_before_the_handler_record(database_url: str) -> None:

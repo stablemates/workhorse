@@ -7,7 +7,7 @@ require "opentelemetry-metrics-api"
 # Records every span and measurement the worker emits. Examples share the global providers, so
 # each example reads only what names its own queue or task type.
 module RecordedTelemetry
-  Span = Struct.new(:name, :kind, :attributes, :parent, :status, :finished)
+  Span = Struct.new(:name, :kind, :attributes, :parent, :status, :finished, :exceptions)
 
   class Tracer < OpenTelemetry::Trace::Tracer
     def start_span(name, with_parent: nil, attributes: nil, kind: nil, **)
@@ -15,7 +15,7 @@ module RecordedTelemetry
       # A root span needs a real trace ID; a nil one reads as valid and breaks trace injection.
       trace_id = parent.valid? ? parent.trace_id : OpenTelemetry::Trace.generate_trace_id
       context = OpenTelemetry::Trace::SpanContext.new(trace_id: trace_id)
-      RecordedSpan.new(Span.new(name, kind, (attributes || {}).dup, parent, nil, false), context)
+      RecordedSpan.new(Span.new(name, kind, (attributes || {}).dup, parent, nil, false, []), context)
     end
   end
 
@@ -33,7 +33,10 @@ module RecordedTelemetry
       self
     end
 
-    def add_event(*, **) = self
+    def add_event(name, attributes: nil, **)
+      @record.exceptions << attributes&.fetch("exception.type", nil) if name == "exception"
+      self
+    end
 
     def status=(status)
       @record.status = status
@@ -755,6 +758,7 @@ RSpec.describe "Worker runtime against PostgreSQL" do
 
         expect(state(task_id)).to eq(settled)
         expect(handler_outcomes(task_id)).to eq([span_outcome, [metric_outcome]])
+        expect(span_error(task_id)).to eq([true, ["RuntimeError"]])
       end
 
       it "reports #{metric_outcome} for a stale shutdown release with #{boundary || "no due boundary"}" do
@@ -778,6 +782,7 @@ RSpec.describe "Worker runtime against PostgreSQL" do
 
         expect(state(task_id)).to eq(settled)
         expect(handler_outcomes(task_id)).to eq([span_outcome, [metric_outcome]])
+        expect(span_error(task_id)).to eq([false, []])
       end
     end
 
@@ -802,7 +807,75 @@ RSpec.describe "Worker runtime against PostgreSQL" do
       end
 
       expect(handler_outcomes(task_id)).to eq(["stale", ["lease_lost"]])
+      expect(span_error(task_id)).to eq([true, ["RuntimeError"]])
     end
+  end
+
+  # Whether the handler span of +task_id+ has the error status, and the types of its exception events.
+  # As in TypeScript, only a handler error or a failed statement gives the span the error status. A
+  # lost lease does not, also when it comes after a handler error.
+  def span_error(task_id)
+    span = RecordedTelemetry.spans.find do |recorded|
+      recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
+    end
+    [span.status&.code == OpenTelemetry::Trace::Status::ERROR, span.exceptions]
+  end
+
+  # TypeScript records the handler error before fail_v1, and then the error of the statement.
+  it "records the handler error before the error of a failed failure write" do
+    task_id = queue.enqueue("failure-write", {}).task_id
+    subject = worker.handle("failure-write") { raise "the handler failed" }
+    allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
+      raise PG::ConnectionBad, "the failure write failed" if sql == W::SqlCatalogue::FAIL_V2
+
+      original.call(sql, *arguments)
+    end
+    begin
+      subject.run_once
+    rescue PG::ConnectionBad
+      nil
+    end
+
+    expect(span_error(task_id)).to eq([true, ["RuntimeError", "PG::ConnectionBad"]])
+  end
+
+  # An ordinary lost lease: the fence moves while the handler runs, the heartbeat reports it, and the
+  # handler returns. As in TypeScript, the span gets stale and no error status.
+  it "gives the handler span no error status after a lost lease" do
+    task_id = queue.enqueue("lose-lease", {}).task_id
+    subject = worker(lease: 10, heartbeat: 0.1).handle("lose-lease") do |_payload, context|
+      @connection.exec_params("UPDATE workhorse.task_runtime SET fence_token = fence_token + 1 WHERE task_id = $1",
+        [task_id])
+      wait_until { context.cancellation.cancelled? }
+      nil
+    end
+    subject.run_once
+
+    span = RecordedTelemetry.spans.find do |recorded|
+      recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
+    end
+    expect(span.attributes["workhorse.handler.outcome"]).to eq("stale")
+    expect(span_error(task_id)).to eq([false, []])
+  end
+
+  # No handler is registered, release_owned_v1 answers cancel_requested, and PostgreSQL refuses the
+  # acknowledgement. The worker settled nothing, so the span gets stale and no error status.
+  it "gives the handler span no error status after a refused acknowledgement of a release" do
+    task_id = queue.enqueue("unhandled", {}).task_id
+    subject = worker.handle("other") { nil }
+    allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
+      next [{"status" => "cancel_requested"}] if sql == W::SqlCatalogue::RELEASE_OWNED_V1
+      next [{"accepted" => "f"}] if sql == W::SqlCatalogue::ACKNOWLEDGE_CANCEL_V1
+
+      original.call(sql, *arguments)
+    end
+    subject.run_once
+
+    span = RecordedTelemetry.spans.find do |recorded|
+      recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
+    end
+    expect(span.attributes["workhorse.handler.outcome"]).to eq("stale")
+    expect(span_error(task_id)).to eq([false, []])
   end
 
   # A heartbeat delivers the cancellation, and acknowledge_cancel_v1 fails or PostgreSQL refuses it.
@@ -832,6 +905,9 @@ RSpec.describe "Worker runtime against PostgreSQL" do
         recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
       end
       expect(span.attributes["workhorse.handler.outcome"]).to eq(span_outcome)
+      # The handler stopped for the cancellation, so only a failed statement is an error, as in
+      # TypeScript.
+      expect(span_error(task_id)).to eq((acknowledgement == "fails") ? [true, ["PG::ConnectionBad"]] : [false, []])
     end
   end
 
