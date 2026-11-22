@@ -157,12 +157,26 @@ The Go worker emits these instruments from the table:
 - all five `workhorse.handler.*` instruments
 - `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
+The worker binds these instruments to the global meter provider when it is built. If the process
+registered no meter provider, the worker builds no instrument and records no metric. If the meter
+provider panics while the worker builds its instruments, the worker records no metric, and the
+worker is still built.
+
 `Queue.Cancel` and the dashboard backend also record `workhorse.tasks.cancellation`, through
-`go/internal/cancellationmetric`. A worker binds its instruments when it is built, but a queue has no
-such moment that each caller passes after it registers a meter provider. Thus the package reads the
-global meter provider on each record. It records nothing while the global provider is still the
-delegate that OpenTelemetry installs at start. The package checks the type of that delegate, so a
-provider that another package registered before the Workhorse packages started also counts.
+`go/internal/cancellationmetric`. A queue has no moment that each caller passes after it registers a
+meter provider. Thus the package reads the global meter provider on each record. It records nothing
+if the process registered no meter provider.
+
+The worker and `go/internal/cancellationmetric` use the same check in `go/internal/otelglobal`.
+Before the first registration, the global provider is a delegate that OpenTelemetry installs at
+start. The check uses the type of that delegate, `*global.meterProvider`, not the provider at
+package start. Thus a provider that another package registered before the Workhorse packages
+started also gets the metrics.
+
+After the first registration, the delegate sends its records to that provider. A test cleanup can
+set the delegate back as the global provider. Thus the check also asks the delegate for a meter. The
+delegate gives its own `*global.meter` type only while no provider is registered, and then the
+check finds no provider. A worker that was built before the cleanup keeps its instruments.
 
 `Admin.Redrive` and `Admin.RedriveMany` record `workhorse.tasks.redrive` in the same way, through
 `go/internal/redrivemetric`. The dashboard calls the admin, so a dashboard redrive counts once.
@@ -583,8 +597,12 @@ so that SDK span limits can match it.
 
 #### Go spans
 
-The Go worker emits the `workhorse.handler` consumer span and the `workhorse.retry` span. The
-handler span carries these attributes:
+The Go worker emits the `workhorse.handler` consumer span and the `workhorse.retry` span. It reads
+the global tracer provider each time it starts one of them. If the process registered no tracer
+provider, the worker starts no span, and the handler gets the context of the worker without a new
+span. `go/internal/otelglobal` makes this check for the `*global.tracerProvider` delegate as it does
+for the meter provider. Thus a provider that another package registered before the Workhorse
+package started also gets the spans. The handler span carries these attributes:
 
 - `workhorse.queue.name`
 - `workhorse.task.id`

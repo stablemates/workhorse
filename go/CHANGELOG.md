@@ -10,6 +10,28 @@ adds.
 
 ## Unreleased
 
+### A provider that another package registers first gets the worker telemetry
+
+An application can register its OpenTelemetry providers in the `init` function of a package that
+starts before the Workhorse package. The Go worker kept the global providers of package start. It
+compared the current provider with them to find a registered provider. In this case the kept
+provider was the registered provider. Thus the worker recorded no metric and started no
+`workhorse.handler` or `workhorse.retry` span.
+
+The worker now checks the type of the delegate that OpenTelemetry installs at start. It also asks
+that delegate if it sends its records to a registered provider. Thus a provider that is registered
+before or after the Workhorse package starts gets the worker telemetry. The worker binds its
+metrics when it is built, and it reads the tracer provider for each span. If the process registered
+no provider, the worker still builds no instrument and starts no span. The cancellation count uses
+the same check.
+
+Without a tracer provider, the worker gave the span of the caller to the handler as its handler
+span. It then set Workhorse attributes on that span and ended it. The worker now gives a span that
+records nothing.
+
+If the meter provider panics while the worker builds its instruments, the worker now records no
+metric. Before, the panic left `NewWorker`.
+
 ### A lost lease of a release does not stop the worker
 
 A worker claims a task that it has no handler for, and it releases the task through
