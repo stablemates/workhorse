@@ -113,3 +113,58 @@ describe("handler span after a delivered cancellation", () => {
     }
   }
 });
+
+// complete_v1 refuses the result, and the worker reconciles. A heartbeat round delivered the
+// cancellation after the handler returned, and acknowledge_cancel_v1 refuses it. The refusal proves
+// that the lease is lost, so the attempt reports lease_lost, as each reconciliation does.
+describe("handler span after a refused completion and a late cancellation", () => {
+  let unregister: (() => void) | undefined;
+  afterEach(() => unregister?.());
+
+  it("reports lease_lost when PostgreSQL refuses the acknowledgement", async () => {
+    const telemetry = recordTelemetry();
+    unregister = telemetry.unregister;
+    let returned = false;
+    let delivered!: () => void;
+    const cancellationDelivered = new Promise<void>((resolve) => {
+      delivered = resolve;
+    });
+    let acknowledgements = 0;
+    const queue = {
+      defaultQueue: "default",
+      claim: async () => task,
+      complete: async () => {
+        await cancellationDelivered;
+        return false;
+      },
+      fail: async () => "stale",
+      expireOwned: async () => "stale",
+      heartbeatStatus: async () => {
+        if (!returned) return "renewed";
+        delivered();
+        return "cancel_requested";
+      },
+      acknowledgeCancel: async () => {
+        acknowledgements += 1;
+        return false;
+      },
+      tick: async () => [],
+      runMaintenance: async () => [],
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, {
+      registryIntervalMs: 0,
+      heartbeatMs: 50,
+      leaseMs: 3_000,
+    }).handle("cancellation-span", async () => {
+      returned = true;
+      return null;
+    });
+
+    await expect(worker.runOnce()).resolves.toBe(true);
+
+    expect(acknowledgements).toBe(1);
+    expect(telemetry.recorded.handlerSpan["workhorse.handler.outcome"]).toBe("stale");
+    expect(telemetry.recorded.durationOutcomes).toEqual(["lease_lost"]);
+    expect(telemetry.recorded.executionRecords).toBe(1);
+  });
+});

@@ -1948,6 +1948,14 @@ export class Worker {
           span.setAttribute("workhorse.handler.outcome", "canceled");
           return;
         }
+        if (attempt.arbiter.is("cancelled")) {
+          // A heartbeat delivered the cancellation after the handler returned, and PostgreSQL
+          // refused its acknowledgement. During this reconciliation, the refusal proves that the
+          // lease is lost, so the attempt reports lease_lost.
+          span.setAttribute("workhorse.handler.outcome", "stale");
+          attempt.recordExecution("lease_lost");
+          return;
+        }
         await this.settleFailure(
           task,
           span,

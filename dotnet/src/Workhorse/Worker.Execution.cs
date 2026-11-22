@@ -175,7 +175,7 @@ public sealed partial class Worker
         catch (Exception error)
         {
             // Every handler exception settles the attempt. None leaves RunAsync (ADR 0107).
-            if (await FinishOwnershipAsync(claimed, ownership, arbiter, token).ConfigureAwait(false))
+            if (await FinishOwnershipAsync(claimed, ownership, arbiter, reconciling: false, token).ConfigureAwait(false))
             {
                 // A handler that threw another exception after a durable call suspended it still suspends.
                 if (arbiter.Suspended && error is not SuspensionException)
@@ -214,7 +214,7 @@ public sealed partial class Worker
             await ownership.ReleaseAsync().ConfigureAwait(false);
         }
 
-        if (await FinishOwnershipAsync(claimed, ownership, arbiter, token).ConfigureAwait(false))
+        if (await FinishOwnershipAsync(claimed, ownership, arbiter, reconciling: false, token).ConfigureAwait(false))
         {
             // A handler that returned after a durable call suspended it still suspends (ADR 0107).
             if (arbiter.Suspended)
@@ -372,18 +372,9 @@ public sealed partial class Worker
         await ownership.Settlement.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            try
+            if (arbiter.Current is not null && await FinishOwnershipAsync(task, ownership, arbiter, reconciling: true, cancellationToken).ConfigureAwait(false))
             {
-                if (arbiter.Current is not null && await FinishOwnershipAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false))
-                {
-                    return;
-                }
-            }
-            catch (LeaseLostException)
-            {
-                // A heartbeat round submitted a cancellation that PostgreSQL refused to acknowledge.
-                arbiter.RefuseCancellation();
-                throw;
+                return;
             }
 
             await SettleRefusalAsync(task, arbiter, operation, cancellationToken).ConfigureAwait(false);
@@ -560,9 +551,11 @@ public sealed partial class Worker
 
     /// <summary>
     /// Stops renewing, and reports whether the heartbeat already decided the attempt. Throws the
-    /// heartbeat's error when it failed and nothing decided the attempt.
+    /// heartbeat's error when it failed and nothing decided the attempt. <paramref name="reconciling"/>
+    /// is <c>true</c> during the reconciliation of a refused completion: a refused acknowledgement of a
+    /// delivered cancellation then reports a lost lease.
     /// </summary>
-    private async Task<bool> FinishOwnershipAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, CancellationToken cancellationToken)
+    private async Task<bool> FinishOwnershipAsync(ClaimedTask task, Ownership ownership, Arbiter arbiter, bool reconciling, CancellationToken cancellationToken)
     {
         await ownership.ReleaseAsync().ConfigureAwait(false);
         // A task that a durable write released needs nothing more from the worker, whichever
@@ -579,10 +572,20 @@ public sealed partial class Worker
             case Outcome.Cancelled:
                 if (!await AcknowledgeCancelAsync(task, arbiter, cancellationToken).ConfigureAwait(false))
                 {
-                    // PostgreSQL refused the cancellation that a heartbeat round submitted. The
-                    // worker settled nothing, so the attempt reports no outcome, as in TypeScript.
-                    // The refusal is a lost lease, so the span gets stale, as in TypeScript.
-                    arbiter.FailCancellation();
+                    // PostgreSQL refused the cancellation that a heartbeat round submitted, and the
+                    // worker settled nothing. Outside a reconciliation, the attempt reports no
+                    // outcome. During the reconciliation of a refused completion, the refusal proves
+                    // that the lease is lost, so the attempt reports a lost lease. The span gets
+                    // stale in both cases, as in TypeScript.
+                    if (reconciling)
+                    {
+                        arbiter.RefuseCancellation();
+                    }
+                    else
+                    {
+                        arbiter.FailCancellation();
+                    }
+
                     WorkerTelemetry.HandlerSpanOutcome(task, "stale");
                     throw new LeaseLostException(task.Id, "cancel");
                 }

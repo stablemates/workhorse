@@ -183,6 +183,48 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
         AssertPoints("workhorse.handler.executions", []);
     }
 
+    /// <summary>
+    /// PostgreSQL refuses a completion, and the worker reconciles. A heartbeat round that read the
+    /// membership before the release already submitted a cancellation, and
+    /// <c>acknowledge_cancel_v1</c> refuses it. During the reconciliation, the refusal proves that the
+    /// lease is lost, so the attempt reports <c>lease_lost</c> and the span records <c>stale</c>, as
+    /// in TypeScript. The task has no runtime row, so PostgreSQL refuses the acknowledgement. The
+    /// worker writes <c>workhorse.task.execution_finished</c> for each attempt whose
+    /// <see cref="Workhorse.Internal.Runtime.Arbiter.Reported"/> outcome is not <c>null</c>.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedAcknowledgementOfALateCancellationDuringAReconciliationReportsALostLease()
+    {
+        await using var worker = new Worker(DataSource, WorkerOptions());
+        var task = new ClaimedTask
+        {
+            Id = Guid.NewGuid(),
+            Queue = QueueName,
+            Type = "email.send",
+            Priority = 0,
+            Payload = System.Text.Json.JsonDocument.Parse("null").RootElement.Clone(),
+            RedactErrorDetails = false,
+            Attempt = 1,
+            MaxAttempts = 1,
+            FenceToken = 7,
+        };
+        var arbiter = new Workhorse.Internal.Runtime.Arbiter();
+        var ownership = new Workhorse.Internal.Runtime.Ownership(Workhorse.Internal.Runtime.Monotonic.Now(), Workhorse.Internal.Runtime.Monotonic.Millis(30_000));
+        var attempt = WorkerTelemetry.StartAttempt(task);
+        Assert.True(arbiter.Submit(Workhorse.Internal.Runtime.Outcome.Cancelled));
+
+        var error = await Assert.ThrowsAsync<LeaseLostException>(
+            () => worker.ReconcileRejectedCompletionAsync(task, ownership, arbiter, CancellationToken.None));
+        Assert.Equal("cancel", error.Operation);
+        Assert.Equal(Workhorse.Internal.Runtime.Outcome.LeaseExpired, arbiter.Reported);
+        attempt?.Finish(arbiter.Released ?? arbiter.Reported);
+
+        Assert.Equal("stale", Handler(task.Id).GetTagItem(Names.HandlerOutcome));
+        var lost = Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "lease_lost"));
+        AssertPoints("workhorse.handler.duration", [lost]);
+        AssertPoints("workhorse.handler.executions", [lost]);
+    }
+
     // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
     private static EnqueueOptions Boundaries() => new()
     {

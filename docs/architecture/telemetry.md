@@ -689,7 +689,7 @@ settlement, and the Python, Go, Ruby, JVM, and .NET spans get `unknown`. The Rus
 carries no outcome, as [Rust spans](#rust-spans) states. The table covers the direct settlement of a
 delivered cancellation. During the reconciliation of a refused settlement, a refused acknowledgement
 is a lost lease: the metric outcome is `lease_lost` and the span outcome is `stale`, as
-[the lifecycle](lifecycle.md) states. .NET records `unknown` there when a heartbeat delivered the
+[the lifecycle](lifecycle.md) states. This rule also applies when a heartbeat delivered the
 cancellation before the reconciliation.
 
 The TypeScript dashboard calls the queue for a cancel, a signal, or a human decision, so the queue

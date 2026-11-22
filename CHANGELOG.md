@@ -23,6 +23,18 @@ upgrade steps.
 
 ## Unreleased
 
+### A late cancellation after a refused completion reports a lost lease
+
+PostgreSQL refuses a completion, and the worker reconciles. A heartbeat round delivered a
+cancellation after the handler returned, and PostgreSQL then refuses its `acknowledge_cancel_v1`
+call. The TypeScript worker sent the acknowledgement two times and reported no outcome:
+`workhorse.handler.duration` recorded `unknown`, `workhorse.handler.executions` did not count the
+attempt, and the worker wrote no `workhorse.task.execution_finished` record. During the
+reconciliation, the refusal proves that the lease is lost. In this sequence, the worker now sends
+the acknowledgement one time and reports `lease_lost`, as each other reconciliation does. The span
+outcome stays `stale`. When a heartbeat delivers a cancellation while the handler runs, a refused
+acknowledgement still has no outcome.
+
 ### The handler span says canceled only after an accepted acknowledgement
 
 A heartbeat delivers a cancellation, and PostgreSQL refuses the `acknowledge_cancel_v1` call. The
