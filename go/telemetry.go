@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stablemates/workhorse/go/internal/otelglobal"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -92,11 +93,6 @@ type workerMetrics struct {
 	heartbeatRoundFailures otelmetric.Int64Counter
 }
 
-var (
-	initialMeterProvider  = otel.GetMeterProvider()
-	initialTracerProvider = otel.GetTracerProvider()
-)
-
 const maxTraceContextBytes = 1_024
 
 func injectTraceContext(ctx context.Context) map[string]string {
@@ -112,10 +108,24 @@ func injectTraceContext(ctx context.Context) map[string]string {
 	return carrier
 }
 
-func newWorkerMetrics() (*workerMetrics, error) {
-	if otel.GetMeterProvider() == initialMeterProvider {
+// newWorkerMetrics binds the instruments of a worker to the global meter provider. If the process
+// registered no meter provider, it builds no instrument. internal/otelglobal checks this without
+// the provider at package start, so a provider that another package registered before this
+// package started also gets the metrics. If the provider panics while the worker builds the
+// instruments, the worker records no metric.
+func newWorkerMetrics() (metrics *workerMetrics, err error) {
+	if otelglobal.NoMeterProvider(otel.GetMeterProvider()) {
 		return &workerMetrics{}, nil
 	}
+	defer func() {
+		if recover() != nil {
+			metrics, err = &workerMetrics{}, nil
+		}
+	}()
+	return bindWorkerMetrics()
+}
+
+func bindWorkerMetrics() (*workerMetrics, error) {
 	meter := otel.Meter(telemetryInstrumentationName)
 	claimed, err := meter.Int64Counter(
 		tasksClaimedInstrument,
@@ -404,8 +414,10 @@ func handlerSpanOutcome(ctx context.Context, outcome handlerOutcome) string {
 }
 
 func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, trace.Span) {
-	if otel.GetTracerProvider() == initialTracerProvider {
-		return ctx, trace.SpanFromContext(ctx)
+	if otelglobal.NoTracerProvider(otel.GetTracerProvider()) {
+		// A span that records nothing. finishHandlerSpan sets attributes on the handler span and
+		// ends it, so it must not get the span of the caller.
+		return ctx, trace.SpanFromContext(context.Background())
 	}
 	parent := context.WithValue(
 		extractTraceContext(ctx, task.TraceContext),
@@ -429,7 +441,7 @@ func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, t
 // and returns ctx with the retry span active. It carries the task attributes of the TypeScript span.
 // The caller sets workhorse.retry.outcome.
 func startRetrySpan(ctx context.Context, task ClaimedTask) (context.Context, trace.Span) {
-	if otel.GetTracerProvider() == initialTracerProvider {
+	if otelglobal.NoTracerProvider(otel.GetTracerProvider()) {
 		// A span that records nothing, so End cannot end the caller's span.
 		return ctx, trace.SpanFromContext(context.Background())
 	}

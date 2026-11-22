@@ -12,6 +12,10 @@ func BenchmarkWorkerMetricsNoProvider(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	// A test that ran before in this process can leave the start delegate with a provider.
+	if metrics.enabled {
+		b.Skip("a meter provider is registered; run this benchmark alone with -run '^$'")
+	}
 	task := ClaimedTask{Queue: "benchmark", Type: "noop"}
 	ctx := context.Background()
 	duration := time.Millisecond

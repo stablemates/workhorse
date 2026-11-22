@@ -8,8 +8,8 @@ package cancellationmetric
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/stablemates/workhorse/go/internal/otelglobal"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -23,23 +23,13 @@ const (
 	statusAttribute     = "workhorse.cancellation.status"
 )
 
-// initialProviderType is the type of the global delegate that OpenTelemetry installs before the
-// process registers a provider. The check uses the type, not the value at package start, because
-// another package can register a provider before this package starts.
-const initialProviderType = "*global.meterProvider"
-
-// isInitialProvider reports whether provider is the global delegate of OpenTelemetry. Record counts
-// nothing while it is in place, so a process without a provider builds no instrument.
-func isInitialProvider(provider otelmetric.MeterProvider) bool {
-	return fmt.Sprintf("%T", provider) == initialProviderType
-}
-
 // Record counts one cancel_v1 result by its durable status. The provider belongs to the caller. If
 // it panics or refuses the instrument, the count is lost and the cancel result does not change.
 func Record(ctx context.Context, status string) {
 	defer func() { _ = recover() }()
 	provider := otel.GetMeterProvider()
-	if isInitialProvider(provider) {
+	// If the process registered no meter provider, Record builds no instrument.
+	if otelglobal.NoMeterProvider(provider) {
 		return
 	}
 	counter, err := provider.Meter(instrumentationName).Int64Counter(
