@@ -124,6 +124,78 @@ RSpec.describe "The workhorse.tasks.cancellation counter" do
   end
 end
 
+# TypeScript counts each redrive_v1 result of Admin.redrive and each redrive_many_v1 row of
+# Admin.redriveMany in workhorse.tasks.redrive, and its dashboard calls the admin. The Ruby
+# dashboard calls its admin too, so it counts the same result.
+RSpec.describe "The workhorse.tasks.redrive counter" do
+  task = "0190a6f8-0000-7000-8000-000000000001"
+  audit = W::AdminAudit.new("operator", "redrive metric", "request-1")
+
+  let(:counts) { [] }
+
+  before do
+    allow(W::Telemetry).to receive(:add).and_call_original
+    allow(W::Telemetry).to receive(:add).with("workhorse.tasks.redrive", any_args) do |_, amount, attributes|
+      counts << [amount, attributes]
+    end
+  end
+
+  def redrive_row(status)
+    {"status" => status, "source_task_id" => "0190a6f8-0000-7000-8000-000000000002", "target_task_id" => nil,
+     "source_state" => nil, "target_state" => nil, "requested_at" => nil,
+     "source_finished_at_cursor" => nil, "has_more" => "f"}
+  end
+
+  def admin(*statuses)
+    W::Admin.new(FakeExecutor.new { statuses.map { |status| redrive_row(status) } })
+  end
+
+  it "counts each single redrive result by its durable status" do
+    admin("not_found").redrive(task, audit: audit)
+    admin("not_failed").redrive(task, audit: audit)
+
+    expect(counts).to eq([[1, {"workhorse.redrive.status" => "not_found"}],
+      [1, {"workhorse.redrive.status" => "not_failed"}]])
+  end
+
+  it "counts each status of a bulk redrive once, with the number of its rows" do
+    admin("redriven", "replayed", "redriven").redrive_many(audit: audit, dry_run: true)
+    admin.redrive_many(audit: audit)
+
+    expect(counts).to eq([[2, {"workhorse.redrive.status" => "redriven"}],
+      [1, {"workhorse.redrive.status" => "replayed"}]])
+  end
+
+  it "counts a status of a newer protocol before it rejects the result, as TypeScript does" do
+    expect { admin("future_status").redrive(task, audit: audit) }.to raise_error(W::UnexpectedStatusError)
+    expect { admin("redriven", "future_status").redrive_many(audit: audit) }.to raise_error(W::UnexpectedStatusError)
+
+    expect(counts).to eq([[1, {"workhorse.redrive.status" => "future_status"}],
+      [1, {"workhorse.redrive.status" => "redriven"}], [1, {"workhorse.redrive.status" => "future_status"}]])
+  end
+
+  it "counts each dashboard redrive result through the admin" do
+    backend = lambda do |*statuses|
+      W::Dashboard.const_get(:Backend).new(FakeExecutor.new { statuses.map { |status| redrive_row(status) } },
+        environment: "test", configured_workers: [], maintenance_loops: {}, read_only: false,
+        statement_timeout_ms: 1_000)
+    end
+    input = {"id" => task, "audit" => {"reason" => "test", "requestId" => "request-1"}}
+    expect { backend.call("not_found").send(:redrive_task, input, "operator") }.to raise_error(W::Dashboard::RpcError)
+    backend.call("redriven", "redriven").send(:redrive_dead_letters, {"audit" => input["audit"]}, "operator")
+
+    expect(counts).to eq([[1, {"workhorse.redrive.status" => "not_found"}],
+      [2, {"workhorse.redrive.status" => "redriven"}]])
+  end
+
+  it "keeps the redrive result when the meter fails" do
+    allow(W::Telemetry).to receive(:add).with("workhorse.tasks.redrive", any_args).and_raise("meter failed")
+
+    expect(admin("not_found").redrive(task, audit: audit).status).to eq(:not_found)
+    expect(admin("redriven").redrive_many(audit: audit).results.map(&:status)).to eq([:redriven])
+  end
+end
+
 # A Logger that keeps each record that Telemetry.log writes as [severity, event, body, attributes].
 class RecordingLogger < Logger
   LEVELS = {Logger::DEBUG => :debug, Logger::INFO => :info, Logger::WARN => :warn, Logger::ERROR => :error}.freeze

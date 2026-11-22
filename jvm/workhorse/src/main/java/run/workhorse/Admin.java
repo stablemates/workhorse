@@ -280,6 +280,12 @@ public final class Admin {
                 audit.reason(),
                 audit.requestId()),
             "redrive_v1");
+    // As in TypeScript, the count takes the raw status before the result is checked, so a status of
+    // a newer protocol is also counted.
+    String rawStatus = row.text("status");
+    if (rawStatus != null) {
+      telemetry.countRedrive(rawStatus, 1);
+    }
     RedriveResult result = redriveResult(row);
     Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
     attributes.put(Names.TASK_ID, sourceTaskId.toString());
@@ -329,6 +335,7 @@ public final class Admin {
             audit.requestId(),
             cursor == null ? null : cursor.finishedAt(),
             cursor == null ? null : cursor.taskId().toString());
+    countRedriveStatuses(rows);
     DeadLetterCursor next = null;
     if (hasMore(rows)) {
       Row last = rows.get(rows.size() - 1);
@@ -1273,6 +1280,21 @@ public final class Admin {
         row.json("error"),
         row.requiredInstant("finished_at"),
         row.requiredLong("redrive_count"));
+  }
+
+  /**
+   * Counts each raw status of a {@code redrive_many_v1} page once, with the number of its rows, in
+   * the order of its first row, as TypeScript does. A dry run counts its rows too.
+   */
+  private void countRedriveStatuses(List<Row> rows) {
+    Map<String, Long> statuses = new LinkedHashMap<>();
+    for (Row row : rows) {
+      String status = row.text("status");
+      if (status != null) {
+        statuses.merge(status, 1L, Long::sum);
+      }
+    }
+    statuses.forEach(telemetry::countRedrive);
   }
 
   private static RedriveResult redriveResult(Row row) {

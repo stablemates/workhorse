@@ -107,6 +107,10 @@ name = "cancellation_metrics_postgres"
 required-features = ["dashboard"]
 
 [[test]]
+name = "redrive_metrics_postgres"
+required-features = ["dashboard"]
+
+[[test]]
 name = "sqlx_postgres"
 required-features = ["sqlx"]
 

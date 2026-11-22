@@ -53,6 +53,7 @@ internal static class Names
     internal const string RecoveryRetried = "workhorse.recovery.retried";
     internal const string RecoveryRowsAffected = "workhorse.recovery.rows_affected";
     internal const string RecoverySkipped = "workhorse.recovery.skipped";
+    internal const string RedriveStatus = "workhorse.redrive.status";
     internal const string RetryOutcome = "workhorse.retry.outcome";
     internal const string ScheduleName = "workhorse.schedule.name";
     internal const string ScheduleNamespace = "workhorse.schedule.namespace";

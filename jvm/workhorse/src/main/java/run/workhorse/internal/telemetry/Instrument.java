@@ -44,6 +44,11 @@ public enum Instrument {
       Kind.COUNTER,
       "{request}",
       "Task cancellation requests by durable result"),
+  TASKS_REDRIVE(
+      "workhorse.tasks.redrive",
+      Kind.COUNTER,
+      "{request}",
+      "Task redrive requests by durable result"),
   SCHEDULE_FIRED(
       "workhorse.schedule.fired",
       Kind.COUNTER,

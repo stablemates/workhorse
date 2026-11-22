@@ -74,6 +74,7 @@ public final class Names {
   public static final String RECOVERY_ROWS_AFFECTED = "workhorse.recovery.rows_affected";
   public static final String RECOVERY_SKIPPED = "workhorse.recovery.skipped";
   public static final String REDRIVE_DRY_RUN = "workhorse.redrive.dry_run";
+  public static final String REDRIVE_STATUS = "workhorse.redrive.status";
   public static final String REDRIVE_TARGET_TASK_ID = "workhorse.redrive.target_task_id";
   public static final String RELEASE_STATUS = "workhorse.release.status";
   public static final String RETRY_OUTCOME = "workhorse.retry.outcome";

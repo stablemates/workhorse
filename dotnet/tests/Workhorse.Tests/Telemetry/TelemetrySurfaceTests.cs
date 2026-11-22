@@ -88,12 +88,15 @@ public sealed class TelemetrySurfaceTests
     /// <summary>The TypeScript batch completion span. The .NET worker gives each completion its own span.</summary>
     private static readonly string[] FusedCompletion = ["workhorse.complete.batch_size"];
 
-    /// <summary>The redrive, schedule sync, and enqueue outcome names, which SM-1609 owns for every SDK.</summary>
+    /// <summary>
+    /// The schedule sync and enqueue outcome names, which SM-1609 owns for every SDK, and the
+    /// attributes of the queue and admin log records, which the .NET SDK writes through
+    /// <c>ILogger</c>.
+    /// </summary>
     private static readonly string[] QueueAndAdmin =
     [
         "workhorse.operation.status",
         "workhorse.redrive.dry_run",
-        "workhorse.redrive.status",
         "workhorse.redrive.target_task_id",
         "workhorse.schedule.count",
         "workhorse.schedule.definition_count",
@@ -102,7 +105,6 @@ public sealed class TelemetrySurfaceTests
         "workhorse.task.state",
         "workhorse.tasks.enqueue.outcomes",
         "workhorse.tasks.enqueued",
-        "workhorse.tasks.redrive",
     ];
 
     /// <summary>
@@ -231,6 +233,7 @@ public sealed class TelemetrySurfaceTests
     private static List<Instrument> DeclaredInstruments()
     {
         RuntimeHelpers.RunClassConstructor(typeof(Instrumentation).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(AdminTelemetry.RedriveCounter).TypeHandle);
         var instruments = new List<Instrument>();
         using var listener = new MeterListener
         {

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"github.com/stablemates/workhorse/go/internal/redrivemetric"
 )
 
 const (
@@ -499,6 +501,8 @@ func (admin *Admin) Redrive(ctx context.Context, sourceTaskID string, audit Admi
 	if len(rows) != 1 {
 		return RedriveResult{}, fmt.Errorf("redrive returned %d rows", len(rows))
 	}
+	// As in TypeScript, the count takes the raw status of the row.
+	redrivemetric.Record(ctx, stringValue(rows[0]["status"]), 1)
 	result := mapRedrive(rows[0])
 	admin.logEvent(ctx, taskRedriveProcessedEvent, taskRedriveProcessedLogMessage, func() []any {
 		target := noRedriveTargetValue
@@ -534,6 +538,7 @@ func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, au
 	if err != nil {
 		return BulkRedrivePage{}, err
 	}
+	recordRedriveStatuses(ctx, rows)
 	page := BulkRedrivePage{Results: make([]RedriveResult, 0, len(rows))}
 	for _, row := range rows {
 		page.Results = append(page.Results, mapRedrive(row))
@@ -549,6 +554,23 @@ func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, au
 		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["source_finished_at_cursor"]), TaskID: stringValue(row["source_task_id"])}
 	}
 	return page, nil
+}
+
+// recordRedriveStatuses counts each raw status of a redrive_many_v1 page once, with the number of
+// its rows, in the order of its first row, as TypeScript does. A dry run counts its rows too.
+func recordRedriveStatuses(ctx context.Context, rows []Row) {
+	order := make([]string, 0, 1)
+	counts := make(map[string]int64)
+	for _, row := range rows {
+		status := stringValue(row["status"])
+		if counts[status] == 0 {
+			order = append(order, status)
+		}
+		counts[status]++
+	}
+	for _, status := range order {
+		redrivemetric.Record(ctx, status, counts[status])
+	}
 }
 
 func (admin *Admin) GetCheckpoint(ctx context.Context, taskID, name string) (*TaskCheckpoint, error) {

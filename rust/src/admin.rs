@@ -762,7 +762,13 @@ impl<E: Executor> Admin<E> {
         let rows = self
             .query(sql::REDRIVE, &[&source_task_id, &audit.actor, &audit.reason, &audit.request_id])
             .await?;
-        let result = redrive_result(exactly_one(&rows, "redrive_v1")?)?;
+        let row = exactly_one(&rows, "redrive_v1")?;
+        // As in TypeScript, the count takes the raw status before the result is checked, so a
+        // status of a newer protocol is also counted.
+        if let Ok(status) = row.try_get::<_, &str>("status") {
+            crate::telemetry::record_redrive(status, 1);
+        }
+        let result = redrive_result(row)?;
         crate::telemetry::log_event!(
             info,
             event.name = "workhorse.task.redrive_processed",
@@ -799,6 +805,7 @@ impl<E: Executor> Admin<E> {
                 ],
             )
             .await?;
+        record_redrive_statuses(&rows);
         let next_cursor = match rows.last() {
             Some(last) if last.try_get::<_, bool>("has_more")? => {
                 let finished_at: String = last.try_get("source_finished_at_cursor")?;
@@ -1363,6 +1370,22 @@ fn dead_letter(row: &Row) -> Result<DeadLetter, Error> {
         finished_at: row.try_get("finished_at")?,
         redrive_count: row.try_get("redrive_count")?,
     })
+}
+
+/// Counts each raw status of a `redrive_many_v1` page once, with the number of its rows, in the
+/// order of its first row, as TypeScript does. A dry run counts its rows too. The count takes the
+/// raw status before the rows are checked, so a status of a newer protocol is also counted.
+fn record_redrive_statuses(rows: &[Row]) {
+    let mut statuses: Vec<(&str, u64)> = Vec::new();
+    for status in rows.iter().filter_map(|row| row.try_get::<_, &str>("status").ok()) {
+        match statuses.iter_mut().find(|(seen, _)| *seen == status) {
+            Some((_, count)) => *count += 1,
+            None => statuses.push((status, 1)),
+        }
+    }
+    for (status, count) in statuses {
+        crate::telemetry::record_redrive(status, count);
+    }
 }
 
 fn redrive_result(row: &Row) -> Result<RedriveResult, Error> {

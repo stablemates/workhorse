@@ -37,7 +37,7 @@ from ._task_groups import (
     optional_task_group as _optional_task_group,
     repairs as _repairs,
 )
-from ._telemetry import emit_log as _emit_log
+from ._telemetry import emit_log as _emit_log, record_redrive as _record_redrive
 from .errors import (
     PurgeIdempotencyConflictError,
     RedriveIdempotencyConflictError,
@@ -1324,6 +1324,8 @@ def _bulk_redrive_parameters(
 
 
 def _redriven(source_task_id: str, row: _Row) -> RedriveResult:
+    # As in TypeScript, the count takes the raw status of the row.
+    _record_redrive(str(row["status"]))
     result = _redrive_result(row)
     _emit_log(
         "INFO",
@@ -1339,6 +1341,14 @@ def _redriven(source_task_id: str, row: _Row) -> RedriveResult:
 
 
 def _bulk_redriven(rows: list[_Row], dry_run: bool) -> BulkRedrivePage:
+    # As in TypeScript, the page counts each raw status once, with the number of its rows. A dry
+    # run counts its rows too.
+    statuses: dict[str, int] = {}
+    for row in rows:
+        status = str(row["status"])
+        statuses[status] = statuses.get(status, 0) + 1
+    for status, count in statuses.items():
+        _record_redrive(status, count)
     page = _bulk_redrive_page(rows)
     _emit_log(
         "INFO",

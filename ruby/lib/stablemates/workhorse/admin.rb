@@ -207,6 +207,9 @@ module Stablemates
         rows = @executor.rows(SqlCatalogue::REDRIVE, [source_task_id, audit.actor, audit.reason, audit.request_id])
         raise ArgumentError, "workhorse.redrive_v1 returned #{rows.length} rows; expected one" unless rows.one?
 
+        # As in TypeScript, the count takes the raw status before the result is checked, so a status
+        # of a newer protocol is also counted.
+        Telemetry.record_redrive(rows.first.fetch("status"))
         result = redrive_result(rows.first)
         log("workhorse.task.redrive_processed", "Dead-letter task redrive processed",
           "workhorse.task.id" => source_task_id, "workhorse.redrive.target_task_id" => result.target_task_id || "none",
@@ -228,6 +231,9 @@ module Stablemates
           document, limit.to_s, dry_run.to_s, audit.actor, audit.reason, audit.request_id,
           cursor&.finished_at, cursor&.task_id
         ])
+        # As in TypeScript, the page counts each raw status once, with the number of its rows. A dry
+        # run counts its rows too.
+        rows.map { |row| row.fetch("status") }.tally.each { |status, count| Telemetry.record_redrive(status, count) }
         last = rows.last
         next_cursor = if last && Values.parse_boolean(last.fetch("has_more"))
           DeadLetterCursor.new(last.fetch("source_finished_at_cursor"), last.fetch("source_task_id"))
