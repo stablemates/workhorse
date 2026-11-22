@@ -24,6 +24,21 @@ Now the lost lease ends that activation only, and the worker continues. The hand
 `workhorse.task.execution_finished` record do not change. A release that fails in PostgreSQL is
 still an error of the run.
 
+### The admin counts each redrive result
+
+An operator charts `workhorse.tasks.redrive` by `workhorse.redrive.status`. The chart shows how many
+dead letters a redrive sends back to work. TypeScript counts each result of a single redrive and
+each row of a bulk redrive, also of a dry run. Its dashboard calls the admin. The Rust SDK counted
+none, so the chart showed only TypeScript redrives. `Admin::redrive`, `Admin::redrive_many`, and a
+dashboard redrive now count each result once. The name, unit, description, and status values are
+those of TypeScript. A bulk redrive adds each status once, with the number of its rows. As in
+TypeScript, the admin counts the raw status before it checks the result. Thus a status of a newer
+protocol is also counted. If the meter fails, the count is lost and the redrive result does not
+change.
+
+The count needs the `opentelemetry` feature. The admin reads the global meter provider each time it
+counts. Thus a provider that the application registers after it builds the admin receives the count.
+
 ### The queue counts each cancellation request
 
 An operator charts `workhorse.tasks.cancellation` by `workhorse.cancellation.status` to see how many

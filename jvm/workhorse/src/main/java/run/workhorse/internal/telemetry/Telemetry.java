@@ -151,6 +151,23 @@ public interface Telemetry {
     }
   }
 
+  /**
+   * Adds {@code count} redrive results of one durable {@code status}. The admin calls this after
+   * PostgreSQL made the redrive durable, so a meter that throws never reaches the caller and the
+   * count is lost. A count of zero adds nothing, as in TypeScript.
+   */
+  default void countRedrive(String status, long count) {
+    if (count <= 0) {
+      return;
+    }
+    try {
+      // A page holds at most 1000 rows, so the double holds the count exactly.
+      add(Instrument.TASKS_REDRIVE, (double) count, Map.of(Names.REDRIVE_STATUS, status));
+    } catch (RuntimeException ignored) {
+      // The meter failed. The redrive result does not change.
+    }
+  }
+
   /** Records {@code amount} in a histogram. */
   void record(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes);

@@ -25,6 +25,7 @@ module Stablemates
         "workhorse.worker.heartbeat.round_failure" => [:counter,
           "Worker heartbeat rounds that failed before PostgreSQL gave a verdict", "{round}"],
         "workhorse.tasks.cancellation" => [:counter, "Task cancellation requests by durable result", "{request}"],
+        "workhorse.tasks.redrive" => [:counter, "Task redrive requests by durable result", "{request}"],
         "workhorse.schedule.fired" => [:counter, "Recurring schedule occurrences durably fired", "{occurrence}"],
         "workhorse.maintenance.runs" => [:counter, "Workhorse maintenance phase executions", "{run}"],
         "workhorse.maintenance.rows" => [:counter, "Rows affected by Workhorse maintenance phases", "{row}"],
@@ -213,6 +214,17 @@ module Stablemates
       # change the cancel result.
       def record_cancellation(status)
         add("workhorse.tasks.cancellation", 1, {"workhorse.cancellation.status" => status.to_s})
+      rescue
+        nil
+      end
+
+      # Adds +count+ redrive results of one durable status. The admin calls this after PostgreSQL
+      # made the redrive durable, so an error of the meter does not change the redrive result. A
+      # count of zero adds nothing, as in TypeScript.
+      def record_redrive(status, count = 1)
+        return unless count.positive?
+
+        add("workhorse.tasks.redrive", count, {"workhorse.redrive.status" => status.to_s})
       rescue
         nil
       end

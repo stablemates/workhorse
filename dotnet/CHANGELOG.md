@@ -30,6 +30,18 @@ worker gave the `workhorse.handler` span the outcome `unknown` also when Postgre
 acknowledgement. A refusal is a lost lease, so the span now gets `stale`, as in TypeScript. A failed
 acknowledgement keeps `unknown`. The handler metrics do not change.
 
+### The admin counts each redrive result
+
+An operator charts `workhorse.tasks.redrive` by `workhorse.redrive.status`. The chart shows how many
+dead letters a redrive sends back to work. TypeScript counts each result of a single redrive and
+each row of a bulk redrive, also of a dry run. Its dashboard calls the admin. The .NET SDK counted
+none, so the chart showed only TypeScript redrives. `Admin.RedriveAsync`, `Admin.RedriveManyAsync`,
+and a `Workhorse.AspNetCore` dashboard redrive now count each result once. The name, unit,
+description, and status values are those of TypeScript. A bulk redrive adds each status once, with
+the number of its rows. As in TypeScript, the admin counts the raw status before it checks the
+result. Thus a status of a newer protocol is also counted. If the meter fails, the count is lost and
+the redrive result does not change.
+
 ### The queue counts each cancellation request
 
 An operator charts `workhorse.tasks.cancellation` by `workhorse.cancellation.status` to see how many

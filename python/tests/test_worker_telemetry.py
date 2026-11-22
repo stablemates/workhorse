@@ -175,13 +175,14 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     record_heartbeat_round_failure(ConnectionResetError("reset"))
 
     expected_metrics = _typescript_worker_metric_catalog()
-    # The queue records workhorse.tasks.cancellation, not the worker, and other tests of this
-    # process can record it before this test reads the shared reader.
+    # The queue records workhorse.tasks.cancellation and the admin records workhorse.tasks.redrive,
+    # not the worker, and other tests of this process can record them before this test reads the
+    # shared reader.
     exported_metrics = {
         metric.name: metric
         for metric in _metrics()
         if not metric.name.startswith(("workhorse.maintenance.", "workhorse.schedule."))
-        and metric.name != "workhorse.tasks.cancellation"
+        and metric.name not in {"workhorse.tasks.cancellation", "workhorse.tasks.redrive"}
     }
     observed_catalog = {
         name: {
@@ -1050,6 +1051,179 @@ def test_a_meter_that_rejects_the_cancellation_counter_does_not_stop_the_import(
         import workhorse._telemetry as telemetry
 
         telemetry.record_cancellation("canceled")
+        print("contained")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "contained"
+
+
+def _redrive_counts() -> dict[str, int]:
+    """The value of workhorse.tasks.redrive for each workhorse.redrive.status."""
+    counts: dict[str, int] = {}
+    # The reader returns no data before the first record of the process.
+    if METRIC_READER.get_metrics_data() is None:
+        return counts
+    for metric in _metrics():
+        if metric.name != "workhorse.tasks.redrive":
+            continue
+        assert (metric.unit, metric.description) == _contract_instruments()[metric.name]
+        for point in metric.data.data_points:
+            status = str(point.attributes["workhorse.redrive.status"])
+            assert set(point.attributes) == {"workhorse.redrive.status"}
+            counts[status] = counts.get(status, 0) + int(point.value)
+    return counts
+
+
+def _redriven_since(before: dict[str, int]) -> dict[str, int]:
+    after = _redrive_counts()
+    return {
+        status: after[status] - before.get(status, 0)
+        for status in after
+        if after[status] != before.get(status, 0)
+    }
+
+
+# redrive_many_v1 answers three rows: two of a known status and one of a status of a newer protocol.
+# Only a test of a failed task gives real rows, so the function is replaced in the test database.
+_SCRIPTED_REDRIVE_MANY = """
+CREATE OR REPLACE FUNCTION workhorse.redrive_many_v1(
+  p_filter jsonb, p_limit integer, p_dry_run boolean, p_requested_by text, p_reason text,
+  p_request_id text, p_cursor_finished_at timestamptz DEFAULT NULL,
+  p_cursor_task_id uuid DEFAULT NULL
+) RETURNS TABLE (
+  ordinal integer, status text, source_task_id uuid, target_task_id uuid, source_state text,
+  target_state text, requested_at timestamptz, source_finished_at_cursor text, has_more boolean
+) LANGUAGE sql AS $body$
+  SELECT row.ordinal, row.status, gen_random_uuid(), NULL::uuid, NULL::text, NULL::text,
+         NULL::timestamptz, NULL::text, false
+  FROM (VALUES (1, 'redriven'), (2, 'future_status'), (3, 'redriven')) AS row(ordinal, status)
+$body$
+"""
+
+# redrive_v1 answers a status of a newer protocol.
+_FUTURE_REDRIVE = """
+CREATE OR REPLACE FUNCTION workhorse.redrive_v1(
+  p_source_task_id uuid, p_requested_by text, p_reason text, p_request_id text
+) RETURNS TABLE (
+  status text, source_task_id uuid, target_task_id uuid, source_state text, target_state text,
+  requested_at timestamptz
+) LANGUAGE sql AS $body$
+  SELECT 'future_status'::text, p_source_task_id, NULL::uuid, NULL::text, NULL::text,
+         NULL::timestamptz
+$body$
+"""
+
+
+def _redrive_audit() -> AdminAudit:
+    return AdminAudit("python-test", "redrive metric", f"request-{uuid4()}")
+
+
+def test_admin_redrive_counts_each_durable_result(database_url: str) -> None:
+    before = _redrive_counts()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        task_id = Queue(connection, _queue_name("redrive-metric")).enqueue("mail.send", {})
+        admin = Admin(connection)
+        assert admin.redrive(str(uuid4()), _redrive_audit()).status == "not_found"
+        assert admin.redrive(task_id, _redrive_audit()).status == "not_failed"
+        # A page without a failed task counts nothing.
+        empty = admin.redrive_many(
+            DeadLetterFilter(queue=_queue_name("redrive-metric")), _redrive_audit()
+        )
+        assert empty.results == ()
+
+    assert _redriven_since(before) == {"not_found": 1, "not_failed": 1}
+
+
+def test_admin_redrive_many_counts_each_result_by_its_status(database_url: str) -> None:
+    """As TypeScript does, the bulk redrive counts each status once with the number of its rows,
+    and counts the raw status, also the status of a newer protocol."""
+    before = _redrive_counts()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(_SCRIPTED_REDRIVE_MANY)
+        connection.execute(_FUTURE_REDRIVE)
+        admin = Admin(connection)
+        page = admin.redrive_many(
+            DeadLetterFilter(queue="any"), _redrive_audit(), BulkRedriveOptions(dry_run=True)
+        )
+        assert len(page.results) == 3
+        admin.redrive(str(uuid4()), _redrive_audit())
+
+    assert _redriven_since(before) == {"redriven": 2, "future_status": 2}
+
+
+@pytest.mark.asyncio
+async def test_async_admin_redrive_counts_each_durable_result(database_url: str) -> None:
+    before = _redrive_counts()
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as connection:
+        await connection.execute(_SCRIPTED_REDRIVE_MANY)
+        admin = AsyncAdmin.from_psycopg(connection)
+        assert (await admin.redrive(str(uuid4()), _redrive_audit())).status == "not_found"
+        await admin.redrive_many(DeadLetterFilter(queue="any"), _redrive_audit())
+
+    assert _redriven_since(before) == {"not_found": 1, "redriven": 2, "future_status": 1}
+
+
+def test_dashboard_redrive_counts_each_durable_result(database_url: str) -> None:
+    """The TypeScript dashboard calls the admin, which counts each result. The Python dashboard
+    calls its admin too, so a dashboard redrive counts once."""
+    from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+    audit = {"actor": "operator", "reason": "test", "requestId": "request-1"}
+    before = _redrive_counts()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(_SCRIPTED_REDRIVE_MANY)
+        host = DashboardHost(connection, authorize=lambda _: DashboardPrincipal("operator"))
+        assert _dashboard_post(host, "redriveTask", {"id": str(uuid4()), "audit": audit}) == 404
+        assert _dashboard_post(host, "redriveDeadLetters", {"audit": audit}) == 200
+
+    assert _redriven_since(before) == {"not_found": 1, "redriven": 2, "future_status": 1}
+
+
+def test_a_failed_redrive_count_does_not_change_the_redrive_result(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingCounter:
+        def add(self, amount: int | float, attributes: Any = None) -> None:
+            raise RuntimeError("metric backend failed")
+
+    monkeypatch.setattr(workhorse._telemetry, "_redrives", FailingCounter())
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(_SCRIPTED_REDRIVE_MANY)
+        admin = Admin(connection)
+        assert admin.redrive(str(uuid4()), _redrive_audit()).status == "not_found"
+        assert len(admin.redrive_many(DeadLetterFilter(queue="any"), _redrive_audit()).results) == 3
+
+
+def test_a_meter_that_rejects_the_redrive_counter_does_not_stop_the_import() -> None:
+    """A meter can refuse to create the counter. The SDK creates it on its first count, inside the
+    guard, so the import of the SDK does not fail and the count is lost."""
+    script = textwrap.dedent(
+        """
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+
+        class RejectingProvider(MeterProvider):
+            def get_meter(self, *args, **kwargs):
+                meter = super().get_meter(*args, **kwargs)
+                create_counter = meter.create_counter
+
+                def rejecting(name, *counter_args, **counter_kwargs):
+                    if name == "workhorse.tasks.redrive":
+                        raise RuntimeError("create_counter failed")
+                    return create_counter(name, *counter_args, **counter_kwargs)
+
+                meter.create_counter = rejecting
+                return meter
+
+        metrics.set_meter_provider(RejectingProvider())
+        import workhorse._telemetry as telemetry
+
+        telemetry.record_redrive("redriven")
         print("contained")
         """
     )

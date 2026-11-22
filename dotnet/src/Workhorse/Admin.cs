@@ -265,13 +265,21 @@ public sealed class Admin
         return RunAsync(
             async (connection, token) =>
             {
-                var result = RedriveResult(TaskGroups.ExactlyOne(
+                var row = TaskGroups.ExactlyOne(
                     await Sql.RowsAsync(
                         connection,
                         SqlCatalogue.Redrive,
                         [Parameters.Uuid(sourceTaskId), .. AuditParameters(audit)],
                         token).ConfigureAwait(false),
-                    "redrive_v1"));
+                    "redrive_v1");
+                // As in TypeScript, the count takes the raw status before the result is checked, so a
+                // status of a newer protocol is also counted.
+                if (row.Text("status") is { } rawStatus)
+                {
+                    AdminTelemetry.Redrive(rawStatus, 1);
+                }
+
+                var result = RedriveResult(row);
                 if (_logger.IsEnabled(LogLevel.Information))
                 {
                     var target = result.TargetTaskId?.ToString() ?? "none";
@@ -311,6 +319,7 @@ public sealed class Admin
                         Parameters.Uuid(cursor?.TaskId),
                     ],
                     token).ConfigureAwait(false);
+                AdminTelemetry.RedrivePage(rows.Select(row => row.Text("status")));
                 DeadLetterCursor? next = null;
                 if (HasMore(rows))
                 {

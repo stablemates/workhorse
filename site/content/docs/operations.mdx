@@ -699,10 +699,11 @@ schedule firing and routines. Before registration, TypeScript core records nothi
 
 The Python worker records the metrics of the worker: claims, settlements, handler outcomes and
 durations, batch delivery, rejected heartbeats, and failed heartbeat rounds. It also records lease
-recovery, schedule firing, and routines. It does not record enqueue or redrive metrics.
+recovery, schedule firing, and routines. It does not record enqueue metrics.
 
 The queue of each SDK counts each cancellation request by its result. A dashboard that cancels a
-task counts it too.
+task counts it too. The admin of each SDK counts each redrive result, also each result of a bulk
+redrive and of a dry run. A dashboard redrive counts once.
 
 The Go worker records the metrics of the worker through the OpenTelemetry Go API. Claims,
 settlements, handler outcomes and durations, batch delivery, rejected heartbeats, failed heartbeat
@@ -730,7 +731,7 @@ use traces.
 | `workhorse.tasks.enqueued`, `workhorse.tasks.enqueue.outcomes` | Yes        | No     | No  | No   | No   | No  | No   |
 | `workhorse.tasks.claimed`, `.completed`, `.failed`, `.retried` | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.tasks.cancellation`                                 | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
-| `workhorse.tasks.redrive`                                      | Yes        | No     | No  | No   | No   | No  | No   |
+| `workhorse.tasks.redrive`                                      | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.claim.duration`                                     | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.handler.*` (five instruments)                       | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |
 | `workhorse.worker.heartbeat.failure`                           | Yes        | Yes    | Yes | Yes  | Yes  | Yes | Yes  |

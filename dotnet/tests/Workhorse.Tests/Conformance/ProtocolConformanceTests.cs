@@ -3,10 +3,19 @@ using Workhorse.Tests.Testing;
 namespace Workhorse.Tests.Conformance;
 
 /// <summary>
+/// The conformance run is alone. A telemetry test of another class samples each <c>workhorse</c>
+/// span of the process. Then an enqueue of a fixture has a span, and its request gets a trace
+/// context that the fixture does not expect.
+/// </summary>
+[CollectionDefinition(nameof(ProtocolConformanceTests), DisableParallelization = true)]
+public sealed class ProtocolConformanceRunsAlone;
+
+/// <summary>
 /// The .NET conformance lane: every <c>protocol/v1</c> fixture runs through the C# SDK, and the run
 /// must agree with <c>expected-unsupported.json</c>. The counterpart of the JVM
 /// <c>ProtocolConformanceTest</c>.
 /// </summary>
+[Collection(nameof(ProtocolConformanceTests))]
 public sealed class ProtocolConformanceTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>
 {
     private static string Protocol => Repository.Path("protocol/v1");

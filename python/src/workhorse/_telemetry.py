@@ -224,6 +224,18 @@ def _cancellation_counter() -> _Counter:
     )
 
 
+# The redrive counter follows the cancellation counter: it is created on its first count, inside
+# the guard of record_redrive. A test can set _redrives to replace it.
+_redrives: _Counter | None = None
+
+
+@cache
+def _redrive_counter() -> _Counter:
+    return _counter(
+        "workhorse.tasks.redrive", "Task redrive requests by durable result", "{request}"
+    )
+
+
 _schedules_fired = _counter(
     "workhorse.schedule.fired", "Recurring schedule occurrences durably fired", "{occurrence}"
 )
@@ -405,6 +417,19 @@ def record_cancellation(status: str) -> None:
     with suppress(Exception):
         counter = _cancellations if _cancellations is not None else _cancellation_counter()
         counter.add(1, {"workhorse.cancellation.status": status})
+
+
+def record_redrive(status: str, count: int = 1) -> None:
+    """Count ``count`` redrive results of one durable status.
+
+    The count observes a redrive that PostgreSQL already made durable. If the meter raises, the
+    redrive result must not change, so the failure stops here and the count is lost.
+    """
+    if count <= 0:
+        return
+    with suppress(Exception):
+        counter = _redrives if _redrives is not None else _redrive_counter()
+        counter.add(count, {"workhorse.redrive.status": status})
 
 
 def record_heartbeat_failure(status: str) -> None:

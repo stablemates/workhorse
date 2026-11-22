@@ -113,6 +113,30 @@ pub(crate) fn record_cancellation(status: &str) {
     });
 }
 
+/// Adds `count` results of one durable status to `workhorse.tasks.redrive`.
+///
+/// The admin reads the global meter provider on each call, as `record_cancellation` does, because
+/// an admin has no build step that each caller passes after it registers a provider. A count of
+/// zero adds nothing, as in TypeScript. If the provider panics, the count is lost and the redrive
+/// result does not change.
+#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
+pub(crate) fn record_redrive(status: &str, count: u64) {
+    #[cfg(feature = "opentelemetry")]
+    if count > 0 {
+        contain(|| {
+            opentelemetry::global::meter("workhorse")
+                .u64_counter("workhorse.tasks.redrive")
+                .with_description("Task redrive requests by durable result")
+                .with_unit("{request}")
+                .build()
+                .add(
+                    count,
+                    &[opentelemetry::KeyValue::new("workhorse.redrive.status", status.to_owned())],
+                );
+        });
+    }
+}
+
 /// The `workhorse.handler` consumer span, parented on the task's stored W3C trace context.
 ///
 /// The `tracing` span keeps its contextual parent, so its log events still nest under the caller's
