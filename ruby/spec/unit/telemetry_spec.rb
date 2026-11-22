@@ -587,3 +587,195 @@ RSpec.describe "The worker log events" do
     end
   end
 end
+
+# TypeScript reads its telemetry provider at each use. The Ruby SDK reads the current OpenTelemetry
+# providers at each use too, so a provider that the application sets or replaces after it builds a
+# queue or a worker receives the signals of that queue or worker.
+RSpec.describe "The current OpenTelemetry providers" do
+  require "opentelemetry-metrics-api"
+  require "opentelemetry/metrics/global"
+
+  # A meter provider that keeps each measurement as [instrument, amount, attributes].
+  recording_meter_provider = Class.new(OpenTelemetry::Metrics::MeterProvider) do
+    attr_reader :measurements
+
+    def initialize
+      super
+      @measurements = Concurrent::Array.new
+    end
+
+    def meter(_name = nil, **)
+      measurements = @measurements
+      Class.new(OpenTelemetry::Metrics::Meter) do
+        define_method(:create_counter) do |name, **|
+          Class.new { define_method(:add) { |amount, attributes: {}| measurements << [name, amount, attributes] } }.new
+        end
+        define_method(:create_histogram) do |name, **|
+          Class.new { define_method(:record) { |amount, attributes: {}| measurements << [name, amount, attributes] } }.new
+        end
+      end.new
+    end
+  end
+
+  # A tracer provider that keeps the name of each span it starts.
+  recording_tracer_provider = Class.new(OpenTelemetry::Trace::TracerProvider) do
+    attr_reader :names
+
+    def initialize
+      super
+      @names = Concurrent::Array.new
+    end
+
+    def tracer(_name = nil, _version = nil)
+      names = @names
+      Class.new(OpenTelemetry::Trace::Tracer) do
+        define_method(:start_span) do |name, **|
+          names << name
+          OpenTelemetry::Trace.non_recording_span(OpenTelemetry::Trace::SpanContext.new)
+        end
+      end.new
+    end
+  end
+
+  let(:cancel_row) do
+    {"status" => "canceled", "state" => "canceled", "current_attempt" => "1", "requested_at" => nil,
+     "requested_by" => nil, "reason" => nil, "finished_at" => nil}
+  end
+
+  # The example sets the global providers, and the hook sets the providers of before the example
+  # again. The default proxy provider delegates once, to the first provider that replaces it, so the
+  # hook sets a no-op provider in place of a proxy. A later example then records into no test
+  # provider of this group.
+  around do |example|
+    meters = W::Telemetry.meter_provider
+    tracers = OpenTelemetry.tracer_provider
+    example.run
+  ensure
+    OpenTelemetry.meter_provider =
+      meters.is_a?(OpenTelemetry::Internal::ProxyMeterProvider) ? OpenTelemetry::Metrics::MeterProvider.new : meters
+    OpenTelemetry.tracer_provider =
+      tracers.is_a?(OpenTelemetry::Internal::ProxyTracerProvider) ? OpenTelemetry::Trace::TracerProvider.new : tracers
+  end
+
+  def cancel(queue) = queue.cancel("0190a6f8-0000-7000-8000-000000000001", requested_by: nil)
+
+  it "records into a meter provider that replaces the provider of the first use" do
+    queue = W::Queue.new(FakeExecutor.new { [cancel_row] })
+    first = recording_meter_provider.new
+    second = recording_meter_provider.new
+
+    OpenTelemetry.meter_provider = first
+    cancel(queue)
+    OpenTelemetry.meter_provider = second
+    cancel(queue)
+
+    expected = [["workhorse.tasks.cancellation", 1, {"workhorse.cancellation.status" => "canceled"}]]
+    expect(first.measurements).to eq(expected)
+    expect(second.measurements).to eq(expected)
+  end
+
+  it "keeps the worker result when a replacement meter provider fails" do
+    pool = Class.new(FakeExecutor) do
+      def size = 3
+      def with(&) = FakeHeartbeatConnection.lend(&)
+    end.new
+    worker = W::Worker.new(pool, queues: ["default"], polling_only: true, disable_registry: true)
+    failing = Class.new(OpenTelemetry::Metrics::MeterProvider) { def meter(*) = raise("meter failed") }
+
+    OpenTelemetry.meter_provider = recording_meter_provider.new
+    expect(worker.run_once).to be(false)
+    OpenTelemetry.meter_provider = failing.new
+    expect(worker.run_once).to be(false)
+  ensure
+    FakeHeartbeatConnection.close_all
+  end
+
+  it "keeps the operation when an instrument fails to record" do
+    failing = Class.new(OpenTelemetry::Metrics::MeterProvider) do
+      def meter(*)
+        instrument = Class.new do
+          def add(*, **) = raise("counter failed")
+          def record(*, **) = raise("histogram failed")
+        end.new
+        Class.new(OpenTelemetry::Metrics::Meter) do
+          define_method(:create_counter) { |*, **| instrument }
+          define_method(:create_histogram) { |*, **| instrument }
+        end.new
+      end
+    end
+
+    OpenTelemetry.meter_provider = failing.new
+    expect(W::Telemetry.add("workhorse.tasks.claimed", 1)).to be_nil
+    expect(W::Telemetry.record("workhorse.claim.duration", 1.0)).to be_nil
+  end
+
+  it "runs the operation once and keeps its result when the tracer fails" do
+    failing_start = Class.new(OpenTelemetry::Trace::TracerProvider) do
+      def tracer(*)
+        Class.new(OpenTelemetry::Trace::Tracer) { def start_span(*, **) = raise("tracer failed") }.new
+      end
+    end
+    failing_finish = Class.new(OpenTelemetry::Trace::TracerProvider) do
+      def tracer(*)
+        Class.new(OpenTelemetry::Trace::Tracer) do
+          def start_span(*, **)
+            span = OpenTelemetry::Trace.non_recording_span(OpenTelemetry::Trace::SpanContext.new)
+            span.define_singleton_method(:finish) { |*| raise("span failed") }
+            span
+          end
+        end.new
+      end
+    end
+
+    [failing_start, failing_finish].each do |provider|
+      OpenTelemetry.tracer_provider = provider.new
+      runs = 0
+      expect(W::Telemetry.span("workhorse.claim", {}) { runs += 1 }).to eq(1)
+      expect(runs).to eq(1)
+    end
+  end
+
+  it "keeps the operation when the current span context fails" do
+    broken = OpenTelemetry::Trace.non_recording_span(OpenTelemetry::Trace::SpanContext.new)
+    broken.define_singleton_method(:context) { raise("span context failed") }
+    OpenTelemetry.tracer_provider = recording_tracer_provider.new
+
+    OpenTelemetry::Trace.with_span(broken) do
+      expect(W::Telemetry.inject_trace_context).to be_nil
+      runs = 0
+      expect(W::Telemetry.span("workhorse.claim", {}) { runs += 1 }).to eq(1)
+      expect(runs).to eq(1)
+    end
+  end
+
+  it "finishes a started span once when its context cannot be built" do
+    span = OpenTelemetry::Trace.non_recording_span(OpenTelemetry::Trace::SpanContext.new)
+    finishes = 0
+    span.define_singleton_method(:finish) { |*| finishes += 1 }
+    tracer = Class.new(OpenTelemetry::Trace::Tracer) { define_method(:start_span) { |*, **| span } }.new
+    allow(W::Telemetry).to receive(:tracer).and_return(tracer)
+    parent = OpenTelemetry::Context.empty
+    allow(parent).to receive(:set_value).and_raise("context storage failed")
+
+    expect(W::Telemetry.span("workhorse.claim", {}, parent: parent) { :ok }).to eq(:ok)
+    expect(finishes).to eq(1)
+  end
+
+  it "keeps the error of the operation when the span runs it" do
+    expect { W::Telemetry.span("workhorse.claim", {}) { raise ArgumentError, "handler failed" } }
+      .to raise_error(ArgumentError, "handler failed")
+  end
+
+  it "starts each span on the tracer provider that is current at the span" do
+    first = recording_tracer_provider.new
+    second = recording_tracer_provider.new
+
+    OpenTelemetry.tracer_provider = first
+    W::Telemetry.span("workhorse.claim", {}) { nil }
+    OpenTelemetry.tracer_provider = second
+    W::Telemetry.span("workhorse.claim", {}) { nil }
+
+    expect(first.names).to eq(["workhorse.claim"])
+    expect(second.names).to eq(["workhorse.claim"])
+  end
+end

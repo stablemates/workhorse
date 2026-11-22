@@ -58,15 +58,17 @@ module Stablemates
       private_constant :INSTRUMENTS, :LEVELS, :CONNECTION_ERRORS, :CONNECTION_ERROR_NAMES, :TIMEOUT_SQLSTATES,
         :SHUTDOWN_SQLSTATES, :MAX_CAUSE_CHAIN
 
-      @instruments = Concurrent::Map.new
+      # The meter provider of the last use and its instruments, as one frozen pair. A use with
+      # another provider replaces the pair, so a provider that the application sets or replaces
+      # later receives each measurement after that, as TypeScript reads its provider at each use.
+      @instruments = nil
+      @instruments_lock = Mutex.new
       @failed_loggers = ObjectSpace::WeakKeyMap.new
       @failed_loggers_lock = Mutex.new
 
       module_function
 
       def tracing? = defined?(::OpenTelemetry::Trace::Propagation::TraceContext) ? true : false
-
-      def metrics? = tracing? && !meter_provider.nil?
 
       # +opentelemetry-metrics-api+ 0.9 keeps the global provider in +OpenTelemetry::Internal+ and
       # defines the public accessor only when the SDK or +opentelemetry/metrics/global+ loads. 0.8
@@ -80,7 +82,8 @@ module Stablemates
       end
 
       # The current W3C trace context as a carrier Hash, or nil without OpenTelemetry, without a
-      # valid span, or when the carrier exceeds the protocol's byte limit.
+      # valid span, or when the carrier exceeds the protocol's byte limit. A current span or a
+      # propagator that raises gives nil, so the task stores no trace context.
       def inject_trace_context
         return nil unless tracing?
 
@@ -89,10 +92,17 @@ module Stablemates
         return nil unless carrier.key?("traceparent")
 
         (JSON.generate(carrier).bytesize <= MAX_TRACE_CONTEXT_BYTES) ? carrier : nil
+      rescue
+        nil
       end
 
-      # The OpenTelemetry context current on this thread, to parent spans on another thread.
-      def current_context = tracing? ? ::OpenTelemetry::Context.current : nil
+      # The OpenTelemetry context current on this thread, to parent spans on another thread, or nil
+      # when the context storage raises.
+      def current_context
+        tracing? ? ::OpenTelemetry::Context.current : nil
+      rescue
+        nil
+      end
 
       # Yields a span, or nil without OpenTelemetry. A +trace_context+ carrier takes precedence
       # over +parent+. The span records no exception by itself; +record_error+ marks a failure.
@@ -100,9 +110,43 @@ module Stablemates
       # A consumer span runs a claimed task, which descends only from the trace its enqueue stored.
       # A span current where the worker runs is unrelated to the task, so a consumer span starts
       # from an empty context, and a task without a stored context starts a new trace.
+      #
+      # If the tracer provider, the tracer, or the context storage raises before the block, the
+      # span is lost, and the block runs once without it. If the span raises later, the block keeps
+      # its span and its result, and that signal is lost. The error of the block reaches the caller.
       def span(name, attributes, trace_context: nil, parent: nil, consumer: false)
         return yield(nil) unless tracing?
 
+        span, context = start_span(name, attributes, trace_context, parent, consumer)
+        return yield(nil) if span.nil?
+
+        token = attach_context(context)
+        if token.nil?
+          finish_span(span)
+          return yield(nil)
+        end
+        begin
+          yield span
+        ensure
+          detach_context(token)
+          finish_span(span)
+        end
+      end
+
+      def attach_context(context)
+        ::OpenTelemetry::Context.attach(context)
+      rescue
+        nil
+      end
+
+      def detach_context(token)
+        ::OpenTelemetry::Context.detach(token)
+      rescue
+        nil
+      end
+
+      # The started span and the context that holds it, or nil when the tracer raises.
+      def start_span(name, attributes, trace_context, parent, consumer)
         parent = ::OpenTelemetry::Context.empty if consumer
         if trace_context.is_a?(Hash)
           carrier = trace_context.each_with_object({}) do |(key, value), result|
@@ -113,17 +157,28 @@ module Stablemates
         parent ||= ::OpenTelemetry::Context.current
         span = tracer.start_span(name, with_parent: parent, attributes: attributes,
           kind: consumer ? :consumer : :internal)
-        begin
-          ::OpenTelemetry::Context.with_current(::OpenTelemetry::Trace.context_with_span(span, parent_context: parent)) do
-            yield span
-          end
-        ensure
-          span.finish
+        context = begin
+          ::OpenTelemetry::Trace.context_with_span(span, parent_context: parent)
+        rescue
+          # The span started, so it finishes, and the block runs without it.
+          finish_span(span)
+          return nil
         end
+        [span, context]
+      rescue
+        nil
+      end
+
+      def finish_span(span)
+        span.finish
+      rescue
+        nil
       end
 
       def set_attribute(span, key, value)
         span&.set_attribute(key, value)
+      rescue
+        nil
       end
 
       def record_error(span, error_type)
@@ -131,14 +186,26 @@ module Stablemates
 
         span.status = ::OpenTelemetry::Trace::Status.error
         span.add_event("exception", attributes: {"exception.type" => error_type, "exception.escaped" => false})
+      rescue
+        nil
       end
 
+      # Adds +amount+ to the counter +name+. An error of the meter provider or the instrument does
+      # not reach the caller, because a measurement must not change the result of the operation
+      # that it observes. The measurement is lost.
       def add(name, amount, attributes = {})
         instrument(name)&.add(amount, attributes: attributes)
+        nil
+      rescue
+        nil
       end
 
+      # Records +amount+ in the histogram +name+, with the error rule of +add+.
       def record(name, amount, attributes = {})
         instrument(name)&.record(amount, attributes: attributes)
+        nil
+      rescue
+        nil
       end
 
       # Counts one cancel_v1 result by its durable status. The queue and the dashboard backend call
@@ -274,14 +341,31 @@ module Stablemates
 
       def tracer = ::OpenTelemetry.tracer_provider.tracer(INSTRUMENTATION_NAME, VERSION)
 
+      # The instrument +name+ of the current meter provider, or nil without one.
       def instrument(name)
-        return nil unless metrics?
+        return nil unless tracing?
 
-        @instruments.compute_if_absent(name) do
+        provider = meter_provider
+        return nil if provider.nil?
+
+        instruments_of(provider).compute_if_absent(name) do
           kind, description, unit = INSTRUMENTS.fetch(name)
-          meter = meter_provider.meter(INSTRUMENTATION_NAME)
+          meter = provider.meter(INSTRUMENTATION_NAME)
           (kind == :counter) ? meter.create_counter(name, unit: unit, description: description) :
             meter.create_histogram(name, unit: unit, description: description)
+        end
+      end
+
+      # The instrument map of +provider+. The lock only guards the replacement of the pair.
+      def instruments_of(provider)
+        cached = @instruments
+        return cached.last if cached&.first.equal?(provider)
+
+        @instruments_lock.synchronize do
+          cached = @instruments
+          return cached.last if cached&.first.equal?(provider)
+
+          (@instruments = [provider, Concurrent::Map.new].freeze).last
         end
       end
     end

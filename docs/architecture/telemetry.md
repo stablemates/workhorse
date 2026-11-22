@@ -213,13 +213,56 @@ It uses the same units, descriptions, and attribute keys as the Python worker. R
 `unknown` for the queue and the task type of a retry that its result does not attribute. The Ruby
 worker does not record `workhorse.maintenance.drift`, enqueue, or redrive instruments.
 
+Each measurement reads the current global meter provider, as TypeScript reads its provider at each
+use. `Telemetry` keeps the instruments of one provider: the provider of the last measurement. The
+application can set or replace the global meter provider after it builds a queue or a worker. Then
+the next measurement creates its instruments on the new provider. Each span reads the current global
+tracer provider in the same way. Without `opentelemetry-api` or `opentelemetry-metrics-api`, a
+measurement reads no provider and does no other work.
+
+If the meter provider or an instrument raises, `Telemetry.add` and `Telemetry.record` discard the
+measurement. If the tracer provider, the tracer, or the context storage raises before a span
+starts, `Telemetry.span` runs its block one time without the span. If the span raises after it
+starts, the block keeps the span and its result, and that signal is lost. If the current span or
+the propagator raises, the queue stores no trace context. The error does not reach the queue or the
+worker operation, and an error of the block itself reaches the caller.
+
 ### JVM worker metrics
 
 The Java worker records metrics only when the application includes the optional OpenTelemetry API.
-By default, `run.workhorse.internal.telemetry.Telemetry` reads `GlobalOpenTelemetry` on each use.
+By default, `run.workhorse.internal.telemetry.Telemetry` reads the current `GlobalOpenTelemetry`
+instance at each use. TypeScript reads its provider at each use in the same way.
 `WorkhorseTelemetry.of(OpenTelemetry)` gives an explicit instance instead. Without the API,
 telemetry does nothing and loads no OpenTelemetry code. The Kotlin module and the Spring Boot
 starter run the same Java worker.
+
+If no instance is set, the first `GlobalOpenTelemetry.get()` of a process installs the no-op
+instance. A later `GlobalOpenTelemetry.set` then throws `IllegalStateException`. Thus the default
+telemetry calls `get()` only after `GlobalOpenTelemetry.isSet()` is true. Before that, each span,
+measurement, and log record goes to the no-op instance, and the SDK installs no global instance.
+Thus the application can set its global instance after it builds and uses a `Queue`, an `Admin`, or
+a `Worker`. The SDK records through that instance from the next use.
+
+The default telemetry also calls `get()` in two other cases:
+
+- The global autoconfiguration of OpenTelemetry is on. Then `get()` configures the global instance,
+  as the application asked. Before the instance is set, each use reads the system property
+  `otel.java.global-autoconfigure.enabled` or `otel.java.global.autoconfigure.enabled`. Then it
+  reads the environment variable `OTEL_JAVA_GLOBAL_AUTOCONFIGURE_ENABLED`. OpenTelemetry also reads
+  a property key in another letter case, and the SDK does not.
+- The OpenTelemetry API is older than 1.57.0 and has no `isSet`. An example is the 1.55.0 of the
+  Spring Boot 4.0 BOM. On that API, the first use still installs the no-op instance. The
+  application must set its global instance before the first use, or give an explicit instance.
+
+The API 1.55.0 also has no `Logger.isEnabled`. On that API, `Telemetry.logEnabled` reports each
+severity as enabled, and the logger of the OpenTelemetry SDK decides.
+
+If the OpenTelemetry instance, an instrument, a logger, a span, or the context storage throws a
+`RuntimeException`, the default and explicit telemetry discard the signal. A span that fails to
+start is the no-op span, and its operation runs without it. If the trace context cannot be read,
+the queue stores none. Thus a telemetry failure never changes the result of a queue, `Admin`, or
+worker operation. The telemetry does not catch an `Error`, because an `Error` can be a failure of
+the JVM. An error of the operation itself reaches the caller.
 
 The Java SDK emits the 20 instruments of the Ruby SDK and `workhorse.maintenance.drift`. The
 `Instrument` enum declares them with the same units and descriptions, and `WorkerTelemetry` records

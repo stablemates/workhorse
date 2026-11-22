@@ -5,6 +5,22 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The SDK records into a meter provider that the application replaces
+
+The SDK kept each instrument from its first measurement for the life of the process. The default
+proxy meter provider delegates only to the first provider that replaces it. So after the
+application replaced the global meter provider a second time, the queue and the worker kept
+recording into the old provider. The SDK now keeps the instruments of the current meter provider
+only, and creates them again on a new provider. TypeScript reads its provider at each use in the
+same way. Each span already read the current tracer provider.
+
+Without `opentelemetry-metrics-api`, a measurement still does no work.
+
+If the meter provider or an instrument raises, the SDK now discards the measurement. If a span
+cannot start, the SDK runs the operation without the span. If a span raises after it starts, the
+SDK keeps the result of the operation. If the trace context cannot be read, the queue stores none.
+Before, the error reached the queue or the worker operation.
+
 ### The handler records and span match TypeScript
 
 - For one attempt, the worker now writes `workhorse.task.execution_finished` before

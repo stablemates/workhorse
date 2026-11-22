@@ -1846,3 +1846,28 @@ owns the connection. Both keep this rule:
    `DataSourceTransactionManager` and `JpaTransactionManager` do. Before, a lookup under the proxy
    found no transaction, and the source turned autocommit on through the proxy. That committed the
    open transaction of the caller.
+
+## Amendment: the default telemetry reads the current global instance and installs none (2026-11-22)
+
+The Telemetry section says that by default the SDK reads `GlobalOpenTelemetry`. If no instance is
+set, the first `GlobalOpenTelemetry.get()` of a process installs the no-op instance. A later
+`GlobalOpenTelemetry.set` then throws. An application could build and use a `Queue`, an `Admin`, or
+a `Worker` before it set its global instance. Then it got no telemetry, and its `set` call failed.
+TypeScript reads its telemetry provider at each use, and the maintainer decided that the JVM SDK
+does the same.
+
+The default telemetry calls `get()` only after `GlobalOpenTelemetry.isSet()` is true. Before that,
+it uses the no-op instance and installs none. If the global autoconfiguration of OpenTelemetry is
+on, the default telemetry calls `get()`, because `get()` then configures the global instance. It
+reads that setting at each use before the instance is set. `WorkhorseTelemetry.of(OpenTelemetry)`
+does not change.
+
+`isSet` is in the OpenTelemetry API from 1.57.0. This supersedes the sentence "The SDK still uses
+no API that is newer than 1.55.0" in the amendment "the OpenTelemetry API floor rises to 1.67.0".
+The SDK calls `isSet` only through a call that links at run time. An older API is, for example, the
+1.55.0 of the Spring Boot 4.0 BOM. On such an API, the link fails one time. Then the SDK calls
+`get()` at each use, as before this amendment.
+
+The API 1.55.0 also has no `Logger.isEnabled`, which the SDK used before this amendment. On that
+API, the SDK now reports each log severity as enabled, and the logger of the OpenTelemetry SDK
+decides. Thus the SDK refuses no older API, and the versions that it runs on do not narrow.

@@ -1,6 +1,5 @@
 package run.workhorse.internal.telemetry;
 
-import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
@@ -76,22 +75,30 @@ public final class OpenTelemetryTelemetry implements Telemetry {
     return new OpenTelemetryTelemetry(() -> openTelemetry);
   }
 
-  /** Telemetry that reads {@code GlobalOpenTelemetry} on each use. */
+  /**
+   * Telemetry that reads the current {@code GlobalOpenTelemetry} instance at each use, and installs
+   * none. {@link GlobalSource} tells how.
+   */
   static Telemetry global() {
-    return new OpenTelemetryTelemetry(GlobalOpenTelemetry::get);
+    return new OpenTelemetryTelemetry(GlobalSource.of());
   }
 
   @Override
   public @Nullable Map<String, String> injectTraceContext() {
     Map<String, String> carrier = new LinkedHashMap<>();
-    PROPAGATOR.inject(
-        Context.current(),
-        carrier,
-        (map, key, value) -> {
-          if (map != null) {
-            map.put(key, value);
-          }
-        });
+    try {
+      PROPAGATOR.inject(
+          Context.current(),
+          carrier,
+          (map, key, value) -> {
+            if (map != null) {
+              map.put(key, value);
+            }
+          });
+    } catch (RuntimeException ignored) {
+      // The context storage or the current span failed. The task stores no trace context.
+      return null;
+    }
     if (!carrier.containsKey("traceparent")) {
       return null;
     }
@@ -109,14 +116,25 @@ public final class OpenTelemetryTelemetry implements Telemetry {
   }
 
   @Override
-  public Object currentContext() {
-    return Context.current();
+  public @Nullable Object currentContext() {
+    try {
+      return Context.current();
+    } catch (RuntimeException ignored) {
+      // The context storage failed. A span on another thread then takes its current context.
+      return null;
+    }
   }
 
   @Override
   public TelemetrySpan span(
       String name, Map<String, ? extends @Nullable Object> attributes, @Nullable Object parent) {
-    Context context = parent instanceof Context given ? given : Context.current();
+    Context context;
+    try {
+      context = parent instanceof Context given ? given : Context.current();
+    } catch (RuntimeException ignored) {
+      // The context storage failed, and the operation runs without the span.
+      return TelemetrySpan.NOOP;
+    }
     return start(name, attributes, context, SpanKind.INTERNAL);
   }
 
@@ -125,7 +143,13 @@ public final class OpenTelemetryTelemetry implements Telemetry {
       String name,
       Map<String, ? extends @Nullable Object> attributes,
       @Nullable Object traceContext) {
-    Context parent = Context.root();
+    Context parent;
+    try {
+      parent = Context.root();
+    } catch (RuntimeException ignored) {
+      // The context storage failed, and the operation runs without the span.
+      return TelemetrySpan.NOOP;
+    }
     if (traceContext instanceof Map<?, ?> stored) {
       Map<String, String> carrier = new LinkedHashMap<>();
       for (Map.Entry<?, ?> entry : stored.entrySet()) {
@@ -133,7 +157,11 @@ public final class OpenTelemetryTelemetry implements Telemetry {
           carrier.put(key.toLowerCase(Locale.ROOT), value);
         }
       }
-      parent = PROPAGATOR.extract(Context.root(), carrier, GETTER);
+      try {
+        parent = PROPAGATOR.extract(parent, carrier, GETTER);
+      } catch (RuntimeException ignored) {
+        // The stored context could not be read, so the task starts a new trace.
+      }
     }
     return start(name, attributes, parent, SpanKind.CONSUMER);
   }
@@ -141,30 +169,59 @@ public final class OpenTelemetryTelemetry implements Telemetry {
   @Override
   public void add(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes) {
-    Object recorder = bound().instrument(instrument);
-    Attributes values = attributes(attributes);
-    if (recorder instanceof LongCounter counter) {
-      counter.add((long) amount, values);
-    } else if (recorder instanceof DoubleCounter counter) {
-      counter.add(amount, values);
+    try {
+      Object recorder = bound().instrument(instrument);
+      Attributes values = attributes(attributes);
+      if (recorder instanceof LongCounter counter) {
+        counter.add((long) amount, values);
+      } else if (recorder instanceof DoubleCounter counter) {
+        counter.add(amount, values);
+      }
+    } catch (RuntimeException ignored) {
+      // The provider or the instrument failed, and the measurement is lost. The operation that it
+      // observes continues.
     }
   }
 
   @Override
   public void record(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes) {
-    if (bound().instrument(instrument) instanceof DoubleHistogram histogram) {
-      histogram.record(amount, attributes(attributes));
+    try {
+      if (bound().instrument(instrument) instanceof DoubleHistogram histogram) {
+        histogram.record(amount, attributes(attributes));
+      }
+    } catch (RuntimeException ignored) {
+      // The provider or the instrument failed, and the measurement is lost.
     }
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>The OpenTelemetry API 1.55.0 of the Spring Boot 4.0 BOM has no {@code Logger.isEnabled}, so
+   * the call fails to link. Then each severity is enabled, and the logger of the SDK decides.
+   */
   @Override
   public boolean logEnabled(Severity severity) {
+    Bound current;
     try {
-      return bound().logger.isEnabled(severity(severity), Context.current());
+      current = bound();
+    } catch (RuntimeException ignored) {
+      // A provider that fails is a disabled logger.
+      return false;
+    }
+    if (current.noIsEnabled) {
+      return true;
+    }
+    try {
+      return current.logger.isEnabled(severity(severity), Context.current());
     } catch (RuntimeException ignored) {
       // A logger that fails is a disabled logger.
       return false;
+    } catch (LinkageError olderApi) {
+      // A failed link fails again at each call, so the telemetry probes once.
+      current.noIsEnabled = true;
+      return true;
     }
   }
 
@@ -201,23 +258,42 @@ public final class OpenTelemetryTelemetry implements Telemetry {
     };
   }
 
-  // The returned span owns the scope and closes it in `close`.
+  // The returned span owns the scope and closes it in `close`. A provider or a tracer that fails
+  // gives the no-op span, so the operation in the span runs without it.
   @SuppressWarnings("MustBeClosedChecker")
   private TelemetrySpan start(
       String name,
       Map<String, ? extends @Nullable Object> attributes,
       Context parent,
       SpanKind kind) {
-    Span span =
-        bound()
-            .tracer
-            .spanBuilder(name)
-            .setParent(parent)
-            .setSpanKind(kind)
-            .setAllAttributes(attributes(attributes))
-            .startSpan();
-    Scope scope = parent.with(span).makeCurrent();
-    return new OpenTelemetrySpan(span, scope);
+    Span span;
+    try {
+      span =
+          bound()
+              .tracer
+              .spanBuilder(name)
+              .setParent(parent)
+              .setSpanKind(kind)
+              .setAllAttributes(attributes(attributes))
+              .startSpan();
+    } catch (RuntimeException ignored) {
+      return TelemetrySpan.NOOP;
+    }
+    try {
+      Scope scope = parent.with(span).makeCurrent();
+      return new OpenTelemetrySpan(span, scope);
+    } catch (RuntimeException ignored) {
+      end(span);
+      return TelemetrySpan.NOOP;
+    }
+  }
+
+  private static void end(Span span) {
+    try {
+      span.end();
+    } catch (RuntimeException ignored) {
+      // A span processor failed, and the span is lost. The operation in the span continues.
+    }
   }
 
   // A new instance is a new identity. Two equal instances still need their own instruments.
@@ -269,6 +345,8 @@ public final class OpenTelemetryTelemetry implements Telemetry {
     final Logger logger;
     private final Meter meter;
     private final Map<Instrument, Object> instruments = new ConcurrentHashMap<>();
+    // True after `Logger.isEnabled` failed to link.
+    volatile boolean noIsEnabled;
 
     Bound(OpenTelemetry openTelemetry) {
       this.openTelemetry = openTelemetry;
@@ -330,28 +408,38 @@ public final class OpenTelemetryTelemetry implements Telemetry {
       if (value == null) {
         return;
       }
-      AttributesBuilder builder = Attributes.builder();
-      put(builder, key, value);
-      span.setAllAttributes(builder.build());
+      try {
+        AttributesBuilder builder = Attributes.builder();
+        put(builder, key, value);
+        span.setAllAttributes(builder.build());
+      } catch (RuntimeException ignored) {
+        // The span failed, and the attribute is lost.
+      }
     }
 
     @Override
     public void recordError(String errorType) {
-      span.setStatus(StatusCode.ERROR);
-      span.addEvent(
-          "exception",
-          Attributes.builder()
-              .put("exception.type", errorType)
-              .put("exception.escaped", false)
-              .build());
+      try {
+        span.setStatus(StatusCode.ERROR);
+        span.addEvent(
+            "exception",
+            Attributes.builder()
+                .put("exception.type", errorType)
+                .put("exception.escaped", false)
+                .build());
+      } catch (RuntimeException ignored) {
+        // The span failed, and the error status is lost.
+      }
     }
 
     @Override
     public void close() {
       try {
         scope.close();
+      } catch (RuntimeException ignored) {
+        // The context storage failed. The span still ends.
       } finally {
-        span.end();
+        end(span);
       }
     }
   }

@@ -11,6 +11,38 @@ adds.
 
 ## Unreleased
 
+### The SDK records through a global instance that the application sets later
+
+An application builds a `Queue`, an `Admin`, or a `Worker` with the default telemetry and uses it.
+Then it calls `GlobalOpenTelemetry.set`. The first use of the SDK called
+`GlobalOpenTelemetry.get()`, which installed the no-op global instance. So the `set` call threw
+`IllegalStateException`, and the SDK never recorded.
+
+The default telemetry now reads the current global instance at each use and installs none, as
+TypeScript reads its provider at each use. Until `GlobalOpenTelemetry.isSet()` is true, the SDK
+records nothing. After the application sets the instance, the SDK records through it from the next
+use. `WorkhorseTelemetry.of(OpenTelemetry)` does not change.
+
+This needs the OpenTelemetry API 1.57.0 or later, which has `isSet`. On an older API, the first use
+still installs the no-op instance. An example is the 1.55.0 of the Spring Boot 4.0 BOM. If the
+global autoconfiguration of OpenTelemetry is on, the SDK calls `get()`, which configures the global
+instance.
+
+### A telemetry failure no longer changes an operation result
+
+An OpenTelemetry instance, an instrument, or a span that threw reached the operation that it
+observed. For example, a counter that threw after a completion replaced the result of the
+completion. A failed span start stopped a claim before it ran. The SDK now discards the signal of
+a `RuntimeException`, and a span that fails to start is the no-op span. If the trace context cannot
+be read, the queue stores none. An error of the operation itself still reaches the caller.
+
+### Log records work on the OpenTelemetry API 1.55.0
+
+The API 1.55.0 of the Spring Boot 4.0 BOM has no `Logger.isEnabled`. Before, the check of a log
+record threw `NoSuchMethodError` on that API, and the error reached the queue, `Admin`, or worker
+operation. The SDK now reports each severity as enabled on that API, and the logger of the
+OpenTelemetry SDK decides.
+
 ### The handler span says stale after a refused acknowledgement
 
 A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
