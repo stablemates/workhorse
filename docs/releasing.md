@@ -427,8 +427,12 @@ crate, it has no tag of its own and publishes from the npm `v*` tag. It joined t
 5. If RubyGems.org does not serve the version, `rubygems/release-gem` exchanges the job's OIDC
    identity for a RubyGems API key and runs `rake release` in `ruby/`. That task builds the gem and
    pushes it with a Sigstore attestation. It finds the train tag already in place, so it pushes no
-   tag. The action then waits until RubyGems.org serves the new version.
-6. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
+   tag. The `rubygems` job turns off the wait step of the action (SM-2077).
+6. `scripts/check-registry-version.ts --wait` then asks RubyGems.org for the version every 10 s. It
+   stops when RubyGems.org serves the version with the SHA-256 checksum of the gem in `ruby/pkg`.
+   If RubyGems.org serves a different checksum, or the version is missing for about ten minutes,
+   the job fails.
+7. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
    and review the attestation on the gem's RubyGems.org page.
 
 Both jobs install the locked bundle beside the release credentials. A frozen bundle pins each gem
@@ -759,8 +763,8 @@ finds the orphaned packages on npm can tell why they exist.
 ### Re-run a failed crates-io or rubygems job
 
 crates.io and RubyGems.org never accept a version twice. The `crates-io` or `rubygems` job can fail
-after the registry accepts the upload, for example in the wait step of `rubygems/release-gem` or at
-the job timeout. The `github-release` job then does not run.
+after the registry accepts the upload, for example in the wait step after the gem push or at the
+job timeout. The `github-release` job then does not run.
 
 Re-run the failed job. Its environment asks for a review first. The job builds the crate or the gem
 from the tag again, and `scripts/check-registry-version.ts` asks the registry for the version:

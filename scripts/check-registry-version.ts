@@ -1,9 +1,10 @@
 /**
- * Decide whether the `crates-io` or `rubygems` job of `release.yml` uploads its artifact (SM-1860).
+ * Ask crates.io or RubyGems.org for one version, for the `crates-io` and `rubygems` jobs of
+ * `release.yml`.
  *
  * crates.io and RubyGems.org never accept a version twice. A job can fail after its upload, for
- * example in the wait step of `rubygems/release-gem` or at the job timeout. A re-run of that job
- * then failed, because the registry refused the duplicate version, and `github-release` never ran.
+ * example at the job timeout. A re-run of that job then failed, because the registry refused the
+ * duplicate version, and `github-release` never ran (SM-1860).
  *
  * Before the upload, this script asks the registry whether it serves the exact version. If it does
  * not, the script writes `upload=true`. If it does, the script compares the SHA-256 checksum that
@@ -13,13 +14,19 @@
  * version. `cargo package` and `gem build` make the same bytes from the same tag, so a re-run
  * builds the artifact that the earlier run uploaded.
  *
+ * With `--wait`, the script runs after the upload. It asks the registry again until the registry
+ * serves the version with the checksum of the artifact that the job pushed. It fails if the
+ * registry serves a different checksum, or if the version is still missing `waitTimeout` after the
+ * first request. The `rubygems` job uses this mode in place of the wait step of `rubygems/release-gem`,
+ * because that step crashed after a correct upload (SM-2077).
+ *
  * A request that fails with a network error, HTTP 429, or HTTP 5xx repeats, and the script fails
  * only after `attempts` such failures in a row. Each other failure fails the script.
  *
  * The release workflow runs this with plain `node`, before any dependency is installed, so it
  * imports only Node built-ins.
  *
- * Usage: node scripts/check-registry-version.ts <crates-io|rubygems> <name> <version> <artifact>
+ * Usage: node scripts/check-registry-version.ts [--wait] <crates-io|rubygems> <name> <version> <artifact>
  */
 import { createHash } from "node:crypto";
 import { appendFile, readFile } from "node:fs/promises";
@@ -36,6 +43,16 @@ const userAgent = "workhorse-release (https://github.com/stablemates/workhorse)"
 const attempts = 5;
 const retryInterval = 5_000;
 const requestTimeout = 30_000;
+/** With `--wait`: the time after the first request at which the wait stops, and the time between requests. */
+export const waitTimeout = 600_000;
+export const waitInterval = 10_000;
+/**
+ * The longest time that one request to the registry can take with its repeats: `attempts`
+ * requests of at most `requestTimeout`, with `retryInterval` between them.
+ */
+export const requestBound = attempts * requestTimeout + (attempts - 1) * retryInterval;
+const usage =
+  "Usage: node scripts/check-registry-version.ts [--wait] <crates-io|rubygems> <name> <version> <artifact>\n";
 
 /** The URL at which the registry states one version and its SHA-256 checksum. */
 export function versionUrl(registry: Registry, name: string, version: string): string {
@@ -107,15 +124,31 @@ async function requestVersion(
   }
 }
 
-/** Ask the registry for the version and compare its checksum with the built artifact. */
-export async function checkRegistryVersion(options: CheckOptions): Promise<CheckOutcome> {
+/** The artifact, the registry's state for the version, and the text that names both. */
+interface Reading {
+  readonly label: string;
+  readonly file: string;
+  readonly built: string;
+  /** The checksum that the registry states, or undefined when it does not serve the version. */
+  readonly served: string | undefined;
+}
+
+async function checksumOf(artifact: string): Promise<string> {
+  return createHash("sha256")
+    .update(await readFile(artifact))
+    .digest("hex");
+}
+
+/**
+ * Ask the registry for the version once, with repeats for transient failures. Fail when the
+ * registry serves the version with no checksum or with a checksum other than `built`.
+ */
+async function readVersion(options: CheckOptions, built: string): Promise<Reading> {
   const { registry, name, version, artifact } = options;
   const fetchImpl = options.fetch ?? fetch;
   const delay = options.delay ?? setTimeout;
   const label = labels[registry];
-  const built = createHash("sha256")
-    .update(await readFile(artifact))
-    .digest("hex");
+  const file = path.basename(artifact);
   const url = versionUrl(registry, name, version);
 
   let answer: Answer | RequestFailure | undefined;
@@ -129,30 +162,81 @@ export async function checkRegistryVersion(options: CheckOptions): Promise<Check
   }
   if (answer === undefined || "failure" in answer)
     throw new Error(`${label} did not answer for ${name} ${version} at ${url}: ${answer?.failure}`);
-  if (answer.status === "missing")
-    return {
-      upload: true,
-      message: `${label} does not serve ${name} ${version}, so the job uploads it`,
-    };
+  if (answer.status === "missing") return { label, file, built, served: undefined };
 
   const served = statedChecksum(registry, answer.body);
   if (served === undefined)
     throw new Error(
       `${label} answered for ${name} ${version} without a SHA-256 checksum: ${JSON.stringify(answer.body)}`,
     );
-  const file = path.basename(artifact);
   if (served !== built)
     throw new Error(
       `${label} already serves ${name} ${version} with SHA-256 ${served}, but ${file} has SHA-256 ${built}. ` +
         `${label} never replaces a version, so this job cannot publish these bytes. ` +
         "Find out which build reached the registry before you continue the release.",
     );
+  return { label, file, built, served };
+}
+
+/** Ask the registry for the version and compare its checksum with the built artifact. */
+export async function checkRegistryVersion(options: CheckOptions): Promise<CheckOutcome> {
+  const { name, version } = options;
+  const reading = await readVersion(options, await checksumOf(options.artifact));
+  if (reading.served === undefined)
+    return {
+      upload: true,
+      message: `${reading.label} does not serve ${name} ${version}, so the job uploads it`,
+    };
   return {
     upload: false,
     message:
-      `${label} already serves ${name} ${version} with SHA-256 ${served}, the checksum of ${file}. ` +
+      `${reading.label} already serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}. ` +
       "An earlier run uploaded it, so the job uploads nothing",
   };
+}
+
+export interface WaitOptions extends CheckOptions {
+  /** The time after the first request at which the wait stops asking the registry. */
+  readonly timeout?: number;
+  /** The time between two requests that find the version missing. */
+  readonly interval?: number;
+  /** The clock in milliseconds. */
+  readonly now?: () => number;
+}
+
+/**
+ * After an upload, ask the registry until it serves the version with the checksum of the pushed
+ * artifact. Return a message when it does. Fail when it serves other bytes, or when the version is
+ * still missing at `timeout` after the first request.
+ *
+ * Each request can repeat for transient failures, as in the check before the upload. The last
+ * request starts before the deadline, so the wait can end at most `requestBound` after it.
+ */
+export async function awaitRegistryVersion(options: WaitOptions): Promise<string> {
+  const { name, version } = options;
+  const delay = options.delay ?? setTimeout;
+  const now = options.now ?? Date.now;
+  const timeout = options.timeout ?? waitTimeout;
+  const interval = options.interval ?? waitInterval;
+  const built = await checksumOf(options.artifact);
+  const label = labels[options.registry];
+  const start = now();
+  for (let request = 1; ; request += 1) {
+    const reading = await readVersion(options, built);
+    if (reading.served !== undefined)
+      return `${label} serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}`;
+    const elapsed = now() - start;
+    process.stdout.write(
+      `Request ${String(request)} at ${String(Math.round(elapsed / 1000))} s: ${label} does not serve ${name} ${version} yet\n`,
+    );
+    if (elapsed + interval > timeout)
+      throw new Error(
+        `${label} did not serve ${name} ${version} after ${String(request)} requests in ` +
+          `${String(Math.round(elapsed / 1000))} s. ` +
+          `Look for the version on ${label} before you re-run the job.`,
+      );
+    await delay(interval);
+  }
 }
 
 export interface RunOptions {
@@ -164,7 +248,8 @@ export interface RunOptions {
 /** Run the check from command-line arguments, and return the exit code. */
 export async function runCheck(argv: readonly string[], options: RunOptions = {}): Promise<number> {
   const environment = options.environment ?? process.env;
-  const [registry, name, version, artifact, ...rest] = argv;
+  const wait = argv[0] === "--wait";
+  const [registry, name, version, artifact, ...rest] = wait ? argv.slice(1) : argv;
   if (
     !registries.includes(registry as Registry) ||
     !name ||
@@ -172,24 +257,29 @@ export async function runCheck(argv: readonly string[], options: RunOptions = {}
     !artifact ||
     rest.length > 0
   ) {
-    process.stderr.write(
-      "Usage: node scripts/check-registry-version.ts <crates-io|rubygems> <name> <version> <artifact>\n",
-    );
+    process.stderr.write(usage);
     return 64;
   }
   const summary = async (line: string) => {
     if (environment.GITHUB_STEP_SUMMARY)
       await appendFile(environment.GITHUB_STEP_SUMMARY, `${line}\n`);
   };
+  const check = {
+    registry: registry as Registry,
+    name,
+    version,
+    artifact,
+    fetch: options.fetch,
+    delay: options.delay,
+  };
   try {
-    const outcome = await checkRegistryVersion({
-      registry: registry as Registry,
-      name,
-      version,
-      artifact,
-      fetch: options.fetch,
-      delay: options.delay,
-    });
+    if (wait) {
+      const message = await awaitRegistryVersion(check);
+      process.stdout.write(`::notice::${message}\n`);
+      await summary(message);
+      return 0;
+    }
+    const outcome = await checkRegistryVersion(check);
     if (outcome.upload) {
       process.stdout.write(`${outcome.message}\n`);
     } else {

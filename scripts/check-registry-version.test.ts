@@ -5,10 +5,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  awaitRegistryVersion,
   checkRegistryVersion,
   registries,
   runCheck,
   versionUrl,
+  requestBound,
+  waitTimeout,
 } from "./check-registry-version.js";
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -138,6 +141,86 @@ describe("the registry version check before a crate or gem upload", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  // SM-2077: the `rubygems` job waits with this mode in place of the wait step of
+  // `rubygems/release-gem`.
+  describe.each(registries)("the wait after an upload to %s", (registry) => {
+    const name = names[registry];
+    /** A clock that only a delay moves, so each test controls the elapsed time. */
+    let clock: number;
+    let delay: ReturnType<typeof vi.fn<(milliseconds: number) => Promise<unknown>>>;
+
+    beforeEach(() => {
+      clock = 0;
+      delay = vi.fn<(milliseconds: number) => Promise<unknown>>(async (milliseconds) => {
+        clock += milliseconds;
+      });
+    });
+
+    const wait = (fetchImpl: typeof fetch, timeout = 3_500) =>
+      awaitRegistryVersion({
+        registry,
+        name,
+        version: "0.11.0",
+        artifact,
+        fetch: fetchImpl,
+        delay,
+        now: () => clock,
+        timeout,
+        interval: 1_000,
+      });
+
+    it("asks again until the registry serves the pushed checksum", async () => {
+      const answers = [
+        () => new Response("not found", { status: 404 }),
+        () => new Response("not found", { status: 404 }),
+        () => Response.json(publishedBody[registry](sha256("built bytes"))),
+      ];
+      const fetchImpl = vi.fn<typeof fetch>(async () => answers.shift()!());
+      const message = await wait(fetchImpl);
+      expect(message).toContain(`serves ${name} 0.11.0 with SHA-256 ${sha256("built bytes")}`);
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(delay.mock.calls).toEqual([[1_000], [1_000]]);
+    });
+
+    it("fails when the version is still missing at the deadline", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response("", { status: 404 }));
+      await expect(wait(fetchImpl)).rejects.toThrow(
+        new RegExp(`did not serve ${name} 0\\.11\\.0 after 4 requests in 3 s`),
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(clock).toBe(3_000);
+    });
+
+    // Sol found that a count of requests let each request repeat transient failures again, so
+    // the wait could outlast the job timeout.
+    it("keeps transient failures inside the deadline", async () => {
+      let call = 0;
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        call++ % 5 < 4 ? new Response("busy", { status: 503 }) : new Response("", { status: 404 }),
+      );
+      await expect(wait(fetchImpl, waitTimeout)).rejects.toThrow(/did not serve/);
+      expect(clock).toBeLessThanOrEqual(waitTimeout + requestBound);
+    });
+
+    it("fails at once when the registry serves a different checksum", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        Response.json(publishedBody[registry](sha256("other bytes"))),
+      );
+      await expect(wait(fetchImpl)).rejects.toThrow(/cannot publish these bytes/);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+
+    it("fails at once on a refusal that does not change", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response("no", { status: 403 }));
+      await expect(wait(fetchImpl)).rejects.toThrow(/HTTP 403/);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("ends the wait inside the 20-minute job timeout, with time for the build and the push", () => {
+    expect(waitTimeout + requestBound).toBeLessThanOrEqual(13 * 60_000);
+  });
+
   describe("the command line", () => {
     let output: string;
     let summary: string;
@@ -175,6 +258,26 @@ describe("the registry version check before a crate or gem upload", () => {
 
     it("refuses an unknown registry", async () => {
       expect(await run(vi.fn<typeof fetch>(), ["pypi", "workhorse", "0.11.0"])).toBe(64);
+    });
+
+    it("with --wait, writes a summary line and no output when the registry serves the gem", async () => {
+      const body = publishedBody.rubygems(sha256("built bytes"));
+      const argv = ["--wait", "rubygems", "stablemates-workhorse", "0.11.0"];
+      expect(await run(async () => Response.json(body), argv)).toBe(0);
+      await expect(readFile(output, "utf8")).rejects.toThrow(/ENOENT/);
+      expect(await readFile(summary, "utf8")).toContain("serves stablemates-workhorse 0.11.0");
+    });
+
+    it("with --wait, fails for a different checksum", async () => {
+      const body = publishedBody.rubygems(sha256("other bytes"));
+      const argv = ["--wait", "rubygems", "stablemates-workhorse", "0.11.0"];
+      expect(await run(async () => Response.json(body), argv)).toBe(1);
+      expect(await readFile(summary, "utf8")).toContain("cannot publish these bytes");
+    });
+
+    it("refuses --wait in a place other than the first argument", async () => {
+      const argv = ["rubygems", "--wait", "stablemates-workhorse", "0.11.0"];
+      expect(await run(vi.fn<typeof fetch>(), argv)).toBe(64);
     });
   });
 });
