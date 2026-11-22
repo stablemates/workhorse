@@ -73,15 +73,17 @@ function isExampleFile(language: string, relativePath: string): boolean {
     );
   }
   // The scenario programs are the Java and Kotlin sources of the jvm/examples/programs project,
-  // apart from its package-info.java and the Programs.java helper that every program shares. The
-  // other files in jvm/examples hold the regions that the documentation embeds, as docs.rs and
-  // docs.rb do, or the tests that run them. None of those is a scenario the other languages mirror.
+  // apart from its package-info.java, the Programs.java helper that every program shares, and the
+  // DemoLogFile.java log writer of the demo worker program. The other files in jvm/examples hold
+  // the regions that the documentation embeds, as docs.rs and docs.rb do, or the tests that run
+  // them. None of those is a scenario the other languages mirror.
   if (language === "jvm") {
     return (
       relativePath.startsWith("jvm/examples/programs/src/main/") &&
       (name.endsWith(".java") || name.endsWith(".kt")) &&
       name !== "package-info.java" &&
-      name !== "Programs.java"
+      name !== "Programs.java" &&
+      name !== "DemoLogFile.java"
     );
   }
   // The C# scenario programs are the files in Scenarios/ of the Workhorse.Examples.Programs

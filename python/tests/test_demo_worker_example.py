@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import logging
 import time
 from pathlib import Path
 from threading import Thread
@@ -150,3 +152,114 @@ def test_worker_waits_for_a_missing_schema_until_it_is_installed(database_url: s
             connection.execute(schema)
         waiting.join(timeout=10)
         assert not waiting.is_alive(), "the wait did not end once the schema existed"
+
+
+def test_demo_log_file_needs_a_directory_and_a_service_name() -> None:
+    assert demo_worker.demo_log_file({}) is None
+    assert demo_worker.demo_log_file({"WORKHORSE_DEMO_LOG_DIRECTORY": "/tmp/x"}) is None
+
+
+def test_demo_log_file_writes_the_typescript_record_shape(tmp_path: Path) -> None:
+    log_file = demo_worker.demo_log_file(
+        {
+            "WORKHORSE_DEMO_LOG_DIRECTORY": str(tmp_path),
+            "WORKHORSE_DEMO_SERVICE_NAME": "workhorse-demo-worker-python",
+            "WORKHORSE_DEMO_ENV": "test env",
+        }
+    )
+    assert log_file is not None
+    provider = demo_worker.DemoLoggerProvider(log_file)
+    provider.get_logger("workhorse").emit(
+        severity_text="INFO",
+        event_name="workhorse.task.completed",
+        body="Task completed",
+        attributes={"workhorse.task.id": "a", "workhorse.worker.queues": ("q1", "q2")},
+    )
+
+    path = tmp_path / "test_env" / "workhorse-demo-worker-python.ndjson"
+    record = json.loads(path.read_text())
+    assert list(record) == [
+        "timestamp",
+        "observedTimestamp",
+        "severityText",
+        "severityNumber",
+        "eventName",
+        "body",
+        "attributes",
+        "resource",
+        "scope",
+    ]
+    assert record["timestamp"].endswith("Z")
+    assert record["severityNumber"] == 9
+    assert record["eventName"] == "workhorse.task.completed"
+    assert record["attributes"] == {
+        "workhorse.task.id": "a",
+        "workhorse.worker.queues": ["q1", "q2"],
+    }
+    assert record["resource"]["service.name"] == "workhorse-demo-worker-python"
+    assert record["resource"]["deployment.environment.name"] == "test env"
+    assert record["resource"]["telemetry.sdk.language"] == "python"
+    assert record["scope"] == {"name": "workhorse"}
+
+
+def test_demo_log_file_rotates_before_the_limit(tmp_path: Path) -> None:
+    log_file = demo_worker.DemoLogFile(tmp_path / "w.ndjson", 400, 2, {"service.name": "w"})
+    for index in range(12):
+        log_file.write(severity_text="INFO", body=f"record {index}", scope="test")
+
+    names = sorted(path.name for path in tmp_path.iterdir())
+    assert names == ["w.ndjson", "w.ndjson.1", "w.ndjson.2"]
+    for path in tmp_path.iterdir():
+        assert path.stat().st_size <= 400
+    assert json.loads((tmp_path / "w.ndjson").read_text().splitlines()[-1])["body"] == "record 11"
+
+
+def test_demo_log_handler_copies_standard_library_events(tmp_path: Path) -> None:
+    log_file = demo_worker.DemoLogFile(tmp_path / "w.ndjson", 10_000, 1, {})
+    logger = logging.getLogger("workhorse.demo-test")
+    handler = demo_worker.DemoLogHandler(log_file)
+    logger.addHandler(handler)
+    try:
+        logger.error(
+            "Reporter failed",
+            extra={"event.name": "workhorse.worker.reporter_failed", "error.type": "ValueError"},
+        )
+        logger.error("echo", extra={demo_worker.ECHO_MARKER: True})
+    finally:
+        logger.removeHandler(handler)
+
+    lines = (tmp_path / "w.ndjson").read_text().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["severityText"] == "ERROR"
+    assert record["severityNumber"] == 17
+    assert record["eventName"] == "workhorse.worker.reporter_failed"
+    assert record["attributes"] == {"error.type": "ValueError"}
+
+
+def test_demo_log_file_refuses_an_invalid_size() -> None:
+    with pytest.raises(RuntimeError, match="WORKHORSE_DEMO_LOG_MAX_BYTES"):
+        demo_worker.demo_log_file(
+            {
+                "WORKHORSE_DEMO_LOG_DIRECTORY": "/tmp/x",
+                "WORKHORSE_DEMO_SERVICE_NAME": "w",
+                "WORKHORSE_DEMO_LOG_MAX_BYTES": "0",
+            }
+        )
+
+
+def test_demo_log_file_writes_strict_json_and_never_raises(tmp_path: Path) -> None:
+    log_file = demo_worker.DemoLogFile(tmp_path / "w.ndjson", 10_000, 1, {})
+    log_file.write(
+        severity_text="INFO",
+        body="numbers",
+        scope="test",
+        attributes={"nan": float("nan"), "list": [float("inf"), 1.5]},
+    )
+    log_file.write(
+        severity_text="INFO", body="bad key", scope="test", attributes={"x": {(1, 2): 3}}
+    )
+
+    lines = (tmp_path / "w.ndjson").read_text().splitlines()
+    record = json.loads(lines[0], parse_constant=lambda name: pytest.fail(f"non-JSON {name}"))
+    assert record["attributes"] == {"nan": None, "list": [None, 1.5]}

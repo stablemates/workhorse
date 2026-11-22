@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
+import type { Readable } from "node:stream";
+import { readLines } from "../typescript/demo/console-lines.cjs";
+import { RotatingFile, demoLogFile } from "../typescript/demo/file-log-exporter.cjs";
 
 const usesProcessGroups = process.platform !== "win32";
 const forceKillAfterMs = 5_000;
@@ -9,6 +13,11 @@ const processGroupPollMs = 25;
 const publicPort = Number(process.env.PORT ?? 3000);
 const dashboardDevPort = Number(process.env.WORKHORSE_DASHBOARD_DEV_PORT ?? 4173);
 const mode = process.env.WORKHORSE_DEMO_MODE ?? "development";
+const logEnvironment = process.env.WORKHORSE_DEMO_ENV ?? "development";
+// Every demo worker writes `<directory>/<environment>/<service>.ndjson`. The Node processes default
+// to the repository's `logs/` directory; the other workers write a file only when this is set.
+// The value is absolute, because the commands start in different directories, such as `go -C go`.
+const logDirectory = resolvePath(process.env.WORKHORSE_DEMO_LOG_DIRECTORY ?? "logs");
 const serverScript = mode === "production" ? "start" : "dev:server";
 const typescriptWorkerScript = mode === "production" ? "start:worker" : "dev:worker";
 // `workhorse-source` rather than the conventional `development`: bundlers apply `development`
@@ -27,7 +36,9 @@ const commands: Array<{
 }> = [
   {
     command: "pnpm",
-    arguments: ["--filter", "@stablemates/workhorse-demo", serverScript],
+    // The silent reporter leaves out the script banner and the error that pnpm prints when a
+    // signal stops the script. The supervisor reports an unexpected exit itself.
+    arguments: ["--reporter=silent", "--filter", "@stablemates/workhorse-demo", serverScript],
     env: {
       ...process.env,
       PORT: String(publicPort),
@@ -39,7 +50,12 @@ const commands: Array<{
   {
     // Each demo worker owns a process and database client. PostgreSQL is their only shared state.
     command: "pnpm",
-    arguments: ["--filter", "@stablemates/workhorse-demo", typescriptWorkerScript],
+    arguments: [
+      "--reporter=silent",
+      "--filter",
+      "@stablemates/workhorse-demo",
+      typescriptWorkerScript,
+    ],
     env: {
       ...process.env,
       WORKHORSE_DEMO_MODE: mode,
@@ -52,6 +68,8 @@ const commands: Array<{
     arguments: ["run", "--project", "python", "python/examples/demo_worker.py"],
     env: {
       ...process.env,
+      // A pipe makes standard output block-buffered, so each line would wait for a full buffer.
+      PYTHONUNBUFFERED: "1",
       WORKHORSE_DEMO_MODE: mode,
       WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-worker-python",
     },
@@ -113,7 +131,12 @@ const commands: Array<{
 if (process.env.DATABASE_URL_SECONDARY) {
   commands.push({
     command: "pnpm",
-    arguments: ["--filter", "@stablemates/workhorse-demo", typescriptWorkerScript],
+    arguments: [
+      "--reporter=silent",
+      "--filter",
+      "@stablemates/workhorse-demo",
+      typescriptWorkerScript,
+    ],
     env: {
       ...process.env,
       DATABASE_URL_PRIMARY: process.env.DATABASE_URL_SECONDARY,
@@ -136,7 +159,7 @@ if (process.env.DATABASE_URL_SECONDARY) {
 if (mode === "development" && process.env.WORKHORSE_DEMO_DASHBOARD_DEV === "true") {
   commands.push({
     command: "pnpm",
-    arguments: ["--filter", "@stablemates/workhorse-dashboard", "dev"],
+    arguments: ["--reporter=silent", "--filter", "@stablemates/workhorse-dashboard", "dev"],
     env: {
       ...process.env,
       PORT: String(dashboardDevPort),
@@ -186,6 +209,7 @@ function withApplicationName(url: string, name: string) {
 }
 
 for (const { env } of commands) {
+  env.WORKHORSE_DEMO_LOG_DIRECTORY = logDirectory;
   const name = env.WORKHORSE_DEMO_SERVICE_NAME;
   for (const variable of ["DATABASE_URL_PRIMARY", "DATABASE_URL_SECONDARY"]) {
     const url = env[variable];
@@ -193,14 +217,84 @@ for (const { env } of commands) {
   }
 }
 
-for (const { command, arguments: arguments_, env } of commands) {
-  children.push(
-    spawn(command, arguments_, {
-      detached: usesProcessGroups,
+/** The short name in front of each console line: `server`, `python`, `dashboard`, and so on. */
+function label(env: NodeJS.ProcessEnv): string {
+  const name = env.WORKHORSE_DEMO_SERVICE_NAME;
+  return name ? name.replace(/^workhorse-demo-(worker-)?/, "") : "dashboard";
+}
+
+const labelWidth = Math.max(...commands.map(({ env }) => label(env).length));
+const colors = [36, 33, 35, 32, 34, 91, 96, 93, 95, 92];
+const colored = process.stdout?.isTTY === true && process.env.NO_COLOR === undefined;
+const consoleFiles: RotatingFile[] = [];
+const brokenOutputs = new Set<NodeJS.WriteStream>();
+
+// A console that closes, such as a pipe to `head`, must not end the supervisor before it stops the
+// children. The supervisor stops them and keeps reading their output into the console files.
+for (const output of [process.stdout, process.stderr]) {
+  output?.on("error", () => {
+    brokenOutputs.add(output);
+    stop("SIGTERM");
+  });
+}
+
+/**
+ * Prints each line of one child stream with the child's name in front, and appends it to the
+ * child's `<service>.console.log` with a timestamp. The file keeps what the structured log does not
+ * hold, such as compiler output and a crash.
+ */
+function forward(
+  stream: Readable | null,
+  name: string,
+  output: NodeJS.WriteStream,
+  file: RotatingFile,
+  color: number,
+  source: "stdout" | "stderr",
+): void {
+  if (!stream) return;
+  const prefix = name.padEnd(labelWidth);
+  const tag = colored ? `\u001b[${color}m${prefix}\u001b[0m | ` : `${prefix} | `;
+  let batch: string[] = [];
+  readLines(stream, output, (line) => {
+    if (batch.length === 0) {
+      setImmediate(() => {
+        const lines = batch;
+        batch = [];
+        void file.append(lines).catch((error: unknown) => {
+          console.error(`Could not write the demo console log ${name}`, error);
+        });
+      });
+    }
+    batch.push(`${new Date().toISOString()} ${source} ${line}\n`);
+    // A full console stops the process, so it waits as it did when it wrote to the console itself.
+    return brokenOutputs.has(output) || output.write(`${tag}${line}\n`);
+  });
+}
+
+for (const [index, { command, arguments: arguments_, env }] of commands.entries()) {
+  const name = label(env);
+  const file = new RotatingFile(
+    demoLogFile(
+      env.WORKHORSE_DEMO_SERVICE_NAME ?? "workhorse-demo-dashboard",
+      logEnvironment,
+      ".console.log",
       env,
-      stdio: "inherit",
-    }),
+    ),
   );
+  consoleFiles.push(file);
+  const child = spawn(command, arguments_, {
+    detached: usesProcessGroups,
+    env,
+    stdio: ["inherit", "pipe", "pipe"],
+  });
+  const color = colors[index % colors.length]!;
+  forward(child.stdout, name, process.stdout, file, color, "stdout");
+  forward(child.stderr, name, process.stderr, file, color, "stderr");
+  child.once("exit", (code, signal) => {
+    if (!stopping)
+      console.error(`The demo ${name} process stopped (${signal ?? `exit code ${code}`})`);
+  });
+  children.push(child);
 }
 
 console.log(
@@ -289,5 +383,6 @@ const exitCodes = await Promise.all(
 );
 
 if (forceKillTimer) clearTimeout(forceKillTimer);
+await Promise.all(consoleFiles.map((file) => file.flush()));
 if (processGroupsLeftRunning) process.exitCode = 1;
 else process.exitCode = shutdownRequested ? 0 : (exitCodes.find((code) => code !== 0) ?? 0);

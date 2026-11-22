@@ -17,13 +17,63 @@ describe("demo telemetry preload", () => {
       scripts: Record<string, string>;
     };
 
+    const preloads = "--require ./telemetry.cjs --import ./telemetry-register.mjs";
     expect(manifest.scripts["dev:server"]).toContain(
-      "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/index.ts",
+      `tsx watch --conditions workhorse-source ${preloads} src/index.ts`,
     );
     expect(manifest.scripts["dev:worker"]).toContain(
-      "tsx watch --conditions workhorse-source --require ./telemetry.cjs src/worker-main.ts",
+      `tsx watch --conditions workhorse-source ${preloads} src/worker-main.ts`,
+    );
+    expect(manifest.scripts.start).toContain(`node ${preloads} dist/index.js`);
+    expect(manifest.scripts["start:worker"]).toContain(
+      "NODE_OPTIONS='--require=./telemetry.cjs --import=./telemetry-register.mjs'",
     );
   });
+
+  // Under the tsx loader, a `require` from the CommonJS preload loaded a second, CommonJS instance
+  // of the SDK sources. The provider went to that instance, so no SDK record reached the file.
+  it("registers the Workhorse provider on the SDK instance of a source-mode application", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workhorse-demo-source-provider-"));
+    const script = `
+      import("@stablemates/workhorse").then((core) => {
+        try {
+          core.registerTelemetryProvider({ emitLog() {} });
+          console.log("not registered");
+        } catch (error) {
+          console.log(error.message);
+        }
+      });
+    `;
+    try {
+      const { stdout } = await execFileAsync(
+        resolve("node_modules/.bin/tsx"),
+        [
+          "--conditions",
+          "workhorse-source",
+          "--require",
+          "./telemetry.cjs",
+          "--import",
+          "./telemetry-register.mjs",
+          "--eval",
+          script,
+        ],
+        {
+          cwd: demoDirectory,
+          env: {
+            ...process.env,
+            WORKHORSE_DEMO_TELEMETRY: "false",
+            WORKHORSE_DEMO_SERVICE_NAME: "workhorse-demo-source-provider",
+            WORKHORSE_DEMO_LOG_DIRECTORY: directory,
+            OTEL_TRACES_EXPORTER: "none",
+            OTEL_METRICS_EXPORTER: "none",
+          },
+        },
+      );
+      expect(stdout.trim()).toBe("A Workhorse telemetry provider is already registered");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("keeps telemetry opt-in at the root demo command", async () => {
     const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
@@ -53,13 +103,14 @@ describe("demo telemetry preload", () => {
 
   it("uses one log pipeline for local files and optional OTLP export", async () => {
     const preload = await readFile(resolve("typescript/demo/telemetry.cjs"), "utf8");
+    const exporter = await readFile(resolve("typescript/demo/file-log-exporter.cjs"), "utf8");
     const [index, worker] = await Promise.all([
       readFile(resolve("typescript/demo/src/index.ts"), "utf8"),
       readFile(resolve("typescript/demo/src/worker.ts"), "utf8"),
     ]);
 
     expect(preload).toContain("new RotatingFileLogExporter");
-    expect(preload).toContain('resolve(__dirname, "..", "..", "logs")');
+    expect(exporter).toContain('resolve(__dirname, "..", "..", "logs")');
     expect(preload.match(/new OTLPLogExporter/g)).toHaveLength(1);
     expect(preload).not.toContain("auto-instrumentations-node/register");
     expect(preload).toContain(

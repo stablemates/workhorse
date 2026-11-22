@@ -39,6 +39,8 @@ dependencies {
   implementation(libs.hikaricp)
   implementation(libs.slf4j.api)
   runtimeOnly(libs.slf4j.jdk14)
+  // The demo worker gives the SDK an OpenTelemetry logs bridge that writes the demo log file.
+  implementation(libs.opentelemetry.api)
 
   testImplementation(coreTests)
   testImplementation(exampleTests)

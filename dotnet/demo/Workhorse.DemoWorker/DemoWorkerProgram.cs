@@ -5,6 +5,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using Npgsql;
 using Workhorse.Hosting;
 
@@ -43,21 +45,46 @@ internal static partial class DemoWorkerProgram
     {
         var pollInterval = PollInterval(environment);
         var waits = WaitsForSchema(environment);
+        var logFile = DemoLogFile.FromEnvironment(environment);
         await using var dataSource = NpgsqlDataSource.Create(ConnectionString(DatabaseUrl(environment)));
         if (waits)
         {
             await WaitForSchemaAsync(dataSource, SchemaRetry, CancellationToken.None).ConfigureAwait(false);
         }
 
-        using var host = BuildHost(args, dataSource, pollInterval, WorkerId());
+        using var host = BuildHost(args, dataSource, pollInterval, WorkerId(), logFile);
         await host.RunAsync().ConfigureAwait(false);
         return Environment.ExitCode;
     }
 
     /// <summary>Builds the Generic Host whose worker serves the .NET queue, the fast-tier .NET queue, and the shared queue.</summary>
-    internal static IHost BuildHost(string[] args, NpgsqlDataSource dataSource, TimeSpan? pollInterval, string workerId)
+    /// <remarks>
+    /// The console writes one line for each record. With a <paramref name="logFile"/>, the host also
+    /// writes the Workhorse debug records and every information record to that file.
+    /// </remarks>
+    internal static IHost BuildHost(
+        string[] args,
+        NpgsqlDataSource dataSource,
+        TimeSpan? pollInterval,
+        string workerId,
+        DemoLogFile? logFile = null)
     {
         var builder = Host.CreateApplicationBuilder(args);
+        builder.Logging.AddSimpleConsole(options =>
+        {
+            options.SingleLine = true;
+            options.UseUtcTimestamp = true;
+            options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z' ";
+        });
+        if (logFile is not null)
+        {
+            builder.Logging.SetMinimumLevel(LogLevel.Debug);
+            builder.Logging.AddFilter<ConsoleLoggerProvider>(null, LogLevel.Information);
+            builder.Logging.AddFilter<DemoLogFileProvider>(null, LogLevel.Information);
+            builder.Logging.AddFilter<DemoLogFileProvider>("Workhorse", LogLevel.Debug);
+            builder.Logging.AddProvider(new DemoLogFileProvider(logFile));
+        }
+
         builder.Configuration.AddInMemoryCollection(WorkerSettings(pollInterval, workerId));
         builder.Services.AddSingleton(dataSource);
         builder.Services.AddWorkhorse(builder.Configuration);

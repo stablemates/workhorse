@@ -42,6 +42,7 @@ import run.workhorse.ConnectionSource;
 import run.workhorse.Queue;
 import run.workhorse.Worker;
 import run.workhorse.WorkerProcess;
+import run.workhorse.WorkhorseTelemetry;
 
 /**
  * Serves the JVM queues of the dashboard demo, plus the queue every demo language shares. It is the
@@ -80,6 +81,7 @@ public final class DemoWorkerProgram {
   static final int POOL_SIZE = WORKER_CONCURRENCY + 4;
 
   static final long DEFAULT_POLL_MS = 15_000;
+  static final String LOG_FORMAT_PROPERTY = "java.util.logging.SimpleFormatter.format";
   static final Duration SCHEMA_RETRY = Duration.ofMillis(500);
   static final int DEFAULT_PORT = 5432;
 
@@ -340,6 +342,18 @@ public final class DemoWorkerProgram {
   /** Builds the worker that serves the JVM queue, the fast-tier JVM queue, and the shared queue. */
   static Worker buildWorker(
       DataSource dataSource, Optional<Duration> pollInterval, String workerId) {
+    return buildWorker(dataSource, pollInterval, workerId, Optional.empty());
+  }
+
+  /**
+   * Builds the worker with the telemetry that receives its log events, or the global telemetry when
+   * {@code telemetry} is empty.
+   */
+  static Worker buildWorker(
+      DataSource dataSource,
+      Optional<Duration> pollInterval,
+      String workerId,
+      Optional<WorkhorseTelemetry> telemetry) {
     Worker.Builder builder =
         Worker.builder(dataSource)
             .queues(JVM_QUEUE, SHARED_QUEUE, JVM_FAST_QUEUE)
@@ -351,6 +365,7 @@ public final class DemoWorkerProgram {
             .registryInterval(Duration.ofMillis(250))
             .shutdownGrace(Duration.ofSeconds(25));
     pollInterval.ifPresent(builder::pollInterval);
+    telemetry.ifPresent(builder::telemetry);
     return builder
         .handle(
             LANGUAGE_TASK_TYPE,
@@ -364,7 +379,16 @@ public final class DemoWorkerProgram {
   }
 
   public static void main(String[] arguments) throws InterruptedException {
+    // One line for each record, rather than the two lines of the java.util.logging default. The
+    // formatter reads this property once, before the first record.
+    if (System.getProperty(LOG_FORMAT_PROPERTY) == null) {
+      System.setProperty(LOG_FORMAT_PROPERTY, "%1$tFT%1$tT.%1$tL%1$tz %4$s %3$s %5$s%6$s%n");
+    }
     Map<String, String> environment = System.getenv();
+    Optional<DemoLogFile> logFile = DemoLogFile.fromEnvironment(environment);
+    logFile.ifPresent(file -> java.util.logging.Logger.getLogger("").addHandler(file.julHandler()));
+    Optional<WorkhorseTelemetry> telemetry =
+        logFile.map(file -> WorkhorseTelemetry.of(file.openTelemetry()));
     Optional<Duration> poll = pollInterval(environment);
     boolean waits = waitsForSchema(environment);
     // The process exits when the worker stops, and PostgreSQL then ends the pool's sessions.
@@ -372,7 +396,7 @@ public final class DemoWorkerProgram {
     if (waits) {
       waitForSchema(pool, SCHEMA_RETRY);
     }
-    WorkerProcess.runWorkerProcess(buildWorker(pool, poll, workerId()));
+    WorkerProcess.runWorkerProcess(buildWorker(pool, poll, workerId(), telemetry));
   }
 
   /**
