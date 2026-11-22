@@ -11,6 +11,14 @@ adds.
 
 ## Unreleased
 
+### The handler span says stale after a refused acknowledgement
+
+A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
+it. The worker settled nothing, and lease recovery settles the task later. The .NET
+worker gave the `workhorse.handler` span the outcome `unknown` also when PostgreSQL refused the
+acknowledgement. A refusal is a lost lease, so the span now gets `stale`, as in TypeScript. A failed
+acknowledgement keeps `unknown`. The handler metrics do not change.
+
 ### An attempt without an outcome is not an execution
 
 An attempt whose settlement fails has no outcome. The TypeScript worker records its

@@ -23,6 +23,15 @@ upgrade steps.
 
 ## Unreleased
 
+### The handler span says canceled only after an accepted acknowledgement
+
+A heartbeat delivers a cancellation, and PostgreSQL refuses the `acknowledge_cancel_v1` call. The
+worker settled nothing, and lease recovery settles the task later. The TypeScript worker still gave
+the `workhorse.handler` span the outcome `canceled`, while `workhorse.handler.duration` recorded
+`unknown`. The span now gets `canceled` only after PostgreSQL accepts the acknowledgement. A refused
+acknowledgement gives the span the outcome `stale`, as a refused acknowledgement after `fail_v1` or
+`release_owned_v1` does. The handler metrics do not change.
+
 ### A logger failure no longer changes an operation result
 
 A log record observes an operation, so it must not change the operation. Before this change, a

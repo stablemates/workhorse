@@ -1468,9 +1468,12 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
 
     The heartbeat submits the cancellation first. If acknowledge_cancel_v1 then fails or refuses,
     the worker settled nothing, so it writes no task.execution_finished record, and
-    workhorse.handler.executions does not count the attempt.
+    workhorse.handler.executions does not count the attempt. The handler span gets the outcome
+    canceled only after PostgreSQL accepts the acknowledgement. A failed acknowledgement gives it
+    the outcome unknown and the error status, and a refused one gives it the outcome stale.
     """
     LOG_EXPORTER.clear()
+    SPAN_EXPORTER.clear()
     executions_before = _counter_values("workhorse.handler.executions")
     durations_before = _histogram_counts("workhorse.handler.duration")
     queue_name = _queue_name(f"cancel-{acknowledgement}")
@@ -1523,6 +1526,48 @@ def test_an_unacknowledged_cancellation_writes_no_execution_record(
     assert _added_by_outcome(executions_before, executions, "cancel.unacknowledged") == {}
     durations = _histogram_counts("workhorse.handler.duration")
     assert _added_by_outcome(durations_before, durations, "cancel.unacknowledged") == {"unknown": 1}
+    [handler_span] = [
+        span
+        for span in SPAN_EXPORTER.get_finished_spans()
+        if span.name == "workhorse.handler" and span.attributes["workhorse.task.id"] == task_id
+    ]
+    if acknowledgement == "fails":
+        assert handler_span.attributes["workhorse.handler.outcome"] == "unknown"
+        assert handler_span.status.status_code is StatusCode.ERROR
+    else:
+        assert handler_span.attributes["workhorse.handler.outcome"] == "stale"
+
+
+def test_the_execution_record_comes_before_the_handler_record(database_url: str) -> None:
+    """TypeScript writes task.execution_finished at the settlement, before handler.finished."""
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("record-order")
+    with psycopg.connect(database_url) as connection:
+        queue = Queue(connection, queue_name)
+        succeeds = queue.enqueue("order.succeeds", {})
+        fails = queue.enqueue("order.fails", {})
+        connection.commit()
+
+    def fail(_payload: object, _context: HandlerContext) -> None:
+        raise RuntimeError("the handler failed")
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id="python-record-order")
+    worker.handle("order.succeeds", lambda _payload, _context: None)
+    worker.handle("order.fails", fail)
+    # One pass can claim both tasks.
+    assert worker.run_once() is True
+    while worker.run_once():
+        pass
+
+    for task_id in (succeeds, fails):
+        events = [
+            record.log_record.event_name
+            for record in LOG_EXPORTER.get_finished_logs()
+            if record.log_record.event_name
+            in {"workhorse.task.execution_finished", "workhorse.handler.finished"}
+            and record.log_record.attributes["workhorse.task.id"] == task_id
+        ]
+        assert events == ["workhorse.task.execution_finished", "workhorse.handler.finished"]
 
 
 def test_a_run_writes_its_start_record_before_readiness_and_registration(

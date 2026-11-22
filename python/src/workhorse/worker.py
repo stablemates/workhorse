@@ -3924,44 +3924,38 @@ class Worker:
                 "Task handler started",
                 {**attributes, "workhorse.worker.id": self.worker_id},
             )
-            settlement_raised = False
+            raised: BaseException | None = None
             try:
                 self._execute_claimed_task_within_span(
                     task, claim_sent_at, arbiter, span_outcome, span_errors
                 )
             except BaseException as error:
-                settlement_raised = True
+                raised = error
                 _record_span_error(handler_span, error.__class__.__name__)
                 raise
             finally:
                 duration_ms = (monotonic() - started_at) * 1_000
                 outcome = _telemetry_outcome(arbiter.outcome)
-                # A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each
-                # settlement raises if that acknowledgement fails or PostgreSQL refuses it. The
-                # attempt then settled nothing, so its outcome is unknown, as in TypeScript.
-                if outcome == "canceled" and settlement_raised:
-                    outcome = "unknown"
-                handler_span.set_attribute(
-                    "workhorse.handler.outcome",
+                handler_outcome = (
                     span_outcome["value"]
                     if span_outcome["value"] != "unknown"
-                    else _handler_span_outcome(arbiter.outcome),
+                    else _handler_span_outcome(arbiter.outcome)
                 )
+                # A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each
+                # settlement raises if that acknowledgement fails or PostgreSQL refuses it. The
+                # attempt then settled nothing, so its outcome is unknown, as in TypeScript. The
+                # span gets canceled only after PostgreSQL accepts. A refusal is a lost lease, so
+                # the span gets stale.
+                if outcome == "canceled" and raised is not None:
+                    outcome = "unknown"
+                    handler_outcome = "stale" if isinstance(raised, StaleLeaseError) else "unknown"
+                handler_span.set_attribute("workhorse.handler.outcome", handler_outcome)
                 if span_errors:
                     _record_span_error(handler_span, span_errors[0])
                 _record_handler_execution(task, outcome, duration_ms)
-                _emit_log(
-                    "DEBUG",
-                    "workhorse.handler.finished",
-                    "Task handler finished",
-                    {
-                        **attributes,
-                        "workhorse.worker.id": self.worker_id,
-                        "workhorse.handler.duration_ms": duration_ms,
-                    },
-                )
-                # An attempt whose settlement failed has no outcome. TypeScript writes no
-                # execution record for it, so this worker writes none.
+                # As in TypeScript, the execution record comes first, at the settlement, and
+                # handler.finished comes last. An attempt whose settlement failed has no outcome.
+                # TypeScript writes no execution record for it, so this worker writes none.
                 if outcome != "unknown":
                     _emit_log(
                         "INFO",
@@ -3973,6 +3967,16 @@ class Worker:
                             "workhorse.handler.outcome": outcome,
                         },
                     )
+                _emit_log(
+                    "DEBUG",
+                    "workhorse.handler.finished",
+                    "Task handler finished",
+                    {
+                        **attributes,
+                        "workhorse.worker.id": self.worker_id,
+                        "workhorse.handler.duration_ms": duration_ms,
+                    },
+                )
 
     def _execute_claimed_task_within_span(
         self,

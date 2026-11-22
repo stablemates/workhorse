@@ -647,6 +647,12 @@ class WorkerLogsDatabaseTest {
     // not count the attempt.
     assertEquals(List.of("unknown"), outcomes("workhorse.handler.duration"));
     assertEquals(List.of(), outcomes("workhorse.handler.executions"));
+    // The span gets canceled only after PostgreSQL accepts. A failed acknowledgement gives
+    // unknown, and a refused one gives stale, as in TypeScript.
+    SpanData handler = recording.spans(Names.SPAN_HANDLER).get(0);
+    assertEquals(
+        acknowledgement.equals("fails") ? "unknown" : "stale",
+        handler.getAttributes().get(AttributeKey.stringKey(Names.HANDLER_OUTCOME)));
   }
 
   /** The {@code workhorse.handler.outcome} of each point of the metric {@code name}. */

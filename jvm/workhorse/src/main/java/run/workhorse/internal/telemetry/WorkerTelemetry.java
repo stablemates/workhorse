@@ -436,7 +436,9 @@ public final class WorkerTelemetry {
      * constant, or {@code null} when the attempt reported none. Records the handler duration,
      * runtime, and execution. If {@code settled} is false, the attempt settled nothing, so the
      * duration records the outcome {@code unknown}, and the executions counter does not count the
-     * attempt, as in TypeScript. The span keeps {@code outcome}.
+     * attempt, as in TypeScript. The span then gets {@code unknown} for an outcome that has no span
+     * value of its own, such as {@code CANCELLED}, unless {@link
+     * WorkerTelemetry#handlerSpanOutcome} set one.
      */
     public void finish(@Nullable String outcome, boolean settled) {
       try {

@@ -581,7 +581,9 @@ public sealed partial class Worker
                 {
                     // PostgreSQL refused the cancellation that a heartbeat round submitted. The
                     // worker settled nothing, so the attempt reports no outcome, as in TypeScript.
+                    // The refusal is a lost lease, so the span gets stale, as in TypeScript.
                     arbiter.FailCancellation();
+                    WorkerTelemetry.HandlerSpanOutcome(task, "stale");
                     throw new LeaseLostException(task.Id, "cancel");
                 }
 

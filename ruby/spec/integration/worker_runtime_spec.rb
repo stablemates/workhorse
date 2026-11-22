@@ -805,6 +805,36 @@ RSpec.describe "Worker runtime against PostgreSQL" do
     end
   end
 
+  # A heartbeat delivers the cancellation, and acknowledge_cancel_v1 fails or PostgreSQL refuses it.
+  # The worker settled nothing. The handler span gets canceled only after PostgreSQL accepts, so a
+  # failed acknowledgement gives unknown, and a refused one gives stale, as in TypeScript.
+  {"fails" => "unknown", "refused" => "stale"}.each do |acknowledgement, span_outcome|
+    it "gives the handler span #{span_outcome} when the cancellation acknowledgement #{acknowledgement}" do
+      task_id = queue.enqueue("cancel-me", {}).task_id
+      subject = worker(lease: 10, heartbeat: 0.1).handle("cancel-me") do |_payload, context|
+        queue.cancel(task_id, requested_by: "spec")
+        wait_until { context.cancellation.cancelled? }
+        raise "the handler stopped for the cancellation"
+      end
+      allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
+        next original.call(sql, *arguments) unless sql == W::SqlCatalogue::ACKNOWLEDGE_CANCEL_V1
+        raise PG::ConnectionBad, "the acknowledgement failed" if acknowledgement == "fails"
+
+        [{"accepted" => "f"}]
+      end
+      begin
+        subject.run_once
+      rescue PG::ConnectionBad
+        nil
+      end
+
+      span = RecordedTelemetry.spans.find do |recorded|
+        recorded.name == "workhorse.handler" && recorded.attributes["workhorse.task.id"] == task_id
+      end
+      expect(span.attributes["workhorse.handler.outcome"]).to eq(span_outcome)
+    end
+  end
+
   it "parents a handler span only to its task's stored trace context" do
     untraced_id = queue.enqueue("trace-parent", {}).task_id
     producer = OpenTelemetry::Trace::SpanContext.new

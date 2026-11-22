@@ -497,6 +497,18 @@ RSpec.describe "The worker log events" do
       expect(measured.first.last["workhorse.handler.outcome"]).to eq("unknown")
     end
 
+    it "writes workhorse.task.execution_finished before workhorse.handler.finished, as TypeScript does" do
+      claimed = Struct.new(:id, :type, :attempt, :queue).new(task, "send", 1, "mail")
+      attributes = {"workhorse.queue.name" => "mail"}.merge(W::Telemetry.task_span_attributes(claimed))
+      arbiter = W::Arbiter.new
+      arbiter.submit(:completed)
+      worker(pool_class.new).send(:finish_telemetry, claimed, nil, arbiter, {span_outcome: nil, errors: []},
+        Process.clock_gettime(Process::CLOCK_MONOTONIC), attributes)
+
+      expect(logger.records.map { |record| record[1] })
+        .to eq(%w[workhorse.task.execution_finished workhorse.handler.finished])
+    end
+
     it "writes workhorse.worker.polling_only at warn once for a run without a listener" do
       subject = worker(FakeLendingPool.new, poll_interval: 0.01, disable_registry: true, heartbeat: 0.1)
       runner = Thread.new { subject.run }

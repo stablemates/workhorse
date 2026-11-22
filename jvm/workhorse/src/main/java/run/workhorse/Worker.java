@@ -3017,7 +3017,7 @@ public final class Worker implements AutoCloseable {
     WorkerTelemetry.Execution execution = telemetry.execute(claimed);
     // The handler logs run inside the handler span, so they carry its trace.
     log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
-    boolean settlementThrew = false;
+    @Nullable Throwable settlementError = null;
     try {
       if (registration == null) {
         log(
@@ -3030,7 +3030,7 @@ public final class Worker implements AutoCloseable {
         runHandler(task, registration, arbiter);
       }
     } catch (RuntimeException | Error error) {
-      settlementThrew = true;
+      settlementError = error;
       telemetry.handlerError(error.getClass().getName());
       throw error;
     } finally {
@@ -3038,7 +3038,12 @@ public final class Worker implements AutoCloseable {
       // A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each settlement
       // throws if that acknowledgement fails or PostgreSQL refuses it. The attempt then settled
       // nothing, so its outcome is unknown, as in TypeScript.
-      boolean settled = !(outcome == Outcome.CANCELLED && settlementThrew);
+      boolean settled = !(outcome == Outcome.CANCELLED && settlementError != null);
+      if (!settled && settlementError instanceof LeaseLostException) {
+        // The span gets canceled only after PostgreSQL accepts. A refusal is a lost lease, so the
+        // span gets stale, as in TypeScript. A failed acknowledgement keeps unknown.
+        telemetry.handlerSpanOutcome("stale");
+      }
       try {
         String executionOutcome =
             settled

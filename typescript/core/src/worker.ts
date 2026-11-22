@@ -1905,8 +1905,7 @@ export class Worker {
           return;
         }
         if (attempt.arbiter.is("cancelled")) {
-          await attempt.acknowledgeCancellation();
-          span.setAttribute("workhorse.handler.outcome", "canceled");
+          await this.acknowledgeDeliveredCancellation(span, attempt);
           return;
         }
         if (attempt.arbiter.is("lease_expired")) {
@@ -2070,6 +2069,18 @@ export class Worker {
     );
   }
 
+  // Acknowledges a cancellation that the arbiter already holds, for example from a heartbeat. The
+  // span gets canceled only after PostgreSQL accepts. A refusal settles nothing and leaves the task
+  // to lease recovery, so the span gets stale, as after a refused acknowledgement of a fail_v1 or
+  // release_owned_v1 answer. The attempt then records no outcome.
+  private async acknowledgeDeliveredCancellation(
+    span: WorkhorseTelemetrySpan,
+    attempt: TaskAttempt,
+  ): Promise<void> {
+    const accepted = await attempt.acknowledgeCancellation();
+    span.setAttribute("workhorse.handler.outcome", accepted ? "canceled" : "stale");
+  }
+
   // Settles an attempt whose handler, hooks, or completion threw.
   private async settleFailure(
     task: ClaimedTask,
@@ -2101,8 +2112,7 @@ export class Worker {
     const abortReason: unknown = attempt.signal.reason;
     if (arbiter.is("cancelled") || abortReason instanceof CancellationRequestedError) {
       arbiter.submit("cancelled");
-      await attempt.acknowledgeCancellation();
-      span.setAttribute("workhorse.handler.outcome", "canceled");
+      await this.acknowledgeDeliveredCancellation(span, attempt);
       return;
     }
     if (
@@ -2114,8 +2124,7 @@ export class Worker {
     ) {
       await attempt.settleExpiration();
       if (arbiter.is("cancelled")) {
-        await attempt.acknowledgeCancellation();
-        span.setAttribute("workhorse.handler.outcome", "canceled");
+        await this.acknowledgeDeliveredCancellation(span, attempt);
         return;
       }
       if (arbiter.is("lease_expired")) {

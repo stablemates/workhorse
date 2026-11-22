@@ -2368,7 +2368,11 @@ A heartbeat or an expiry request can deliver a cancellation while the handler ru
 records `unknown`, `workhorse.handler.executions` does not count it, and the worker writes no
 `workhorse.task.execution_finished` record. The run continues. The handler span outcome is
 `canceled` only after PostgreSQL accepts the acknowledgement. A refused acknowledgement is `stale`,
-and a failed request is `unknown`. The Rust handler span has no outcome attribute.
+and a failed request is `unknown`. The Rust handler span has no outcome attribute. This rule covers
+the direct settlement of a delivered cancellation, as [Structured logs](telemetry.md#structured-logs)
+states. During the reconciliation of a refused settlement, a refused acknowledgement is a lost
+lease, as the paragraph above states. .NET differs when a heartbeat delivered the cancellation
+before that reconciliation: it records `unknown`.
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.
