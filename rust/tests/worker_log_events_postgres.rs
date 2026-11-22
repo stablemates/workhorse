@@ -1061,6 +1061,129 @@ async fn a_refused_cancellation_acknowledgement_logs_no_execution_record() {
     );
 }
 
+/// The worker releases a claimed task that has no handler, and the release loses its lease. A lost
+/// lease ends that activation only, as in TypeScript: the worker writes the execution record with
+/// the outcome `lease_lost`, and it continues to claim. Before, `release_missing` returned the lost
+/// lease, so `run_once` and `run` ended with it. A release that fails is still an error.
+#[tokio::test]
+async fn a_lost_lease_of_a_release_lets_the_worker_continue() {
+    let Some(database) = scratch_database("release_lease_lost").await else { return };
+    let (client, connection) = tokio_postgres::connect(database.url(), NoTls).await.unwrap();
+    tokio::spawn(connection);
+    // `stale` goes to the reconciliation: no cancellation is pending, and `expire_owned_v1`
+    // answers `not_due`. `cancel_requested` meets a refused acknowledgement.
+    for (name, functions) in [
+        (
+            "stale",
+            r"CREATE OR REPLACE FUNCTION workhorse.release_owned_v1(
+                p_task_id uuid, p_worker_id text, p_fence_token bigint)
+                RETURNS text LANGUAGE sql AS $body$ SELECT 'stale'::text $body$;",
+        ),
+        (
+            "refused-acknowledgement",
+            r"CREATE OR REPLACE FUNCTION workhorse.release_owned_v1(
+                p_task_id uuid, p_worker_id text, p_fence_token bigint)
+                RETURNS text LANGUAGE sql AS $body$ SELECT 'cancel_requested'::text $body$;
+              CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+                p_task_id uuid, p_worker_id text, p_fence_token bigint)
+                RETURNS boolean LANGUAGE sql AS $body$ SELECT false $body$;",
+        ),
+    ] {
+        client.batch_execute(functions).await.unwrap();
+        let queue_name = format!("rust-release-lease-lost-{name}");
+        let queue = Queue::connect(database.url(), &queue_name).await.unwrap();
+        let missing =
+            queue.enqueue("missing", &json!({}), EnqueueOptions::default()).await.unwrap().task_id;
+        let worker = worker_on(database.url(), &queue_name);
+        let (handled, mut ran) = tokio::sync::mpsc::unbounded_channel::<()>();
+        worker.handle("handled", move |_: Value, _| {
+            let handled = handled.clone();
+            async move {
+                let _ = handled.send(());
+                Ok::<_, HandlerError>(json!(null))
+            }
+        });
+        let events = Events::default();
+        let subscriber = events.install();
+        let worked =
+            tokio::time::timeout(Duration::from_secs(30), worker.run_once()).await.unwrap();
+        assert!(!worked.unwrap(), "{name}: the release made progress");
+        events.one("workhorse.task.execution_finished").expect(
+            Level::INFO,
+            &[
+                ("workhorse.task.id", text(missing)),
+                ("workhorse.handler.outcome", text("lease_lost")),
+            ],
+        );
+
+        // `run` continues after the lost lease. It releases the second task without a handler,
+        // loses that lease too, and still runs the handled task. The first released task keeps
+        // its lease, so `run` does not claim it again before the lease expires. A `run` that ends
+        // with the lost lease ends before both happen, or returns the error when it stops.
+        let second =
+            queue.enqueue("missing", &json!({}), EnqueueOptions::default()).await.unwrap().task_id;
+        queue.enqueue("handled", &json!({}), EnqueueOptions::default()).await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let mut running = tokio::spawn({
+            let worker = worker.clone();
+            async move {
+                worker
+                    .run(async {
+                        let _ = stopped.await;
+                    })
+                    .await
+            }
+        });
+        let released = || {
+            events.named("workhorse.task.execution_finished").iter().any(|event| {
+                event.field("workhorse.task.id") == second.to_string()
+                    && event.field("workhorse.handler.outcome") == "lease_lost"
+            })
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut handled_ran = false;
+        while !handled_ran || !released() {
+            tokio::select! {
+                _ = ran.recv() => handled_ran = true,
+                ended = &mut running => {
+                    panic!("{name}: run ended before it released and ran the tasks: {ended:?}")
+                }
+                () = tokio::time::sleep_until(deadline) => {
+                    panic!("{name}: run did not release and run the tasks: handled {handled_ran}")
+                }
+                () = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+        }
+        stop.send(()).unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(30), running).await.unwrap().unwrap();
+        assert!(ended.is_ok(), "{name}: {ended:?}");
+        drop(subscriber);
+    }
+
+    // A release that fails settled nothing, so it is an error of the pass and writes no execution
+    // record.
+    client
+        .batch_execute(
+            r"CREATE OR REPLACE FUNCTION workhorse.release_owned_v1(
+                p_task_id uuid, p_worker_id text, p_fence_token bigint)
+                RETURNS text LANGUAGE plpgsql AS
+                $body$ BEGIN RAISE EXCEPTION 'injected release failure'; END $body$;",
+        )
+        .await
+        .unwrap();
+    let queue_name = "rust-release-failed";
+    let queue = Queue::connect(database.url(), queue_name).await.unwrap();
+    queue.enqueue("missing", &json!({}), EnqueueOptions::default()).await.unwrap();
+    let worker = worker_on(database.url(), queue_name);
+    worker.handle("handled", |_: Value, _| async { Ok::<_, HandlerError>(json!(null)) });
+    let events = Events::default();
+    let _subscriber = events.install();
+    let worked = tokio::time::timeout(Duration::from_secs(30), worker.run_once()).await.unwrap();
+    assert!(worked.is_err(), "the failed release did not end the pass");
+    let executions = events.named("workhorse.task.execution_finished");
+    assert!(executions.is_empty(), "{executions:?}");
+}
+
 /// The records of one attempt carry the task identity themselves, as TypeScript writes them. The
 /// handler span also carries it, but an exporter of log records does not copy span fields.
 #[tokio::test]

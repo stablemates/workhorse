@@ -2363,6 +2363,12 @@ If `fail_v1` or `release_owned_v1` answers `cancel_requested` and `acknowledge_c
 the worker also settles nothing. Each SDK then reports `lease_lost` on the metric. TypeScript,
 Python, Go, Ruby, the JVM, and .NET report `stale` on the span (SM-1863, SM-1884).
 
+A lost lease ends only its activation, also for the release of a task that has no handler. Each SDK
+records `lease_lost` and writes it in the `workhorse.task.execution_finished` record, and the worker
+continues to claim. Go `release` and Rust `release_missing` return no error for a lost lease. If
+`release_owned_v1`, the acknowledgement, or the expiry request of the reconciliation fails, the
+release settled nothing. The attempt then has no outcome, and the error ends the run in each SDK.
+
 A heartbeat or an expiry request can deliver a cancellation while the handler runs. If
 `acknowledge_cancel_v1` then refuses it, the attempt has no outcome in each SDK: its duration
 records `unknown`, `workhorse.handler.executions` does not count it, and the worker writes no
@@ -3418,7 +3424,8 @@ released task. Also, `terminalize_deadline_v1` rolled back the whole recovery pa
 released task.
 
 Each SDK releases a task of an unregistered type through `release_owned_v1` and records the
-`released` handler outcome. A claim whose tasks were all released counts as empty. The release also
+`released` handler outcome. If the release loses its lease, the worker records `lease_lost` and
+continues, as [A stale failure or release](#a-stale-failure-or-release) states. A claim whose tasks were all released counts as empty. The release also
 sends a notification, so the continuous loop starts a release wait that a notification does not end.
 
 ##### Continuous loop

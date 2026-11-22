@@ -36,7 +36,9 @@ func (executor statementExecutor) Query(_ context.Context, sql string, _ ...any)
 
 // A task without a handler is released, release_owned_v1 answers cancel_requested, and PostgreSQL
 // then refuses the acknowledgement. The worker lost the lease, so the handler metrics count the
-// outcome lease_lost, as on the execution path. Before, they counted canceled.
+// outcome lease_lost, as on the execution path. Before, they counted canceled. The lost lease ends
+// this activation only, so release returns no error and the worker continues, as in TypeScript.
+// Before, release returned the lost lease, and the dispatcher stopped the run with it.
 func TestARefusedReleaseAcknowledgementIsALostLease(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -59,10 +61,8 @@ func TestARefusedReleaseAcknowledgementIsALostLease(t *testing.T) {
 		acknowledgeCancelStatementName: {{rowAcceptedField: false}},
 	}}
 
-	err := worker.release(context.Background(), executor, task)
-
-	if !errors.Is(err, ErrStaleLease) {
-		t.Fatalf("expected the lost lease, received %v", err)
+	if err := worker.release(context.Background(), executor, task); err != nil {
+		t.Fatalf("release() = %v, want nil", err)
 	}
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
