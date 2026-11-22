@@ -501,10 +501,13 @@ def record_handler_execution(
         {**attributes, "workhorse.handler.outcome": outcome},
     )
     _handler_runtime.add(duration_ms, attributes)
-    _handler_executions.add(
-        1,
-        {**attributes, "workhorse.handler.outcome": outcome},
-    )
+    # An attempt whose settlement failed has no outcome. As in TypeScript, the duration records it
+    # as unknown, and workhorse.handler.executions does not count it.
+    if outcome != "unknown":
+        _handler_executions.add(
+            1,
+            {**attributes, "workhorse.handler.outcome": outcome},
+        )
 
 
 def record_batch(

@@ -489,7 +489,9 @@ internal static class WorkerTelemetry
 
         /// <summary>
         /// Ends the handler span with the attempt's <paramref name="outcome"/>, or <c>null</c> when
-        /// the attempt reported none. Records the handler duration, runtime, and execution.
+        /// the attempt reported none. Records the handler duration, runtime, and execution. An attempt
+        /// without an outcome has a duration with the outcome <c>unknown</c>, but
+        /// <c>workhorse.handler.executions</c> does not count it, as in TypeScript.
         /// </summary>
         internal void Finish(Outcome? outcome)
         {
@@ -517,7 +519,10 @@ internal static class WorkerTelemetry
                     var tags = Metric(_task.Queue, _task.Type);
                     tags.Add(Names.HandlerOutcome, metricOutcome);
                     HandlerDuration.Record(duration, tags);
-                    HandlerExecutions.Add(1, tags);
+                    if (metricOutcome != "unknown")
+                    {
+                        HandlerExecutions.Add(1, tags);
+                    }
                 }
             }
             finally

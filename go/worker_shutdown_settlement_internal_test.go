@@ -37,8 +37,10 @@ func TestWorkerLogsTheShutdownSettlementFailedEvent(t *testing.T) {
 		errors.New("handler stopped"),
 	)
 
-	if outcome != handlerOutcomeCanceled {
-		t.Fatalf("expected the canceled outcome, received %v", outcome)
+	// The release settled nothing, so the attempt has no outcome, as in TypeScript. The handler
+	// metrics then count no execution.
+	if outcome != handlerOutcomeUnknown {
+		t.Fatalf("expected the unknown outcome, received %v", outcome)
 	}
 	// SM-2073: Run returns this error, as Ruby, Rust, the JVM, and .NET do.
 	if err == nil || err.Error() != "registry is offline" {
@@ -64,6 +66,31 @@ func TestWorkerLogsTheShutdownSettlementFailedEvent(t *testing.T) {
 	}
 }
 
+// A failure write after the shutdown cancellation fails. The attempt settled nothing, so it has no
+// outcome, and the handler metrics count no execution.
+func TestAFailedFailureWriteAfterTheStopHasNoOutcome(t *testing.T) {
+	worker := &Worker{
+		workerID: "shutdown-worker",
+		logger:   slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+	}
+	task := ClaimedTask{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		Type:       "send-invoice",
+		Queue:      "billing",
+		Attempt:    2,
+		FenceToken: 7,
+	}
+
+	outcome, err := worker.failAfterShutdown(context.Background(), failingRegistryExecutor{}, task, errors.New("handler failed"))
+
+	if err == nil {
+		t.Fatal("expected the failure write error")
+	}
+	if outcome != handlerOutcomeUnknown {
+		t.Fatalf("expected the unknown outcome, received %v", outcome)
+	}
+}
+
 // SM-2073: a panic in execute outside the handler, such as in the Error method of a handler error,
 // after the stop. failPanickedExecution writes the failure; when that write fails, Run must see
 // the error instead of the stop's cancellation.
@@ -82,7 +109,7 @@ func TestFailPanickedExecutionReturnsAFailedWriteAfterTheStop(t *testing.T) {
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
 
-	err := worker.failPanickedExecution(stopped, failingRegistryExecutor{}, task, "defect")
+	_, err := worker.failPanickedExecution(stopped, failingRegistryExecutor{}, task, "defect")
 
 	if err == nil || errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the failed write, received %v", err)

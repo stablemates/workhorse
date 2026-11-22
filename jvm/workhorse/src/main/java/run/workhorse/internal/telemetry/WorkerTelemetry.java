@@ -435,7 +435,8 @@ public final class WorkerTelemetry {
      * Ends the handler span with the attempt's outcome, named as the worker's {@code Outcome}
      * constant, or {@code null} when the attempt reported none. Records the handler duration,
      * runtime, and execution. If {@code settled} is false, the attempt settled nothing, so the
-     * handler metrics record the outcome {@code unknown}. The span keeps {@code outcome}.
+     * duration records the outcome {@code unknown}, and the executions counter does not count the
+     * attempt, as in TypeScript. The span keeps {@code outcome}.
      */
     public void finish(@Nullable String outcome, boolean settled) {
       try {
@@ -455,7 +456,9 @@ public final class WorkerTelemetry {
         Map<String, @Nullable Object> withOutcome = new LinkedHashMap<>(attributes);
         withOutcome.put(Names.HANDLER_OUTCOME, metricOutcome);
         telemetry.record(Instrument.HANDLER_DURATION, duration, withOutcome);
-        telemetry.add(Instrument.HANDLER_EXECUTIONS, 1, withOutcome);
+        if (!metricOutcome.equals("unknown")) {
+          telemetry.add(Instrument.HANDLER_EXECUTIONS, 1, withOutcome);
+        }
       } finally {
         EXECUTIONS.remove();
         span.close();

@@ -12,6 +12,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	workhorse "github.com/stablemates/workhorse/go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // The Go SDK writes each worker log event of the TypeScript union WorkhorseLogEvent with the name,
@@ -693,6 +697,7 @@ func TestWorkerWritesExecutionRecordsOnlyForASettledAttempt(t *testing.T) {
 	var logs lockedBuffer
 	executor := workhorse.NewPGXExecutor(pool)
 	queue := workhorse.NewQueue(executor, queueName)
+	reader := installMetricReader(t)
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: workerID, PollingOnly: true, DisableRegistry: true,
 		MaintenanceInterval: time.Hour, Logger: debugJSONLogger(&logs),
@@ -748,5 +753,212 @@ func TestWorkerWritesExecutionRecordsOnlyForASettledAttempt(t *testing.T) {
 	if records := matchingLogRecords(t, output, "workhorse.task.execution_finished",
 		map[string]any{"workhorse.task.id": failedID}); len(records) != 0 {
 		t.Fatalf("a failed settlement wrote an execution record: %v", records)
+	}
+	// As in TypeScript, the duration records the outcome unknown, and the executions counter does
+	// not count the attempt.
+	executions, durations := handlerMetricOutcomes(t, reader, "completes")
+	if len(executions) != 0 {
+		t.Fatalf("workhorse.handler.executions counted the unsettled attempt: %v", executions)
+	}
+	if len(durations) != 1 || durations[0] != "unknown" {
+		t.Fatalf("workhorse.handler.duration outcomes = %v, want [unknown]", durations)
+	}
+}
+
+// installMetricReader makes a manual reader the global meter provider until the test ends. A worker
+// binds its instruments when it is built, so build it after this call.
+func installMetricReader(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	previousProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previousProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+	return reader
+}
+
+// handlerMetricOutcomes returns the workhorse.handler.outcome of each point of
+// workhorse.handler.executions and of workhorse.handler.duration for taskType.
+func handlerMetricOutcomes(t *testing.T, reader *sdkmetric.ManualReader, taskType string) (executions, durations []string) {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	outcome := func(attributes attribute.Set) (string, bool) {
+		if value, _ := attributes.Value("workhorse.task.type"); value.AsString() != taskType {
+			return "", false
+		}
+		value, _ := attributes.Value("workhorse.handler.outcome")
+		return value.AsString(), true
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, instrument := range scope.Metrics {
+			switch data := instrument.Data.(type) {
+			case metricdata.Sum[int64]:
+				if instrument.Name == "workhorse.handler.executions" {
+					for _, point := range data.DataPoints {
+						if value, ok := outcome(point.Attributes); ok {
+							executions = append(executions, value)
+						}
+					}
+				}
+			case metricdata.Histogram[float64]:
+				if instrument.Name == "workhorse.handler.duration" {
+					for _, point := range data.DataPoints {
+						if value, ok := outcome(point.Attributes); ok {
+							durations = append(durations, value)
+						}
+					}
+				}
+			}
+		}
+	}
+	return executions, durations
+}
+
+// A heartbeat delivers the cancellation, and acknowledge_cancel_v1 then fails. The attempt settled
+// nothing, so it has no outcome: its duration records unknown, and the executions counter does not
+// count it, as in TypeScript. Before, the worker counted it as canceled.
+func TestAFailedCancellationAcknowledgementCountsNoExecution(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "failed-cancel-ack-metrics")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+		  p_task_id uuid, p_worker_id text, p_fence_token bigint)
+		  RETURNS boolean LANGUAGE plpgsql AS $body$
+		  BEGIN RAISE EXCEPTION 'injected acknowledgement failure'; END $body$`); err != nil {
+		t.Fatal(err)
+	}
+	queueName := "go-failed-cancel-ack"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	taskID, err := queue.Enqueue(ctx, "cancellable", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := installMetricReader(t)
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-failed-cancel-ack-worker", PollingOnly: true, DisableRegistry: true,
+		MaintenanceInterval: time.Hour, LeaseDuration: 3 * time.Second, HeartbeatInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("cancellable", func(handlerContext context.Context, _ any, _ *workhorse.HandlerContext) (any, error) {
+		if _, err := queue.Cancel(ctx, taskID, workhorse.CancellationRequest{}); err != nil {
+			return nil, err
+		}
+		<-handlerContext.Done()
+		return nil, handlerContext.Err()
+	})
+	if _, err := worker.RunOnce(ctx); err == nil {
+		t.Fatal("RunOnce returned no acknowledgement error")
+	}
+
+	executions, durations := handlerMetricOutcomes(t, reader, "cancellable")
+	if len(executions) != 0 {
+		t.Fatalf("workhorse.handler.executions counted the unacknowledged cancellation: %v", executions)
+	}
+	if len(durations) != 1 || durations[0] != "unknown" {
+		t.Fatalf("workhorse.handler.duration outcomes = %v, want [unknown]", durations)
+	}
+}
+
+// A handler returns an error whose Error method panics. The worker recovers the panic and fails the
+// attempt through fail_v1, which schedules a retry. The attempt settled, so the executions counter
+// counts it as retry. Before, the recovery dropped the outcome of that write.
+func TestASettledPanicOutsideTheHandlerKeepsItsOutcome(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "settled-panic-metrics")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	queueName := "go-settled-panic"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "panicking", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	reader := installMetricReader(t)
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-settled-panic-worker", PollingOnly: true, DisableRegistry: true,
+		MaintenanceInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("panicking", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, panickingError{}
+	})
+	if _, err := worker.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	executions, durations := handlerMetricOutcomes(t, reader, "panicking")
+	if len(executions) != 1 || executions[0] != "retry" {
+		t.Fatalf("workhorse.handler.executions outcomes = %v, want [retry]", executions)
+	}
+	if len(durations) != 1 || durations[0] != "retry" {
+		t.Fatalf("workhorse.handler.duration outcomes = %v, want [retry]", durations)
+	}
+}
+
+// PostgreSQL refuses the completion, so the worker reconciles it, and acknowledge_cancel_v1 then
+// fails. The reconciliation settled nothing, so the attempt has no outcome: its duration records
+// unknown, and the executions counter does not count it. Before, the worker counted it as
+// lease_lost.
+func TestAFailedReconciliationOfARefusedCompletionCountsNoExecution(t *testing.T) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "failed-reconcile-metrics")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION workhorse.complete_v1(
+		  p_task_id uuid, p_worker_id text, p_fence_token bigint, p_result jsonb DEFAULT 'null'::jsonb)
+		  RETURNS boolean LANGUAGE sql AS $body$ SELECT false $body$;
+		CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+		  p_task_id uuid, p_worker_id text, p_fence_token bigint)
+		  RETURNS boolean LANGUAGE plpgsql AS $body$
+		  BEGIN RAISE EXCEPTION 'injected acknowledgement failure'; END $body$`); err != nil {
+		t.Fatal(err)
+	}
+	queueName := "go-failed-reconcile"
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	if _, err := queue.Enqueue(ctx, "refused", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	reader := installMetricReader(t)
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-failed-reconcile-worker", PollingOnly: true, DisableRegistry: true,
+		MaintenanceInterval: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle("refused", func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return map[string]any{"done": true}, nil
+	})
+	if _, err := worker.RunOnce(ctx); err == nil {
+		t.Fatal("RunOnce returned no acknowledgement error")
+	}
+
+	executions, durations := handlerMetricOutcomes(t, reader, "refused")
+	if len(executions) != 0 {
+		t.Fatalf("workhorse.handler.executions counted the unsettled reconciliation: %v", executions)
+	}
+	if len(durations) != 1 || durations[0] != "unknown" {
+		t.Fatalf("workhorse.handler.duration outcomes = %v, want [unknown]", durations)
 	}
 }
