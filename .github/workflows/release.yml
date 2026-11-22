@@ -316,11 +316,27 @@ jobs:
       # environment. It then runs `rake release`, which builds the gem and pushes it. The train tag
       # is already `v` plus the gem version, so Bundler finds it and neither creates nor pushes a
       # tag, and the read-only token could not push one anyway.
+      #
+      # `await-release: false` turns off the action's wait step. That step runs
+      # `gem exec rubygems-await`, which installs the newest Bundler beside it. rubygems-await 0.5.4
+      # reads a private object of Bundler that Bundler 4.1.0 changed, so the step failed after a
+      # correct upload of 0.15.0 (SM-2077). The next step waits for the version in its place.
       - name: Publish stablemates-workhorse
         if: steps.registry.outputs.upload == 'true'
         uses: rubygems/release-gem@7f9650160c1a4e7989fdc9855807bdbd421d8b6b # v1.4.1
         with:
           working-directory: ruby
+          await-release: false
+      # `rake release` pushes the gem that it builds in `ruby/pkg`. The step asks RubyGems.org for
+      # the version until it serves that gem's SHA-256 checksum, and fails on a different checksum
+      # or after about ten minutes.
+      - name: Wait until RubyGems.org serves the version
+        if: steps.registry.outputs.upload == 'true'
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/check-registry-version.ts --wait rubygems stablemates-workhorse "$version" \
+            "ruby/pkg/stablemates-workhorse-$version.gem"
 
   # The three JVM artifacts of ADR 0103 publish to Maven Central from the train tag. Like the crate
   # and the gem, they join only when `jvm/gradle.properties` carries the tag's version, and they

@@ -1323,7 +1323,17 @@ describe("continuous integration", () => {
     );
     expect(check).toBeGreaterThan(job.indexOf("gem build stablemates-workhorse.gemspec"));
     expect(check).toBeLessThan(job.indexOf("bundle install"));
-    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(2);
+    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(3);
+    // SM-2077: the action's wait step installs the newest Bundler and crashed after a correct
+    // upload. The job turns it off and waits for the pushed gem's checksum with the script.
+    expect(job).toContain("          await-release: false\n");
+    const wait = job.indexOf(
+      "node scripts/check-registry-version.ts --wait rubygems stablemates-workhorse",
+    );
+    expect(wait).toBeGreaterThan(job.indexOf("uses: rubygems/release-gem@"));
+    expect(job.slice(wait)).toContain('"ruby/pkg/stablemates-workhorse-$version.gem"');
+    // A failed push or a failed wait must fail the job, so github-release does not run.
+    expect(job).not.toContain("continue-on-error");
     // The action runs `rake release`, which only Bundler's gem tasks define.
     expect(rakefile).toContain('require "bundler/gem_tasks"');
   });
