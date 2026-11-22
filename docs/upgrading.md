@@ -7,11 +7,11 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
-## Upgrade from 0.15.x to the next release
+## Upgrade from 0.15.x to 0.16.0
 
-The next release makes each task filter of the dashboard read its own list, and it stops the
-worker list from reading each fast-tier row once for each worker. The upgrade is a rolling
-deployment, and a mixed fleet is supported while it runs.
+0.16.0 makes each task filter of the dashboard read its own list. It also stops the worker list
+from reading each fast-tier row once for each worker. The upgrade is a rolling deployment, and a
+mixed fleet is supported while it runs.
 
 1. Run `workhorse schema migrate`. It applies migration 0107 and leaves the schema at version 106.
 2. Roll out the new processes in any order.
@@ -27,7 +27,7 @@ Migration 0107 adds no function that an SDK calls. It does not raise the floor, 
 worker list reads each fast-tier row once, not once for each worker, and keeps each worker
 that it gave before. The 1,000-value bound now applies to the full-tier history only.
 
-A dashboard host of the next release sends `facet` to `dashboard_task_facets_v1`. Schema version
+A dashboard host of 0.16.0 sends `facet` to `dashboard_task_facets_v1`. Schema version
 105 and earlier ignore that key and return all four lists, so the host still fills each filter. A
 0.15 process keeps working on schema version 106, because a migration inside a major line only
 adds.
