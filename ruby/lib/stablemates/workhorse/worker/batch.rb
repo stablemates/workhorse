@@ -23,8 +23,11 @@ module Stablemates
 
         linger_ms = Values.milliseconds(linger, "linger", 0..60_000)
         coordinator = BatchCoordinator.new(self, task_type, handler, max_size, linger_ms)
-        handle(task_type) { |payload, context| coordinator.run(payload, context) }
+        register_handler(task_type, proc { |payload, context| coordinator.run(payload, context) })
         @batch_coordinators[task_type] = coordinator
+        log(:debug, "workhorse.handler.registered", "Batch task handler registered",
+          "workhorse.task.type" => task_type, "workhorse.handler.batch.max_size" => max_size,
+          "workhorse.handler.batch.linger_ms" => linger_ms)
         self
       end
 

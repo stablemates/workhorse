@@ -63,6 +63,11 @@ public interface Telemetry {
             Map<String, ? extends @Nullable Object> attributes) {}
 
         @Override
+        public boolean logEnabled(Severity severity) {
+          return false;
+        }
+
+        @Override
         public void log(
             Severity severity,
             String event,
@@ -134,10 +139,17 @@ public interface Telemetry {
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes);
 
   /**
+   * Whether a log record of {@code severity} can reach a logger in the current context. A caller
+   * checks this before it builds the attributes of a record, so a disabled logger costs no work.
+   */
+  boolean logEnabled(Severity severity);
+
+  /**
    * Emits one log record in the current context, as the TypeScript OpenTelemetry adapter emits
    * {@code emitLog}. It sets the event name, the severity, the severity text, and the body. An
    * {@code event} that is not in {@link Names#LOG_EVENTS} emits nothing, because {@code
-   * api/typescript.txt} governs the event names.
+   * api/typescript.txt} governs the event names. A logger that throws never reaches the caller,
+   * because a log record must not change the result of the operation that it observes.
    */
   void log(
       Severity severity,

@@ -21,6 +21,28 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
+## Unreleased
+
+### A logger failure no longer changes an operation result
+
+A log record observes an operation, so it must not change the operation. Before this change, a
+telemetry provider whose `emitLog` threw replaced the result of the operation with that error. For
+example, `Admin.purgeQueue` committed the purge and then rejected. `emitLog` now stops the error, and
+the record is lost. The queue, `Admin`, dashboard, and worker operations return their usual result,
+and the handler runs.
+
+### The worker logs recovered leases and the error type of a failed registration
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. The TypeScript worker wrote no `workhorse.leases.recovered` record for the leases that its
+maintenance tick recovered. Only `Queue.recoverExpired` wrote it.
+
+- `Queue.tick` now writes `workhorse.leases.recovered` at info when the `recover` phase changes
+  rows. The record carries `workhorse.recovery.rows_affected`, `workhorse.recovery.expired_leases`,
+  and `workhorse.recovery.retried`, as the other six workers write it.
+- `workhorse.worker.registration_failed` now also carries `error.type`, the error name. It never
+  carries the error message.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -23,7 +23,7 @@ public sealed partial class Worker
     private Queue? _durableQueue;
 
     /// <summary>The queue code that sends child requests and group adds, with the codec of this worker.</summary>
-    private Queue DurableQueue => LazyInitializer.EnsureInitialized(ref _durableQueue, () => new Queue(_dataSource, _codec));
+    private Queue DurableQueue => LazyInitializer.EnsureInitialized(ref _durableQueue, () => new Queue(_dataSource, _codec, _logger));
 
     /// <summary>
     /// Whether <paramref name="queue"/> is on the fast tier. The first durable call of a context runs
@@ -141,7 +141,7 @@ public sealed partial class Worker
                     }
 
                     // The cache holds the saved value first, so a failing logger cannot run the operation again.
-                    DurableLog.CheckpointSaved(_worker._logger, Task.Id, name, status);
+                    DurableLog.CheckpointSaved(_worker._logger, Task.Id, Task.Type, Task.Attempt, _worker.WorkerId, name, status);
                     return saved.Text;
                 }).ConfigureAwait(false))!;
             return Decode<T>(text);
@@ -250,7 +250,7 @@ public sealed partial class Worker
                         case "limit_exceeded":
                             throw new LimitExceededException("sleep", name);
                         case "scheduled" or "elapsed":
-                            Processed(status == "scheduled" ? Outcome.SuspendedForWait : null, () => DurableLog.WaitProcessed(_worker._logger, Task.Id, name, status));
+                            Processed(status == "scheduled" ? Outcome.SuspendedForWait : null, () => DurableLog.WaitProcessed(_worker._logger, Task.Id, Task.Type, Task.Attempt, _worker.WorkerId, name, status));
                             return null;
                         default:
                             throw new UnexpectedStatusException("sleep", status);
@@ -365,7 +365,7 @@ public sealed partial class Worker
                         case "limit_exceeded":
                             throw new LimitExceededException("runChild", name);
                         case "created" or "completed":
-                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => DurableLog.ChildProcessed(_worker._logger, Task.Id, name, status));
+                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => DurableLog.ChildProcessed(_worker._logger, Task.Id, _worker.WorkerId, name, status));
                             return JsonText(row, "result");
                         default:
                             throw new UnexpectedStatusException("runChild", status);
@@ -456,7 +456,7 @@ public sealed partial class Worker
                         case "result_too_large":
                             throw new ChildResultLimitExceededException(row.RequiredLong("result_bytes"), row.RequiredLong("result_limit_bytes"));
                         case "created" or "completed":
-                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => DurableLog.ChildProcessed(_worker._logger, Task.Id, "child set", status));
+                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => ChildSetLog.Processed(_worker._logger, Task.Id, _worker.WorkerId, requests.Count, status));
                             return Joined(row.Json("children"), mode);
                         default:
                             throw new UnexpectedStatusException("runChildren", status);
@@ -654,7 +654,7 @@ public sealed partial class Worker
                 _savedProgress = Newer(_savedProgress, saved);
             }
 
-            DurableLog.ProgressUpdated(_worker._logger, Task.Id, status);
+            DurableLog.ProgressUpdated(_worker._logger, Task.Id, Task.Type, Task.Attempt, _worker.WorkerId, status);
             return saved;
         }
 

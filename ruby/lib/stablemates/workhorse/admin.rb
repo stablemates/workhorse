@@ -107,6 +107,9 @@ module Stablemates
     # Like Queue, every call runs on the connection the executor yields, so a control joins the
     # caller's transaction. Every control except +set_queue_history+ takes an AdminAudit that
     # PostgreSQL records.
+    #
+    # With a +logger+, the controls write their worker log events, such as +workhorse.queue.paused+,
+    # through Telemetry.log, as the worker does. Without one, the client logs nothing.
     class Admin
       MAX_PAGE_SIZE = 1000
       MAX_REDRIVE_BATCH_SIZE = 1000
@@ -118,8 +121,9 @@ module Stablemates
       private_constant :MAX_PAGE_SIZE, :MAX_REDRIVE_BATCH_SIZE, :MAX_PAYLOAD_BYTES, :MAX_REDACT_KEYS,
         :TASK_STATES, :QUEUE_TIERS, :REDRIVE_STATUSES
 
-      def initialize(executor)
+      def initialize(executor, logger: nil)
         @executor = Executor.for(executor)
+        @logger = logger
         @lock = Mutex.new
         @compatibility = nil
       end
@@ -203,7 +207,11 @@ module Stablemates
         rows = @executor.rows(SqlCatalogue::REDRIVE, [source_task_id, audit.actor, audit.reason, audit.request_id])
         raise ArgumentError, "workhorse.redrive_v1 returned #{rows.length} rows; expected one" unless rows.one?
 
-        redrive_result(rows.first)
+        result = redrive_result(rows.first)
+        log("workhorse.task.redrive_processed", "Dead-letter task redrive processed",
+          "workhorse.task.id" => source_task_id, "workhorse.redrive.target_task_id" => result.target_task_id || "none",
+          "workhorse.operation.status" => result.status.to_s)
+        result
       end
 
       # Redrives one page of the failed tasks the filter selects. +dry_run+ reports without changing.
@@ -224,7 +232,10 @@ module Stablemates
         next_cursor = if last && Values.parse_boolean(last.fetch("has_more"))
           DeadLetterCursor.new(last.fetch("source_finished_at_cursor"), last.fetch("source_task_id"))
         end
-        BulkRedrivePage.new(rows.map { |row| redrive_result(row) }, next_cursor)
+        results = rows.map { |row| redrive_result(row) }
+        log("workhorse.tasks.redrive_processed", "Dead-letter task redrive batch processed",
+          "workhorse.task.count" => rows.length, "workhorse.redrive.dry_run" => dry_run)
+        BulkRedrivePage.new(results, next_cursor)
       end
 
       def get_checkpoint(task_id, name)
@@ -292,7 +303,11 @@ module Stablemates
         assert_compatible
         row = @executor.rows(SqlCatalogue::SET_WORKER_PAUSED,
           [worker_id, paused.to_s, audit.actor, audit.reason, audit.request_id]).first
-        row && WorkerPauseResult.new(**worker_pause(row))
+        return nil if row.nil?
+
+        log(paused ? "workhorse.worker.paused" : "workhorse.worker.resumed", paused ? "Worker paused" : "Worker resumed",
+          "workhorse.worker.id" => worker_id)
+        WorkerPauseResult.new(**worker_pause(row))
       end
 
       def pause_queue(queue, audit:) = set_queue_paused(queue, true, audit)
@@ -314,7 +329,9 @@ module Stablemates
         rows = @executor.rows(SqlCatalogue::PURGE_QUEUE, [queue, audit.actor, audit.reason, audit.request_id])
         raise ArgumentError, "workhorse.purge_queue_v1 returned #{rows.length} rows; expected one" unless rows.one?
 
-        Values.parse_integer(rows.first.fetch("deleted_count"))
+        count = Values.parse_integer(rows.first.fetch("deleted_count"))
+        log("workhorse.queue.purged", "Queue purged", "workhorse.queue.name" => queue, "workhorse.task.count" => count)
+        count
       end
 
       # Moves a queue between the +:fast+ and +:full+ tiers and returns the tier after the change.
@@ -329,7 +346,9 @@ module Stablemates
         rows = @executor.rows(SqlCatalogue::SET_QUEUE_TIER, [queue, tier.to_s, audit.actor, audit.reason])
         raise ArgumentError, "workhorse.set_queue_tier_v1 returned #{rows.length} rows; expected one" unless rows.one?
 
-        rows.first.fetch("tier").to_sym
+        changed = rows.first.fetch("tier")
+        log("workhorse.queue.tier_set", "Queue tier set", "workhorse.queue.name" => queue, "workhorse.queue.tier" => changed)
+        changed.to_sym
       end
 
       # Chooses the history a fast-tier queue records. A nil setting keeps its current value, and
@@ -420,8 +439,16 @@ module Stablemates
         audit(audit)
         assert_compatible
         @executor.rows(SqlCatalogue::SET_QUEUE_PAUSED, [queue, paused.to_s, audit.actor, audit.reason, audit.request_id])
+        if paused
+          log("workhorse.queue.paused", "Queue paused", "workhorse.queue.name" => queue)
+        else
+          log("workhorse.queue.resumed", "Queue resumed", "workhorse.queue.name" => queue)
+        end
         nil
       end
+
+      # Every event of the admin client is an info record.
+      def log(event, body, attributes) = Telemetry.log(@logger, :info, event, body, attributes)
 
       def audit(audit)
         raise ArgumentError, "audit must be an AdminAudit" unless audit.is_a?(AdminAudit)

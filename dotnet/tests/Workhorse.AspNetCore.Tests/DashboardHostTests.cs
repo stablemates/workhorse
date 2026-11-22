@@ -125,6 +125,24 @@ public sealed class DashboardHostTests(ScratchDatabase database) : IClassFixture
         Assert.Throws<ArgumentException>(() => DashboardAuthorization.Principal(" ", null));
     }
 
+    // A logger that throws must not change the answer of the dashboard.
+    [Fact]
+    public async Task Answers503WhenTheLoggerThrows()
+    {
+        await using var unreachable = Unreachable();
+        var options = new DashboardOptions
+        {
+            DataSource = unreachable,
+            Authorize = _ => ValueTask.FromResult(DashboardAuthorization.Principal("operator", null)),
+        };
+        await using var server = await DashboardServer.StartAsync(
+            app => app.MapWorkhorseDashboard("/workhorse", options), throwingLogger: true);
+
+        var response = await server.PostAsync("/workhorse/rpc/dashboard/meta", "{\"json\":null}");
+
+        Assert.Equal(503, response.Status);
+    }
+
     // SM-1473: as in the other hosts, a driver error stays in the log and out of the 503 body.
     [Fact]
     public async Task Answers503WithAGenericBodyAndLogsTheDriverError()

@@ -67,8 +67,11 @@ public sealed partial class Worker
 
         var arbiter = new Arbiter();
         var telemetry = WorkerTelemetry.StartAttempt(task.Task);
+        var startedAt = Monotonic.Now();
+        var claimed = task.Task;
         try
         {
+            WorkerLog.HandlerStarted(_logger, claimed.Id, claimed.Type, claimed.Attempt, claimed.Queue, WorkerId);
             await ExecuteAsync(task, arbiter).ConfigureAwait(false);
         }
         catch (LeaseLostException)
@@ -88,11 +91,29 @@ public sealed partial class Worker
         {
             try
             {
-                telemetry?.Finish(arbiter.Released ?? arbiter.Current);
+                var outcome = arbiter.Released ?? arbiter.Reported;
+                // Both records come while the handler span is current, as in TypeScript, so a log
+                // bridge gives them the trace context of the attempt. Finish ends the span. The
+                // execution record comes first, as TypeScript writes it at the settlement.
+                // An attempt without an outcome, such as one that the drain abandoned or one whose
+                // cancellation acknowledgement failed, has no execution record.
+                if (outcome is not null && _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
+                {
+                    var name = WorkerTelemetry.MetricOutcome(outcome);
+                    WorkerLog.ExecutionFinished(_logger, claimed.Id, claimed.Type, claimed.Attempt, claimed.Queue, WorkerId, name);
+                }
+
+                if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+                {
+                    var durationMs = (Monotonic.Now() - startedAt) / 1e6;
+                    WorkerLog.HandlerFinished(_logger, claimed.Id, claimed.Type, claimed.Attempt, claimed.Queue, WorkerId, durationMs);
+                }
+
+                telemetry?.Finish(outcome);
             }
             finally
             {
-                // A measurement callback of a listener can throw. The slot still goes back.
+                // A measurement callback or a logger can throw. The slot still goes back.
                 _active.TryRemove(task, out _);
                 ReleaseSlot(task);
                 _wake.Signal();
@@ -112,7 +133,7 @@ public sealed partial class Worker
         if (registration is null)
         {
             // A task type with no handler goes back to its queue, so another worker can claim it.
-            WorkerLog.HandlerMissing(_logger, task.Task.Type, task.Task.Id);
+            WorkerLog.HandlerMissing(_logger, task.Task.Type, task.Task.Id, task.Task.Attempt, task.Task.Queue, WorkerId);
             await ReleaseOwnedAsync(task.Task, arbiter, null, token).ConfigureAwait(false);
             return;
         }
@@ -159,7 +180,7 @@ public sealed partial class Worker
                 // A handler that threw another exception after a durable call suspended it still suspends.
                 if (arbiter.Suspended && error is not SuspensionException)
                 {
-                    DurableLog.SignalSwallowed(_logger, claimed.Id, WorkerId, "suspended");
+                    DurableLog.SignalSwallowed(_logger, claimed.Id, claimed.Type, claimed.Attempt, claimed.Queue, WorkerId, "suspended");
                 }
 
                 return;
@@ -171,7 +192,17 @@ public sealed partial class Worker
             // cancellation keeps its usual settlement.
             if (stopped)
             {
-                await ReleaseOwnedAsync(claimed, arbiter, ownership, token).ConfigureAwait(false);
+                try
+                {
+                    await ReleaseOwnedAsync(claimed, arbiter, ownership, token).ConfigureAwait(false);
+                }
+                catch (Exception failure) when (failure is not LeaseLostException)
+                {
+                    // Lease recovery settles the task, and the error ends the run.
+                    LogShutdownSettlementFailure(claimed, failure);
+                    throw;
+                }
+
                 return;
             }
 
@@ -188,14 +219,27 @@ public sealed partial class Worker
             // A handler that returned after a durable call suspended it still suspends (ADR 0107).
             if (arbiter.Suspended)
             {
-                DurableLog.SignalSwallowed(_logger, claimed.Id, WorkerId, "suspended");
+                DurableLog.SignalSwallowed(_logger, claimed.Id, claimed.Type, claimed.Attempt, claimed.Queue, WorkerId, "suspended");
             }
 
             return;
         }
 
-        await CompleteAsync(task, ownership, encoded, arbiter, token).ConfigureAwait(false);
+        try
+        {
+            await CompleteAsync(task, ownership, encoded, arbiter, token).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (stopped && failure is not LeaseLostException)
+        {
+            // After the shutdown cancellation, lease recovery settles the task, and the error ends the run.
+            LogShutdownSettlementFailure(claimed, failure);
+            throw;
+        }
     }
+
+    /// <summary>A completion or a release after the shutdown cancellation failed.</summary>
+    private void LogShutdownSettlementFailure(ClaimedTask task, Exception error) =>
+        WorkerLog.ShutdownSettlementFailed(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, error.GetType().FullName ?? error.GetType().Name);
 
     /// <summary>
     /// The JSON text of a handler result, after the checks that keep a refusal of PostgreSQL from
@@ -290,12 +334,12 @@ public sealed partial class Worker
 
         if (accepted)
         {
-            WorkerLog.Completed(_logger, task.Id);
+            WorkerLog.Completed(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, true);
             arbiter.Submit(Outcome.Completed);
             return;
         }
 
-        WorkerLog.CompletionRejected(_logger, task.Id);
+        WorkerLog.CompletionRejected(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, false);
         await ReconcileRejectedCompletionAsync(task, ownership, arbiter, cancellationToken).ConfigureAwait(false);
     }
 
@@ -361,7 +405,7 @@ public sealed partial class Worker
     {
         var status = await ExpireOwnedAsync(task, cancellationToken).ConfigureAwait(false);
         Outcome? outcome = status == "not_due" ? null : OutcomeFor(status, operation);
-        if (outcome == Outcome.Cancelled && await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
+        if (outcome == Outcome.Cancelled && await AcknowledgeCancelAsync(task, arbiter, cancellationToken).ConfigureAwait(false))
         {
             arbiter.Submit(Outcome.Cancelled);
             return;
@@ -384,7 +428,7 @@ public sealed partial class Worker
         var row = await FencedRowAsync(SqlCatalogue.ReleaseOwnedV1, task, () => [], cancellationToken).ConfigureAwait(false);
         var status = row.Text("status");
         WorkerTelemetry.HandlerSpanOutcome(task, status);
-        WorkerLog.ReleaseProcessed(_logger, task.Id, status);
+        WorkerLog.ReleaseProcessed(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, status);
         if (status == "released")
         {
             arbiter.Submit(Outcome.Released);
@@ -435,8 +479,7 @@ public sealed partial class Worker
         }
 
         var state = row.Text("state");
-        var errorType = FailureEnvelope.Name(error);
-        WorkerLog.FailureProcessed(_logger, task.Id, state, errorType);
+        WorkerLog.FailureProcessed(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, state);
         if (state is "ready" or "scheduled")
         {
             arbiter.Submit(Outcome.Retry);
@@ -472,7 +515,7 @@ public sealed partial class Worker
             return;
         }
 
-        if (outcome == Outcome.Cancelled && !await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
+        if (outcome == Outcome.Cancelled && !await AcknowledgeCancelAsync(task, arbiter, cancellationToken).ConfigureAwait(false))
         {
             // The worker settled nothing, so the attempt reports the lost lease, also on the span.
             WorkerTelemetry.HandlerSpanOutcome(task, null);
@@ -493,11 +536,25 @@ public sealed partial class Worker
         _ => throw new UnexpectedStatusException(operation, status),
     };
 
-    private async Task<bool> AcknowledgeCancelAsync(ClaimedTask task, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends <c>acknowledge_cancel_v1</c>, and returns whether PostgreSQL accepted it. If the statement
+    /// fails, the attempt reports no outcome, also when a heartbeat round submitted the cancellation.
+    /// </summary>
+    private async Task<bool> AcknowledgeCancelAsync(ClaimedTask task, Arbiter arbiter, CancellationToken cancellationToken)
     {
-        var row = await FencedRowAsync(SqlCatalogue.AcknowledgeCancelV1, task, () => [], cancellationToken).ConfigureAwait(false);
+        Row row;
+        try
+        {
+            row = await FencedRowAsync(SqlCatalogue.AcknowledgeCancelV1, task, () => [], cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            arbiter.FailCancellation();
+            throw;
+        }
+
         var accepted = row.Boolean("accepted") == true;
-        WorkerLog.CancellationAcknowledged(_logger, task.Id, accepted);
+        WorkerLog.CancellationAcknowledged(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, accepted);
         return accepted;
     }
 
@@ -520,8 +577,11 @@ public sealed partial class Worker
             case Outcome.SuspendedForWait or Outcome.SuspendedForChild or Outcome.DeadlineExceeded or Outcome.AttemptTimeout:
                 return true;
             case Outcome.Cancelled:
-                if (!await AcknowledgeCancelAsync(task, cancellationToken).ConfigureAwait(false))
+                if (!await AcknowledgeCancelAsync(task, arbiter, cancellationToken).ConfigureAwait(false))
                 {
+                    // PostgreSQL refused the cancellation that a heartbeat round submitted. The
+                    // worker settled nothing, so the attempt reports no outcome, as in TypeScript.
+                    arbiter.FailCancellation();
                     throw new LeaseLostException(task.Id, "cancel");
                 }
 
@@ -733,7 +793,7 @@ public sealed partial class Worker
         catch (Exception error) when (!task.Run.StopPath.Token.IsCancellationRequested)
         {
             WorkerLog.ExpirationRequestFailed(
-                _logger, task.Task.Id, WorkerId, error.GetType().FullName ?? error.GetType().Name, error);
+                _logger, task.Task.Id, task.Task.Type, task.Task.Attempt, task.Task.Queue, WorkerId, error.GetType().FullName ?? error.GetType().Name);
             return "not_due";
         }
     }
@@ -763,7 +823,7 @@ public sealed partial class Worker
         }
 
         WorkerTelemetry.Expired(task, row);
-        WorkerLog.OwnershipExpired(_logger, task.Id, status);
+        WorkerLog.OwnershipExpired(_logger, task.Id, task.Type, task.Attempt, task.Queue, WorkerId, status);
         return status;
     }
 
@@ -807,6 +867,7 @@ public sealed partial class Worker
 
         public void Renew(long sentAt)
         {
+            WorkerLog.HeartbeatAccepted(worker._logger, task.Task.Id, task.Task.Type, task.Task.Attempt, worker.WorkerId);
             if (ownership.Renew(sentAt))
             {
                 ExpireLease(ownership, arbiter, task.Cancellation);
@@ -816,7 +877,7 @@ public sealed partial class Worker
         public void Settle(string status)
         {
             WorkerTelemetry.HeartbeatRejected(status);
-            WorkerLog.HeartbeatRejected(worker._logger, task.Task.Id, status);
+            WorkerLog.HeartbeatRejected(worker._logger, task.Task.Id, task.Task.Type, task.Task.Attempt, worker.WorkerId, status);
             // Another transaction held the row. The round renewed nothing and gave no verdict.
             if (status == "busy")
             {

@@ -191,8 +191,9 @@ Go applications give an `*slog.Logger` in `WorkerOptions.Logger`. The Go worker 
 event names and attributes as the JavaScript worker. This applies to handler boundaries, claims,
 settlements, rejected heartbeats, recovery, and batch dispatch.
 
-.NET applications give an `ILoggerFactory` in `WorkerOptions.LoggerFactory`. In a Generic Host,
-`Workhorse.Hosting` takes the logger factory of the host.
+.NET applications give an `ILoggerFactory` in `WorkerOptions.LoggerFactory`, and in
+`QueueOptions.LoggerFactory` and `AdminOptions.LoggerFactory` for the queue and operator records. In
+a Generic Host, `Workhorse.Hosting` gives all three the logger factory of the host.
 
 <details>
 <summary>Reference: log severities and content</summary>
@@ -210,10 +211,13 @@ histograms still record them.
 **Never logged:** payloads, results, error messages, cancellation reasons, idempotency keys, and
 progress and checkpoint values.
 
-**Go.** A nil `WorkerOptions.Logger` uses a disabled handler, so routine records do not reach the
-process default logger.
+**Go.** A nil `WorkerOptions.Logger` selects `slog.Default()`. `Queue.WithLogger` and
+`Admin.WithLogger` set the logger of the queue and the operator client. Without one, they write no
+record.
 
 **.NET.** A null `WorkerOptions.LoggerFactory` uses `NullLoggerFactory`, so the worker logs nothing.
+A null `QueueOptions.LoggerFactory` or `AdminOptions.LoggerFactory` does the same for the queue and
+`Admin`.
 
 More detail: [Telemetry: Structured logs](../architecture/telemetry.md#structured-logs) and [Schema and SQL protocol: .NET telemetry](../architecture/schema-and-protocol.md#net-telemetry).
 

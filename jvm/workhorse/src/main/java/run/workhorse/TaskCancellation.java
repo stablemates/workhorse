@@ -101,7 +101,15 @@ final class TaskCancellation implements CancellationToken {
       try {
         body.run();
       } catch (RuntimeException error) {
-        LOGGER.log(System.Logger.Level.WARNING, "Cancellation callback failed", error);
+        // The record names the error type only, because the message can hold application data.
+        // A logger that throws must not reach the cancellation.
+        try {
+          LOGGER.log(
+              System.Logger.Level.WARNING,
+              "Cancellation callback failed {error.type=" + error.getClass().getName() + "}");
+        } catch (RuntimeException ignored) {
+          // The logger failed.
+        }
       }
     }
   }

@@ -13,6 +13,13 @@ const UNLISTEN: &str = "UNLISTEN workhorse_tasks";
 const RECONNECT_INITIAL: Duration = Duration::from_millis(100);
 const RECONNECT_MAXIMUM: Duration = Duration::from_secs(5);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+/// The `error.type` of a listener connection that closed without an error.
+const CONNECTION_CLOSED: &str = "ConnectionClosed";
+
+/// The `error.type` of a driver error, as the `Error` of the SDK names it.
+fn postgres_error_type(error: tokio_postgres::Error) -> String {
+    crate::Error::from(error).type_name()
+}
 
 /// Owns the task that drives the listener's connection, and aborts it when dropped.
 ///
@@ -45,8 +52,9 @@ pub(super) async fn listen(
             () = stop.cancelled() => return,
             connected = config.connect(NoTls) => connected,
         };
+        // Each failure keeps only its error type: a record never holds the error text.
         let error = match connected {
-            Err(error) => error.to_string(),
+            Err(error) => postgres_error_type(error),
             Ok((client, mut connection)) => {
                 let (sender, mut received) = tokio::sync::mpsc::unbounded_channel();
                 let driver = Driver(tokio::spawn(async move {
@@ -60,12 +68,12 @@ pub(super) async fn listen(
                             }
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = sender.send(Err(error.to_string()));
+                                let _ = sender.send(Err(postgres_error_type(error)));
                                 return;
                             }
                         }
                     }
-                    let _ = sender.send(Err("notification connection closed".into()));
+                    let _ = sender.send(Err(CONNECTION_CLOSED.into()));
                 }));
                 let listened = tokio::select! {
                     () = stop.cancelled() => {
@@ -74,7 +82,7 @@ pub(super) async fn listen(
                     listened = client.batch_execute(LISTEN) => listened,
                 };
                 let error = match listened {
-                    Err(error) => error.to_string(),
+                    Err(error) => postgres_error_type(error),
                     Ok(()) => {
                         listening.store(true, Ordering::SeqCst);
                         delay = RECONNECT_INITIAL;
@@ -85,7 +93,7 @@ pub(super) async fn listen(
                                 message = received.recv() => match message {
                                     Some(Ok(payload)) => deliver(Some(&payload)),
                                     Some(Err(error)) => break error,
-                                    None => break "notification connection closed".into(),
+                                    None => break CONNECTION_CLOSED.into(),
                                 },
                             }
                         }
@@ -102,7 +110,11 @@ pub(super) async fn listen(
                     if let Ok(Err(error)) =
                         tokio::time::timeout(CLEANUP_TIMEOUT, client.batch_execute(UNLISTEN)).await
                     {
-                        tracing::warn!(error = %error, "task notification listener stopped");
+                        crate::telemetry::log_event!(
+                            warn,
+                            error.r#type = %postgres_error_type(error),
+                            "task notification listener stopped"
+                        );
                     }
                 }
                 drop(driver);
@@ -112,7 +124,11 @@ pub(super) async fn listen(
         if stop.is_cancelled() {
             return;
         }
-        tracing::warn!(error = %error, "task notification listener stopped");
+        crate::telemetry::log_event!(
+            warn,
+            error.r#type = %error,
+            "task notification listener stopped"
+        );
         tokio::select! {
             () = stop.cancelled() => return,
             () = tokio::time::sleep(super::jitter(delay)) => {}
@@ -124,7 +140,33 @@ pub(super) async fn listen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::tests::silent_server;
+    use crate::worker::tests::{silent_server, CapturedLog};
+
+    /// A diagnostic record holds the error type, never the error text (docs/architecture/
+    /// telemetry.md, "Log content limits"). The connection text names the host and the port.
+    #[tokio::test]
+    async fn a_failed_connection_logs_its_error_type_and_no_error_text() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let mut config = tokio_postgres::Config::new();
+        config.host("127.0.0.1").port(port).user("unused").dbname("unused");
+        let log = CapturedLog::default();
+        let _subscriber = log.install();
+        let stop = CancellationToken::new();
+        let listener =
+            tokio::spawn(listen(config, |_| {}, Arc::new(AtomicBool::new(false)), stop.clone()));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !log.text().contains("task notification listener stopped") {
+            assert!(tokio::time::Instant::now() < deadline, "no listener record");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        stop.cancel();
+        listener.await.unwrap();
+        let text = log.text();
+        assert!(text.contains("error.type=Postgres"), "{text}");
+        assert!(!text.contains(" error="), "{text}");
+    }
 
     /// The reconnect delay carries the same ±10% jitter as the other SDKs. So a PostgreSQL restart
     /// does not reconnect a fleet of Rust listeners at the same moment.

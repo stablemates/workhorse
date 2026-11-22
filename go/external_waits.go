@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -380,6 +381,14 @@ func (queue *Queue) SendSignal(
 	default:
 		return SignalDeliveryResult{}, fmt.Errorf(unknownSignalDeliveryStatusFormat, status)
 	}
+	logWorkerEvent(ctx, sdkLogger(queue.logger), slog.LevelInfo, signalProcessedEvent, signalProcessedLogMessage,
+		func() []any {
+			return []any{
+				slog.String(taskIDAttribute, taskID),
+				slog.String(signalNameAttribute, name),
+				slog.String(signalStatusAttribute, status),
+			}
+		})
 	result.Payload, err = decodedJSON(rows[0][rowPayloadField])
 	if err != nil {
 		return SignalDeliveryResult{}, err
@@ -442,6 +451,14 @@ func (queue *Queue) CompleteHumanWait(
 	default:
 		return HumanWaitCompletionResult{}, fmt.Errorf(unknownHumanCompletionStatusFormat, status)
 	}
+	logWorkerEvent(ctx, sdkLogger(queue.logger), slog.LevelInfo, humanWaitProcessedEvent,
+		humanWaitProcessedLogMessage, func() []any {
+			return []any{
+				slog.String(taskIDAttribute, taskID),
+				slog.String(humanWaitNameAttribute, name),
+				slog.String(humanWaitStatusAttribute, status),
+			}
+		})
 	completion.Payload, err = decodedJSON(rows[0][rowResultField])
 	if err != nil {
 		return HumanWaitCompletionResult{}, err

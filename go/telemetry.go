@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -487,4 +488,27 @@ func logWorkerEvent(
 	values = append(values, slog.String(eventNameAttribute, event))
 	values = append(values, built...)
 	logger.Log(ctx, level, message, values...)
+}
+
+// discardLogger is the logger of a queue or an operator client without WithLogger.
+var discardLogger = slog.New(slog.DiscardHandler)
+
+// sdkLogger returns the logger of a queue or an operator client. A nil logger writes no record, as
+// a queue without a logger in the other SDKs. Only a Worker without WorkerOptions.Logger writes to
+// slog.Default(). The result drops a record whose handler panics, so a logger cannot change the
+// result of an operation.
+func sdkLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return discardLogger
+	}
+	return newRecoveringLogger(logger)
+}
+
+// workerQueueAttributes returns the worker identity and the complete configured queue array that
+// the TypeScript life-cycle records carry.
+func (worker *Worker) workerQueueAttributes() []any {
+	return []any{
+		slog.Any(workerQueuesAttribute, slices.Clone(worker.queues)),
+		slog.String(workerIDAttribute, worker.workerID),
+	}
 }

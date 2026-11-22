@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace Workhorse;
 
@@ -13,4 +14,7 @@ public sealed record QueueOptions
     /// <see cref="JsonSerializerDefaults.Web"/> with strict number handling (ADR 0107).
     /// </summary>
     public JsonSerializerOptions? Json { get; init; }
+
+    /// <summary>The logger factory of the queue. The default logs nothing.</summary>
+    public ILoggerFactory? LoggerFactory { get; init; }
 }

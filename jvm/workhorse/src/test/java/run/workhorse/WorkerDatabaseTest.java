@@ -7,6 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.metrics.InstrumentSelector;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.opentelemetry.sdk.metrics.View;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
@@ -1496,7 +1501,11 @@ class WorkerDatabaseTest {
     waitUntil("the run ends", () -> !worker.isRunning());
 
     assertEquals(1, records.errors.size(), "one ERROR record before close: " + records.messages);
-    assertTrue(records.errors.get(0) instanceof InjectedError, "the record carries the error");
+    // The record names the error type only, because the message can hold application data.
+    assertNull(records.errors.get(0), "the record carries no throwable");
+    assertTrue(
+        records.messages.get(0).contains("error.type=" + InjectedError.class.getName()),
+        records.messages.get(0));
     assertTrue(records.messages.get(0).contains("event.name=workhorse.worker.run_failed"));
     assertThrows(InjectedError.class, worker::close);
     assertEquals(1, records.errors.size(), "close does not log the error again");
@@ -1521,7 +1530,11 @@ class WorkerDatabaseTest {
     waitUntil("the run ends", () -> !worker.isRunning());
 
     assertEquals(1, records.errors.size(), "one ERROR record before close: " + records.messages);
-    assertTrue(records.errors.get(0) instanceof InjectedError, "the record carries the error");
+    // The record names the error type only, because the message can hold application data.
+    assertNull(records.errors.get(0), "the record carries no throwable");
+    assertTrue(
+        records.messages.get(0).contains("error.type=" + InjectedError.class.getName()),
+        records.messages.get(0));
     assertThrows(InjectedError.class, worker::close);
   }
 
@@ -2368,10 +2381,67 @@ class WorkerDatabaseTest {
         .build();
   }
 
-  // SM-1525 (m3): a logger that throws before the batch handler fails each member, and no member
-  // on another thread waits forever.
+  // SM-1525 (m3): an error that the dispatch throws before the batch handler fails each member, and
+  // no member on another thread waits forever. A metric view whose attribute filter throws makes
+  // the batch metric of the dispatch throw.
   @Test
   void failsEveryBatchMemberWhenTheDispatchThrowsBeforeTheHandler() throws Exception {
+    List<UUID> taskIds =
+        List.of(
+            enqueue("batched", Map.of(), EnqueueOptions.builder().maxAttempts(1)),
+            enqueue("batched", Map.of(), EnqueueOptions.builder().maxAttempts(1)));
+    AtomicInteger handled = new AtomicInteger();
+    try (OpenTelemetrySdk failing =
+        OpenTelemetrySdk.builder()
+            .setMeterProvider(
+                SdkMeterProvider.builder()
+                    .registerMetricReader(InMemoryMetricReader.create())
+                    .registerView(
+                        InstrumentSelector.builder()
+                            .setName("workhorse.handler.batch.size")
+                            .build(),
+                        View.builder()
+                            .setAttributeFilter(
+                                key -> {
+                                  throw new IllegalStateException("the metric failed");
+                                })
+                            .build())
+                    .build())
+            .build()) {
+      Worker worker =
+          worker()
+              .concurrency(2)
+              .telemetry(WorkhorseTelemetry.of(failing))
+              .handleBatch(
+                  "batched",
+                  Object.class,
+                  new BatchOptions(2, Duration.ofSeconds(5)),
+                  items -> {
+                    handled.incrementAndGet();
+                    return items.stream()
+                        .<BatchHandlerOutcome>map(item -> new BatchSucceeded("done"))
+                        .toList();
+                  })
+              .build();
+      worker.start();
+      try {
+        for (UUID taskId : taskIds) {
+          waitUntil("each member fails", () -> "failed".equals(statusUnchecked(taskId).state()));
+        }
+      } finally {
+        worker.close();
+      }
+    }
+    assertEquals(0, handled.get(), "the handler did not run");
+    for (UUID taskId : taskIds) {
+      assertEquals("IllegalStateException", Json.object(json(status(taskId).error())).get("name"));
+    }
+  }
+
+  // A logger that throws while the worker dispatches a batch does not stop the batch handler,
+  // because a log record must not change the result of the work that it observes.
+  @Test
+  void runsTheBatchHandlerWhenTheLoggerThrowsAtTheDispatch() throws Exception {
     List<UUID> taskIds =
         List.of(
             enqueue("batched", Map.of(), EnqueueOptions.builder().maxAttempts(1)),
@@ -2427,15 +2497,13 @@ class WorkerDatabaseTest {
     worker.start();
     try {
       for (UUID taskId : taskIds) {
-        waitUntil("each member fails", () -> "failed".equals(statusUnchecked(taskId).state()));
+        waitUntil(
+            "each member succeeds", () -> "succeeded".equals(statusUnchecked(taskId).state()));
       }
     } finally {
       worker.close();
     }
-    assertEquals(0, handled.get(), "the handler did not run");
-    for (UUID taskId : taskIds) {
-      assertEquals("IllegalStateException", Json.object(json(status(taskId).error())).get("name"));
-    }
+    assertTrue(handled.get() > 0, "the handler ran");
   }
 
   private static Status statusUnchecked(UUID taskId) {

@@ -1706,6 +1706,9 @@ class Worker:
         self._instance_id = ""
         self._hostname = socket.gethostname() or "python-worker"
         self._registered = False
+        # The active slots, the draining state, and the pause state that the last
+        # `workhorse.worker.registered` record wrote. None until the first registration of a run.
+        self._logged_registration: tuple[int, bool, bool] | None = None
         self._next_queue_index = 0
         # Queues that rejected a fast claim, with the monotonic time to probe them again.
         self._full_tier_until: dict[str, float] = {}
@@ -2563,6 +2566,20 @@ class Worker:
         with self._state_lock:
             self._cleanup_deadline = None
             self._shutdown_aborted = False
+        # As in TypeScript, a run writes its start record first: before the readiness check and
+        # before the first registration. A one-pass call is not a run, so it writes no start and
+        # no stop record.
+        if continuous:
+            _emit_log(
+                "INFO",
+                "workhorse.worker.started",
+                "Worker started",
+                {
+                    "workhorse.worker.id": self.worker_id,
+                    "workhorse.worker.concurrency": self.concurrency,
+                    "workhorse.worker.queues": self.queues,
+                },
+            )
         hub, detach_hub, reservation_subscription = self._start_connections()
         try:
             on_connections_ready = self._on_connections_ready
@@ -2588,6 +2605,7 @@ class Worker:
     ) -> bool:
         self._instance_id = str(uuid4())
         self._registered = False
+        self._logged_registration = None
         with self._state_lock:
             self._stopping = self._stop_version != requested_stop_version
             if not self._stopping:
@@ -2598,16 +2616,10 @@ class Worker:
         # Every claim of this run keeps this generation through its last statement.
         run_generation = self._current_generation()
         self._refresh_registration(force=True)
-        _emit_log(
-            "INFO",
-            "workhorse.worker.started",
-            "Worker started",
-            {
-                "workhorse.worker.id": self.worker_id,
-                "workhorse.worker.concurrency": self.concurrency,
-                "workhorse.worker.queues": self.queues,
-            },
-        )
+        # Polling stays correct without a listener, so the worker runs on, but it says so once.
+        # An AsyncWorker subscribes to the listener itself, and logs there.
+        if continuous and self._listens and listener is None:
+            self._log_polling_only()
         # Keeps the slots full without one serial claim round trip per task (ADR 0076). A claim
         # reserves the slots it asks for, so claimed tasks never exceed the concurrency. With no
         # claim in flight, any free slot starts one. While one is in flight, another starts only
@@ -2762,6 +2774,8 @@ class Worker:
             )
             maintenance.start()
 
+        # As in TypeScript, a run that ends with an error writes no workhorse.worker.stopped.
+        loop_failed = False
         try:
             try:
                 while True:
@@ -2828,6 +2842,7 @@ class Worker:
                     settle(outcome)
         except BaseException as error:
             # The loop's own failure, such as a registration write, reaches the drain below.
+            loop_failed = True
             self._report_fatal_error(error)
             raise
         finally:
@@ -2855,16 +2870,23 @@ class Worker:
                 errors = list(self._run_errors)
                 self._run_errors.clear()
                 active_slots = len(self._active_threads)
-            _emit_log(
-                "INFO",
-                "workhorse.worker.stopped",
-                "Worker stopped",
-                {
-                    "workhorse.worker.id": self.worker_id,
-                    "workhorse.worker.active_slots": active_slots,
-                    "workhorse.worker.queues": self.queues,
-                },
-            )
+            if (
+                continuous
+                and not loop_failed
+                and not errors
+                and not maintenance_errors
+                and slots.claim_error is None
+            ):
+                _emit_log(
+                    "INFO",
+                    "workhorse.worker.stopped",
+                    "Worker stopped",
+                    {
+                        "workhorse.worker.id": self.worker_id,
+                        "workhorse.worker.active_slots": active_slots,
+                        "workhorse.worker.queues": self.queues,
+                    },
+                )
         if maintenance_errors:
             raise maintenance_errors[0]
         if errors:
@@ -3431,21 +3453,7 @@ class Worker:
                                 "workhorse.recovery.retried": int(cast(int, row["retried"])),
                             },
                         )
-                if rows_affected > 0 or has_error:
-                    attributes: dict[str, str | bool | int | float] = {
-                        "workhorse.maintenance.operation": "tick",
-                        "workhorse.maintenance.phase": phase,
-                        "workhorse.maintenance.rows_affected": rows_affected,
-                        "workhorse.maintenance.skipped_lock": skipped_lock,
-                    }
-                    if has_error:
-                        attributes["error.type"] = "PostgreSQLError"
-                    _emit_log(
-                        "INFO",
-                        "workhorse.maintenance.completed",
-                        "Maintenance phase completed",
-                        attributes,
-                    )
+                _log_maintenance_phase("tick", phase, rows_affected, skipped_lock, has_error)
             slow_maintenance = (
                 self._executor.rows(_STATEMENTS.run_maintenance, (self._maintenance_time(),))
                 if routines_due
@@ -3464,6 +3472,9 @@ class Worker:
                     duration_ms,
                     skipped_lock,
                     has_error,
+                )
+                _log_maintenance_phase(
+                    "background_routines", phase, rows_affected, skipped_lock, has_error
                 )
             maintenance_span.set_attribute("workhorse.maintenance.rows_affected", total_rows)
         if not tick_due:
@@ -3569,6 +3580,7 @@ class Worker:
                 "workhorse.worker.registration_failed",
                 "Worker registration failed",
                 {
+                    "workhorse.worker.queues": self.queues,
                     "workhorse.worker.id": self.worker_id,
                     "error.type": error.__class__.__name__,
                 },
@@ -3577,27 +3589,34 @@ class Worker:
                 "on_registration_error", self._on_registration_error, error
             )
             return
+        registration = (active_slots, draining, paused)
         with self._state_lock:
             changed = self._remotely_paused != paused
             self._remotely_paused = paused
             self._registered = True
-        _emit_log(
-            "DEBUG",
-            "workhorse.worker.registered",
-            "Worker registration refreshed",
-            {
-                "workhorse.worker.id": self.worker_id,
-                "workhorse.worker.active_slots": active_slots,
-                "workhorse.worker.draining": draining,
-                "workhorse.worker.paused": paused,
-            },
-        )
+            # An unchanged refresh writes no record (docs/architecture/telemetry.md).
+            registration_changed = self._logged_registration != registration
+            self._logged_registration = registration
+        if registration_changed:
+            _emit_log(
+                "DEBUG",
+                "workhorse.worker.registered",
+                "Worker registration changed",
+                {
+                    "workhorse.worker.queues": self.queues,
+                    "workhorse.worker.id": self.worker_id,
+                    "workhorse.worker.concurrency": self.concurrency,
+                    "workhorse.worker.active_slots": active_slots,
+                    "workhorse.worker.draining": draining,
+                    "workhorse.worker.paused": paused,
+                },
+            )
         if changed:
             _emit_log(
                 "INFO",
                 "workhorse.worker.paused" if paused else "workhorse.worker.resumed",
                 "Worker paused remotely" if paused else "Worker resumed remotely",
-                {"workhorse.worker.id": self.worker_id},
+                {"workhorse.worker.id": self.worker_id, "workhorse.worker.queues": self.queues},
             )
             self._wake_dispatcher()
 
@@ -3657,7 +3676,18 @@ class Worker:
             executor = self._executor_within(
                 remaining if remaining > 0 else self._connection_budget_seconds
             )
-            return executor.rows(_STATEMENTS.deregister_worker, (worker_id, instance_id))
+            rows = executor.rows(_STATEMENTS.deregister_worker, (worker_id, instance_id))
+            _emit_log(
+                "DEBUG",
+                "workhorse.worker.deregistered",
+                "Worker deregistered",
+                {
+                    "workhorse.worker.id": worker_id,
+                    "workhorse.worker.deregistered": _require_lifecycle_row(rows)["deregistered"]
+                    is True,
+                },
+            )
+            return rows
 
         with suppress(Exception):
             self._call_by(deadline, deregister, "deregistration")
@@ -3710,6 +3740,23 @@ class Worker:
             self._wake_from_notification,
             self._notification_reporter(),
             self._set_notification_listening,
+        )
+
+    def _log_polling_only(self) -> None:
+        """Warn that this run has no notification listener, so it finds new tasks by polling."""
+        # The pool can change its size after the constructor, so the size is read now.
+        size = _reported_pool_size(self._pool)
+        _emit_log(
+            "WARN",
+            "workhorse.worker.polling_only",
+            "Worker has no notification listener and dispatches by polling",
+            {
+                "workhorse.worker.queues": self.queues,
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.worker.pool_max_size": (
+                    size if isinstance(size, int) and not isinstance(size, bool) else "unknown"
+                ),
+            },
         )
 
     def _notification_reporter(self) -> Callable[[BaseException], None] | None:
@@ -3877,16 +3924,23 @@ class Worker:
                 "Task handler started",
                 {**attributes, "workhorse.worker.id": self.worker_id},
             )
+            settlement_raised = False
             try:
                 self._execute_claimed_task_within_span(
                     task, claim_sent_at, arbiter, span_outcome, span_errors
                 )
             except BaseException as error:
+                settlement_raised = True
                 _record_span_error(handler_span, error.__class__.__name__)
                 raise
             finally:
                 duration_ms = (monotonic() - started_at) * 1_000
                 outcome = _telemetry_outcome(arbiter.outcome)
+                # A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each
+                # settlement raises if that acknowledgement fails or PostgreSQL refuses it. The
+                # attempt then settled nothing, so its outcome is unknown, as in TypeScript.
+                if outcome == "canceled" and settlement_raised:
+                    outcome = "unknown"
                 handler_span.set_attribute(
                     "workhorse.handler.outcome",
                     span_outcome["value"]
@@ -3906,16 +3960,19 @@ class Worker:
                         "workhorse.handler.duration_ms": duration_ms,
                     },
                 )
-                _emit_log(
-                    "INFO",
-                    "workhorse.task.execution_finished",
-                    "Task execution finished",
-                    {
-                        **attributes,
-                        "workhorse.worker.id": self.worker_id,
-                        "workhorse.handler.outcome": outcome,
-                    },
-                )
+                # An attempt whose settlement failed has no outcome. TypeScript writes no
+                # execution record for it, so this worker writes none.
+                if outcome != "unknown":
+                    _emit_log(
+                        "INFO",
+                        "workhorse.task.execution_finished",
+                        "Task execution finished",
+                        {
+                            **attributes,
+                            "workhorse.worker.id": self.worker_id,
+                            "workhorse.handler.outcome": outcome,
+                        },
+                    )
 
     def _execute_claimed_task_within_span(
         self,
@@ -4205,7 +4262,7 @@ class Worker:
                 _emit_log(
                     "WARN",
                     "workhorse.handler.signal_swallowed",
-                    "Task handler swallowed its suspension signal",
+                    "Task handler swallowed its abort signal",
                     {
                         **_task_span_attributes(task),
                         "workhorse.queue.name": task.queue,
@@ -4511,6 +4568,25 @@ class Worker:
             except StaleLeaseError as stale:
                 raise stale from error
         return outcome, state_text
+
+
+def _log_maintenance_phase(
+    operation: str, phase: str, rows_affected: int, skipped_lock: bool, has_error: bool
+) -> None:
+    """Log one maintenance phase that changed rows or returned an error, as TypeScript does."""
+    if rows_affected == 0 and not has_error:
+        return
+    _emit_log(
+        "INFO",
+        "workhorse.maintenance.completed",
+        "Maintenance phase completed",
+        {
+            "workhorse.maintenance.operation": operation,
+            "workhorse.maintenance.phase": phase,
+            "workhorse.maintenance.rows_affected": rows_affected,
+            "workhorse.maintenance.skipped_lock": skipped_lock,
+        },
+    )
 
 
 def _claimed_task(row: _Row, queue: str) -> ClaimedTask:

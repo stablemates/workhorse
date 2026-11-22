@@ -563,6 +563,7 @@ async fn create<E: Executor>(
             continue;
         }
         let tasks = enqueue_results(&enqueued, requests.len())?;
+        client.log_results(requests, &tasks);
         let group_id =
             group_id.ok_or_else(|| Error::invalid("PostgreSQL created no task group"))?;
         let group = get(executor, group_id).await?.ok_or_else(|| {
@@ -600,7 +601,9 @@ async fn add<E: Executor>(
             .map_err(Error::translate_enqueue_error)?;
         let rows = rows.iter().map(enqueue_row).collect::<Result<Vec<_>, _>>()?;
         if !client.reload_mismatched(&mut transport, &rows, &known).await? {
-            return enqueue_results(&rows, requests.len());
+            let results = enqueue_results(&rows, requests.len())?;
+            client.log_results(requests, &results);
+            return Ok(results);
         }
     }
     Err(Error::ContractPolicyChanged)

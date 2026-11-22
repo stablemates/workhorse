@@ -1,11 +1,13 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Admin;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Json;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -57,6 +59,7 @@ public sealed class Admin
     private readonly NpgsqlDataSource _dataSource;
     private readonly NpgsqlConnection? _connection;
     private readonly CompatibilityCache _compatibility;
+    private readonly ILogger _logger;
 
     /// <summary>An admin on <paramref name="dataSource"/>, in the source form.</summary>
     /// <exception cref="ArgumentException">The data source enables Npgsql multiplexing.</exception>
@@ -75,12 +78,14 @@ public sealed class Admin
         ArgumentNullException.ThrowIfNull(options);
         _dataSource = dataSource;
         _compatibility = new CompatibilityCache();
+        _logger = ContainedLogger.Create<Admin>(options.LoggerFactory);
     }
 
     private Admin(Admin source, NpgsqlConnection connection)
     {
         _dataSource = source._dataSource;
         _compatibility = source._compatibility;
+        _logger = source._logger;
         _connection = connection;
     }
 
@@ -259,13 +264,23 @@ public sealed class Admin
         Audit(audit);
         return RunAsync(
             async (connection, token) =>
-                RedriveResult(TaskGroups.ExactlyOne(
+            {
+                var result = RedriveResult(TaskGroups.ExactlyOne(
                     await Sql.RowsAsync(
                         connection,
                         SqlCatalogue.Redrive,
                         [Parameters.Uuid(sourceTaskId), .. AuditParameters(audit)],
                         token).ConfigureAwait(false),
-                    "redrive_v1")),
+                    "redrive_v1"));
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    var target = result.TargetTaskId?.ToString() ?? "none";
+                    var status = Wire.Text(result.Status);
+                    ClientLog.RedriveProcessed(_logger, sourceTaskId, target, status);
+                }
+
+                return result;
+            },
             cancellationToken);
     }
 
@@ -307,7 +322,9 @@ public sealed class Admin
                     };
                 }
 
-                return new BulkRedrivePage { Results = [.. rows.Select(RedriveResult)], NextCursor = next };
+                var page = new BulkRedrivePage { Results = [.. rows.Select(RedriveResult)], NextCursor = next };
+                ClientLog.RedriveBatchProcessed(_logger, page.Results.Count, filter.DryRun);
+                return page;
             },
             cancellationToken);
     }
@@ -503,6 +520,16 @@ public sealed class Admin
                     return null;
                 }
 
+                // As in TypeScript, a request that finds no worker writes no record.
+                if (paused)
+                {
+                    ClientLog.WorkerPaused(_logger, workerId);
+                }
+                else
+                {
+                    ClientLog.WorkerResumed(_logger, workerId);
+                }
+
                 var row = rows[0];
                 return new WorkerPauseResult
                 {
@@ -542,11 +569,15 @@ public sealed class Admin
         Audit(audit);
         return RunAsync(
             async (connection, token) =>
-                TaskGroups.ExactlyOne(
+            {
+                var count = TaskGroups.ExactlyOne(
                     await Sql.RowsAsync(
                         connection, SqlCatalogue.PurgeQueue, [Parameters.Text(queue), .. AuditParameters(audit)], token)
                         .ConfigureAwait(false),
-                    "purge_queue_v1").RequiredLong("deleted_count"),
+                    "purge_queue_v1").RequiredLong("deleted_count");
+                ClientLog.QueuePurged(_logger, queue, count);
+                return count;
+            },
             cancellationToken);
     }
 
@@ -566,7 +597,8 @@ public sealed class Admin
         Audit(audit);
         return RunAsync(
             async (connection, token) =>
-                Wire.Required<QueueTier>(
+            {
+                var changed = Wire.Required<QueueTier>(
                     "set_queue_tier",
                     TaskGroups.ExactlyOne(
                         await Sql.RowsAsync(
@@ -574,7 +606,15 @@ public sealed class Admin
                             SqlCatalogue.SetQueueTier,
                             [Parameters.Text(queue), Parameters.Text(wire), Parameters.Text(audit.Actor), Parameters.Text(audit.Reason)],
                             token).ConfigureAwait(false),
-                        "set_queue_tier_v1").Text("tier")),
+                        "set_queue_tier_v1").Text("tier"));
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    var text = Wire.Text(changed);
+                    ClientLog.QueueTierSet(_logger, queue, text);
+                }
+
+                return changed;
+            },
             cancellationToken);
     }
 
@@ -988,6 +1028,14 @@ public sealed class Admin
                 [Parameters.Text(queue), Parameters.Boolean(paused), .. AuditParameters(audit)],
                 token),
             cancellationToken).ConfigureAwait(false);
+        if (paused)
+        {
+            ClientLog.QueuePaused(_logger, queue);
+        }
+        else
+        {
+            ClientLog.QueueResumed(_logger, queue);
+        }
     }
 
     private static Task<IReadOnlyList<Row>> ExternalWaitRowsAsync(

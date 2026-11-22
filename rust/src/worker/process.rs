@@ -25,8 +25,8 @@ fn termination() -> Result<impl std::future::Future<Output = ()> + Send, Error> 
     let mut terminate = install(SignalKind::terminate())?;
     Ok(async move {
         tokio::select! {
-            _ = interrupt.recv() => tracing::info!("Received SIGINT; stopping claims and draining active tasks"),
-            _ = terminate.recv() => tracing::info!("Received SIGTERM; stopping claims and draining active tasks"),
+            _ = interrupt.recv() => crate::telemetry::log_event!(info, "Received SIGINT; stopping claims and draining active tasks"),
+            _ = terminate.recv() => crate::telemetry::log_event!(info, "Received SIGTERM; stopping claims and draining active tasks"),
         }
     })
 }
@@ -35,7 +35,10 @@ fn termination() -> Result<impl std::future::Future<Output = ()> + Send, Error> 
 fn termination() -> Result<impl std::future::Future<Output = ()> + Send, Error> {
     Ok(async {
         if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("Received Ctrl-C; stopping claims and draining active tasks");
+            crate::telemetry::log_event!(
+                info,
+                "Received Ctrl-C; stopping claims and draining active tasks"
+            );
         }
     })
 }

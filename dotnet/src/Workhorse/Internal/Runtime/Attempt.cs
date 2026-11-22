@@ -24,6 +24,7 @@ internal sealed class Arbiter
     private const int None = -1;
     private int _outcome = None;
     private int _released = None;
+    private int _cancellationFailed;
 
     internal Outcome? Current
     {
@@ -42,6 +43,19 @@ internal sealed class Arbiter
     /// round can submit the cancellation request first, but the worker settled nothing.
     /// </summary>
     internal void RefuseCancellation() => Interlocked.CompareExchange(ref _outcome, (int)Outcome.LeaseExpired, (int)Outcome.Cancelled);
+
+    /// <summary>
+    /// The outcome that the attempt reports in its log record and its telemetry: the current outcome,
+    /// or <c>null</c> after <see cref="FailCancellation"/>.
+    /// </summary>
+    internal Outcome? Reported => Volatile.Read(ref _cancellationFailed) == 1 ? null : Current;
+
+    /// <summary>
+    /// Records that the acknowledgement of a cancellation request failed. A heartbeat round can submit
+    /// the cancellation before PostgreSQL acknowledges it, but the worker settled nothing. Thus the
+    /// attempt reports no outcome, as in TypeScript.
+    /// </summary>
+    internal void FailCancellation() => Volatile.Write(ref _cancellationFailed, 1);
 
     /// <summary>
     /// The suspension that a fenced durable write released the task for, or <c>null</c>. The attempt

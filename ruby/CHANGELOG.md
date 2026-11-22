@@ -3,6 +3,77 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### The queue builds no record for a disabled logger
+
+The queue now checks the level of its logger before it builds the attributes of a record. A logger
+whose level is above the event costs no work.
+
+- `Worker#run_once` no longer writes `workhorse.worker.started` and `workhorse.worker.stopped`. A
+  one-pass call is not a run, and the TypeScript `runOnce()` writes neither record.
+- A run that ends with an error, such as an incomplete stop, no longer writes
+  `workhorse.worker.stopped`, as in TypeScript.
+- If the settlement of an attempt fails, the worker no longer writes
+  `workhorse.task.execution_finished` with the outcome `unknown`. The TypeScript worker writes no
+  execution record for that attempt. The worker still writes `workhorse.handler.finished`.
+- If a heartbeat delivers a cancellation and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
+  it, the worker no longer writes `workhorse.task.execution_finished` with the outcome `canceled`.
+  The attempt settled nothing, so the handler metrics record the outcome `unknown`. The TypeScript
+  worker writes the `canceled` record only after PostgreSQL accepts the acknowledgement.
+- `Worker#run` now writes `workhorse.worker.started` first, before the readiness check and before the first
+  `workhorse.worker.registered`, as in TypeScript. A run that fails its readiness check thus has a
+  start record. A run that a stop ends before the readiness check ends writes
+  `workhorse.worker.stopped`.
+
+### The worker log records match the TypeScript records
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. An audit compared each Ruby record with the TypeScript record.
+
+- `workhorse.worker.registration_failed` and the remote `workhorse.worker.paused` and
+  `workhorse.worker.resumed` records now carry `workhorse.worker.queues`.
+  `workhorse.task.claimed` now carries `workhorse.queue.name`.
+- The worker now writes `workhorse.maintenance.completed` for each phase of the background
+  routines that changes rows or returns an error, with the operation `background_routines`. The
+  record no longer carries `error.type` `PostgreSQLError`.
+- The body of `workhorse.handler.signal_swallowed` is now `Task handler swallowed its abort signal`.
+- When the logger itself raises, the warning on standard error names the error class and the
+  event, and no longer the error message.
+- `Dashboard.new` takes a new `logger:` keyword. The dashboard gives it to its `Admin`, and it
+  writes `workhorse.task.cancellation_processed`, `workhorse.task.signal_processed`, and
+  `workhorse.task.human_wait_processed` for its actions, as the queue does. Without a logger, the
+  dashboard writes no record.
+
+### The gem writes the worker log events of the TypeScript SDK
+
+The gem now writes 19 more events of the TypeScript union `WorkhorseLogEvent`. Each event has the
+same name, severity, and attributes as in TypeScript, and the same condition. `Queue.new` and
+`Admin.new` take a new `logger:` keyword, as `Worker.new` does. Without a logger, the client logs
+nothing. The worker gives its own logger to its queue.
+
+- `Queue` writes the enqueue events at debug: `workhorse.task.enqueued`,
+  `workhorse.task.enqueue_replayed`, `workhorse.task.debounced`, `workhorse.task.debounce_rejected`,
+  and `workhorse.task.throttled`. It writes `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, `workhorse.task.human_wait_processed`, and
+  `workhorse.schedules.synchronized` at info.
+- `Admin` writes `workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.tier_set`,
+  `workhorse.queue.purged`, `workhorse.task.redrive_processed`, and
+  `workhorse.tasks.redrive_processed` at info. `Admin#set_worker_paused` also writes
+  `workhorse.worker.paused` or `workhorse.worker.resumed` when the worker is registered.
+- The worker writes `workhorse.handler.registered` and `workhorse.worker.deregistered` at debug. It
+  writes `workhorse.worker.polling_only` at warn once for each run without a notification listener.
+  It writes `workhorse.worker.shutdown_settlement_failed` at warn when a completion or a release
+  after the shutdown abort fails. The run then raises that error.
+
+The worker now writes `workhorse.worker.registered` with the body "Worker registration changed". It
+writes the record after the first registration of a run, and when the active slots, the draining
+state, or the pause state changes. An unchanged refresh writes no record. The record also carries
+`workhorse.worker.queues` and `workhorse.worker.concurrency`.
+
+The gem has no public method that promotes scheduled tasks or prunes the worker registry. Thus it
+does not write `workhorse.tasks.promoted` or `workhorse.worker_registry.pruned`.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

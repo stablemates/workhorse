@@ -9,6 +9,96 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A failing logger no longer changes an operation
+
+A log record must never change the result of an operation. Before, an `ILogger` that threw could
+replace the result of a committed purge, and a throwing `workhorse.handler.started` record stopped
+the handler after the claim.
+
+- The worker, the queue, and `Admin` now drop a record when the `ILogger` of the application
+  throws. The operation keeps its result, and the handler runs.
+- The `Workhorse.AspNetCore` dashboard also drops a record when its `ILogger` throws, and it gives
+  the same answer.
+- Each run writes its first `workhorse.worker.registered`, also after a deregistration that did not
+  end before the stop deadline.
+- `Workhorse.Hosting` also drops a record when its `ILogger` or its logger factory throws. The
+  host starts, the hosted worker throws its own failure again, and the exit code is 1 as before.
+- A heartbeat that sees a cancellation request no longer gives `workhorse.task.execution_finished`
+  with the outcome `canceled` when the acknowledgement of the request fails or PostgreSQL refuses
+  it. The worker settled
+  nothing, so the attempt has no execution record and its handler outcome is `unknown`, as in
+  TypeScript.
+- `workhorse.task.execution_finished` and `workhorse.handler.finished` now come while the handler
+  activity is current, as in TypeScript. A log bridge thus gives them the trace context of the
+  attempt.
+- `RunOnceAsync` no longer writes `workhorse.worker.started` and `workhorse.worker.stopped`, as in
+  TypeScript. `RunAsync` writes `workhorse.worker.started` first, and it writes
+  `workhorse.worker.stopped` only when the run does not fail.
+- `workhorse.worker.polling_only` now comes when `RunAsync` starts without a notification
+  subscription, which is the case under `PollingOnly`, as in TypeScript. A listener that does not
+  listen yet gives no warning.
+- `workhorse.worker.notification_failed` and `workhorse.task.release_failed` now carry
+  `ErrorType`, not the exception.
+
+### The worker log records carry the values of the TypeScript records
+
+A worker log record must carry the same values in each SDK, so that one alert reads the workers of
+all seven SDKs. A .NET record names each value by its message template.
+
+- Each task record now carries `TaskId`, `TaskType`, `Attempt`, `Queue`, and `WorkerId`. This
+  changes `workhorse.task.completed`, `workhorse.task.completion_rejected`,
+  `workhorse.task.release_processed`, `workhorse.task.failure_processed`,
+  `workhorse.task.ownership_expired`, `workhorse.task.cancellation_acknowledged`,
+  `workhorse.handler.missing`, `workhorse.handler.signal_swallowed`, and
+  `workhorse.worker.expiration_request_failed`. `workhorse.task.heartbeat_rejected` and the
+  checkpoint, progress, and wait records add `TaskType`, `Attempt`, and `WorkerId`.
+- The completion records carry `Accepted`. `workhorse.task.failure_processed` no longer carries
+  `ErrorType`.
+- The worker life-cycle records carry `WorkerId`, and `Queues` is now a list value.
+  `workhorse.worker.stop_requested` carries `ActiveSlots`. `workhorse.worker.polling_only` carries
+  `Queues` and `PoolMaxSize`.
+- `workhorse.worker.registration_failed`, `workhorse.handler.batch_evidence_failed`, and
+  `workhorse.worker.expiration_request_failed` carry `ErrorType` and no longer attach the
+  exception, which holds the error message.
+- `workhorse.handler.batch_dispatched` carries `WorkerId`. `workhorse.handler.batch_evidence_failed`
+  carries `Queue`, `Full`, and `WorkerId`.
+- The child records carry `WorkerId`. A child set writes `ChildCount` instead of the child name
+  `child set`.
+- `Admin.SetWorkerPausedAsync` now writes `workhorse.worker.paused` or `workhorse.worker.resumed`
+  when it finds the worker.
+
+### The worker, the queue, and the admin client write the log events of TypeScript
+
+The .NET SDK now writes the worker log events of the TypeScript `WorkhorseLogEvent` union, with
+the same name, severity, and attributes. Each record names its attributes by its message template.
+
+- `Queue` and `Admin` get a logger from the new optional `QueueOptions.LoggerFactory` and
+  `AdminOptions.LoggerFactory`. If the value is `null`, they log nothing. `Workhorse.Hosting` gives
+  them the logger factory of the container, as it does for the worker. Configuration cannot set
+  `Workhorse:Queue:LoggerFactory`, and `AddWorkhorse` refuses that section.
+- The queue writes `workhorse.task.enqueued`, `workhorse.task.enqueue_replayed`,
+  `workhorse.task.debounced`, `workhorse.task.debounce_rejected`, and `workhorse.task.throttled` at
+  Debug for each task of an enqueue or a task group add. It writes
+  `workhorse.task.cancellation_processed`, `workhorse.task.signal_processed`,
+  `workhorse.task.human_wait_processed`, and `workhorse.schedules.synchronized` at Info.
+- The admin client writes `workhorse.queue.paused`, `workhorse.queue.resumed`,
+  `workhorse.queue.purged`, `workhorse.queue.tier_set`, `workhorse.task.redrive_processed`, and
+  `workhorse.tasks.redrive_processed` at Info.
+- The worker writes `workhorse.handler.registered`, `workhorse.task.claimed`,
+  `workhorse.handler.started`, `workhorse.handler.finished`, `workhorse.task.heartbeat_accepted`,
+  `workhorse.schedule.fire_replayed`, and `workhorse.worker.deregistered` at Debug. It writes
+  `workhorse.task.execution_finished`, `workhorse.maintenance.completed`, and
+  `workhorse.leases.recovered` at Info. If a completion or a release after the shutdown
+  cancellation fails, it writes `workhorse.worker.shutdown_settlement_failed` at Warning.
+- The worker writes `workhorse.worker.registered` at Debug after the first registration of a run,
+  and when the active slots, the draining state, or the pause state changes. A refresh that changes
+  nothing writes no record.
+
+The .NET SDK does not write `workhorse.tasks.promoted` or `workhorse.worker_registry.pruned`. It has
+no public method that promotes scheduled tasks or that prunes the worker registry.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -558,8 +558,8 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Runs {@link #run} on a worker-owned platform thread, and returns at once. If the run ends
-   * without a {@link #stop}, the worker logs its error at {@code ERROR} at once, as the event
-   * {@code workhorse.worker.run_failed}, and {@link #close} throws it.
+   * without a {@link #stop}, the worker logs the type of its error at {@code ERROR} at once, as the
+   * event {@code workhorse.worker.run_failed}, and {@link #close} throws the error.
    *
    * @throws IllegalStateException if the worker already runs on its own thread
    */
@@ -1031,6 +1031,9 @@ public final class Worker implements AutoCloseable {
       latestRun = run;
       registered.set(false);
       remotelyPaused.set(false);
+      // Each run writes its first registration record, also when the deregistration of the run
+      // before did not clear the saved state.
+      loggedRegistration = null;
     } finally {
       registryLock.unlock();
     }
@@ -1050,6 +1053,17 @@ public final class Worker implements AutoCloseable {
       stopDeadline.set(NEVER);
     }
     RunState run = startRun(version);
+    // As in TypeScript, a run writes its start record first: before the readiness check and before
+    // the first registration. A one-pass call is not a run, so it writes no start and no stop
+    // record.
+    if (continuous) {
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.worker.started",
+          "Worker started",
+          Map.of(
+              "workhorse.worker.concurrency", concurrency, "workhorse.worker.queues", queueNames));
+    }
     // ADR 0071 rule 3: within one startup budget, the worker reserves the heartbeat connection,
     // and then borrows one ordinary connection for the compatibility check. The heartbeat
     // connection comes first, so the listener and the claims cannot take the last connections of
@@ -1060,7 +1074,7 @@ public final class Worker implements AutoCloseable {
     long startupDeadline = System.nanoTime() + startupBudgetNanos();
     Heartbeat.Reservation reservation = reserveHeartbeat(run, startupDeadline, listens);
     if (reservation == null) {
-      return false;
+      return stoppedBeforeStart(continuous);
     }
     Listener.Subscription listener = null;
     boolean ready = false;
@@ -1096,10 +1110,7 @@ public final class Worker implements AutoCloseable {
       }
     }
     if (!ready) {
-      return false;
-    }
-    if (continuous && !pollingOnly && listener == null) {
-      logPollingOnly();
+      return stoppedBeforeStart(continuous);
     }
     instanceId = UUID.randomUUID();
     draining = false;
@@ -1110,12 +1121,12 @@ public final class Worker implements AutoCloseable {
           () -> joinQuietly(registryStep(() -> refreshRegistration(true, run.generation))),
           run,
           "registration");
-      log(
-          System.Logger.Level.INFO,
-          "workhorse.worker.started",
-          "Worker started",
-          Map.of(
-              "workhorse.worker.concurrency", concurrency, "workhorse.worker.queues", queueNames));
+      // As in TypeScript, a run without a notification subscription warns once, also when the
+      // application configured polling only. The warning reads whether the run has a
+      // subscription, not whether its LISTEN succeeded, so a stalled LISTEN gives no warning.
+      if (continuous && listener == null && !stopRequested(run)) {
+        logPollingOnly();
+      }
       if (continuous && !stopRequested(run)) {
         // ADR 0078: a long-running worker starts its first claim beside its startup maintenance.
         startMaintenance(run);
@@ -1159,12 +1170,6 @@ public final class Worker implements AutoCloseable {
       UUID stoppedInstance = instanceId;
       joinUntil(
           registryStep(() -> deregister(run.generation, stoppedInstance)), end, "deregistration");
-      log(
-          System.Logger.Level.INFO,
-          "workhorse.worker.stopped",
-          "Worker stopped",
-          Map.of(
-              "workhorse.worker.queues", queueNames, "workhorse.worker.active_slots", abandoned));
     }
     if (abandoned > 0) {
       throw new ShutdownIncompleteException(abandoned);
@@ -1175,7 +1180,32 @@ public final class Worker implements AutoCloseable {
     if (!run.errors.isEmpty()) {
       throw unchecked(run.errors.get(0));
     }
+    // As in TypeScript, only a run that ends without an error writes the stop record.
+    if (continuous) {
+      logStopped(abandoned);
+    }
     return claimedAny;
+  }
+
+  /**
+   * Ends a run that a stop ended before its readiness check ended. The run ends without an error,
+   * and TypeScript then writes the stop record, so this run writes it too. Returns false: the run
+   * claimed nothing.
+   */
+  private boolean stoppedBeforeStart(boolean continuous) {
+    if (continuous) {
+      logStopped(0);
+    }
+    return false;
+  }
+
+  private void logStopped(int activeSlots) {
+    log(
+        System.Logger.Level.INFO,
+        "workhorse.worker.stopped",
+        "Worker stopped",
+        Map.of(
+            "workhorse.worker.queues", queueNames, "workhorse.worker.active_slots", activeSlots));
   }
 
   /**
@@ -1467,7 +1497,8 @@ public final class Worker implements AutoCloseable {
    * until {@code deadline}, the end of the time that the startup budget has left. The readiness
    * check then sees the pool without the listener's connection. A {@code LISTEN} that is still in
    * flight does not hold the start. The listener is best effort: if it does not listen yet, the
-   * worker logs one warning and polls, and the listener keeps trying in the background.
+   * worker polls, and the listener keeps trying in the background. The run has a subscription, so
+   * it logs no polling warning, as in TypeScript.
    */
   private void awaitListener(
       Listener.Subscription listener, AtomicBoolean failed, RunState run, long deadline) {
@@ -1483,9 +1514,6 @@ public final class Worker implements AutoCloseable {
         Thread.currentThread().interrupt();
         return;
       }
-    }
-    if (!listener.isListening() && !stopRequested(run)) {
-      logPollingOnly();
     }
   }
 
@@ -2599,8 +2627,11 @@ public final class Worker implements AutoCloseable {
                   }
                   if (routineDue) {
                     lastRoutineAt.set(now);
-                    Sql.rows(connection, SqlCatalogue.RUN_MAINTENANCE_V1, DATABASE_NOW)
-                        .forEach(telemetry::maintenancePhase);
+                    for (Row row :
+                        Sql.rows(connection, SqlCatalogue.RUN_MAINTENANCE_V1, DATABASE_NOW)) {
+                      telemetry.maintenancePhase(row);
+                      logMaintenancePhase("background_routines", row);
+                    }
                   }
                   return null;
                 }));
@@ -2613,18 +2644,36 @@ public final class Worker implements AutoCloseable {
   private void recordMaintenance(Row row) {
     telemetry.maintenancePhase(row);
     Long affected = row.longValue("rows_affected");
-    boolean error = row.text("error") != null;
-    if ((affected == null || affected == 0) && !error) {
+    if ("recover".equals(row.text("phase")) && affected != null && affected > 0) {
+      Long expired = row.longValue("expired_leases");
+      Long retried = row.longValue("retried");
+      Map<String, @Nullable Object> recovered = new LinkedHashMap<>();
+      recovered.put(Names.RECOVERY_ROWS_AFFECTED, affected);
+      recovered.put(Names.RECOVERY_EXPIRED_LEASES, expired == null ? 0L : expired);
+      recovered.put(Names.RECOVERY_RETRIED, retried == null ? 0L : retried);
+      log(
+          System.Logger.Level.INFO,
+          "workhorse.leases.recovered",
+          "Expired leases recovered",
+          recovered);
+    }
+    logMaintenancePhase("tick", row);
+  }
+
+  /**
+   * Logs one maintenance phase that changed rows or returned an error, with the attributes of
+   * TypeScript. The record never holds the error of the phase.
+   */
+  private void logMaintenancePhase(String operation, Row row) {
+    Long affected = row.longValue("rows_affected");
+    if ((affected == null || affected == 0) && row.text("error") == null) {
       return;
     }
     Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
-    attributes.put("workhorse.maintenance.operation", "tick");
+    attributes.put("workhorse.maintenance.operation", operation);
     attributes.put("workhorse.maintenance.phase", row.text("phase"));
     attributes.put("workhorse.maintenance.rows_affected", affected == null ? 0 : affected);
     attributes.put("workhorse.maintenance.skipped_lock", "t".equals(row.text("skipped_lock")));
-    if (error) {
-      attributes.put("error.type", "PostgreSQLError");
-    }
     log(
         System.Logger.Level.INFO,
         "workhorse.maintenance.completed",
@@ -2968,6 +3017,7 @@ public final class Worker implements AutoCloseable {
     WorkerTelemetry.Execution execution = telemetry.execute(claimed);
     // The handler logs run inside the handler span, so they carry its trace.
     log(System.Logger.Level.DEBUG, "workhorse.handler.started", "Task handler started", attributes);
+    boolean settlementThrew = false;
     try {
       if (registration == null) {
         log(
@@ -2980,20 +3030,31 @@ public final class Worker implements AutoCloseable {
         runHandler(task, registration, arbiter);
       }
     } catch (RuntimeException | Error error) {
+      settlementThrew = true;
       telemetry.handlerError(error.getClass().getName());
       throw error;
     } finally {
       Outcome outcome = arbiter.reportedOutcome();
+      // A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each settlement
+      // throws if that acknowledgement fails or PostgreSQL refuses it. The attempt then settled
+      // nothing, so its outcome is unknown, as in TypeScript.
+      boolean settled = !(outcome == Outcome.CANCELLED && settlementThrew);
       try {
-        Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
-        finished.put(
-            "workhorse.handler.outcome",
-            WorkerTelemetry.metricOutcome(outcome == null ? null : outcome.name()));
-        log(
-            System.Logger.Level.INFO,
-            "workhorse.task.execution_finished",
-            "Task execution finished",
-            finished);
+        String executionOutcome =
+            settled
+                ? WorkerTelemetry.metricOutcome(outcome == null ? null : outcome.name())
+                : "unknown";
+        // An attempt whose settlement failed has no outcome. TypeScript writes no execution record
+        // for it, so this worker writes none.
+        if (!"unknown".equals(executionOutcome)) {
+          Map<String, @Nullable Object> finished = new LinkedHashMap<>(attributes);
+          finished.put("workhorse.handler.outcome", executionOutcome);
+          log(
+              System.Logger.Level.INFO,
+              "workhorse.task.execution_finished",
+              "Task execution finished",
+              finished);
+        }
         Map<String, @Nullable Object> duration = new LinkedHashMap<>(attributes);
         duration.put("workhorse.handler.duration_ms", (System.nanoTime() - startedAt) / 1e6);
         log(
@@ -3002,7 +3063,7 @@ public final class Worker implements AutoCloseable {
             "Task handler finished",
             duration);
       } finally {
-        execution.finish(outcome == null ? null : outcome.name());
+        execution.finish(outcome == null ? null : outcome.name(), settled);
       }
     }
   }
@@ -3066,7 +3127,7 @@ public final class Worker implements AutoCloseable {
       // releases the task (SM-1889), also in a batch that runs on another member's thread
       // (SM-1890). A handler that failed before the cancellation keeps its usual settlement.
       if (stopped) {
-        releaseOwned(claimed, arbiter, ownership);
+        afterShutdown(claimed, () -> releaseOwned(claimed, arbiter, ownership));
         return;
       }
       settleFailure(claimed, error, arbiter, ownership);
@@ -3077,7 +3138,36 @@ public final class Worker implements AutoCloseable {
     if (finishSuspended(claimed, ownership, arbiter)) {
       return;
     }
+    // A value that the handler returns after the shutdown cancellation still completes the task.
+    if (stopped) {
+      afterShutdown(claimed, () -> complete(task, ownership, encoded, arbiter));
+      return;
+    }
     complete(task, ownership, encoded, arbiter);
+  }
+
+  /**
+   * Runs the completion or the release of a handler that the shutdown cancellation ended, as the
+   * TypeScript worker does. If the write fails, the worker logs the failure and rethrows it, so the
+   * run ends with the error. Lease recovery settles the task. A lost lease is not a failure:
+   * another attempt owns the task. The record names the error type only, because the error message
+   * can hold application data.
+   */
+  private void afterShutdown(ClaimedTask task, Runnable settlement) {
+    try {
+      settlement.run();
+    } catch (LeaseLostException lost) {
+      throw lost;
+    } catch (RuntimeException error) {
+      Map<String, @Nullable Object> attributes = taskAttributes(task);
+      attributes.put("error.type", error.getClass().getName());
+      log(
+          System.Logger.Level.WARNING,
+          "workhorse.worker.shutdown_settlement_failed",
+          "Worker could not settle a task after the shutdown abort",
+          attributes);
+      throw error;
+    }
   }
 
   private void complete(Active active, Ownership ownership, String encoded, Arbiter arbiter) {
@@ -4069,6 +4159,11 @@ public final class Worker implements AutoCloseable {
 
           @Override
           public void renew(long sentAt) {
+            log(
+                System.Logger.Level.DEBUG,
+                "workhorse.task.heartbeat_accepted",
+                "Task heartbeat accepted",
+                taskAttributes(task));
             acceptRenewal(ownership, arbiter, cancellation, sentAt);
           }
 
@@ -4672,20 +4767,30 @@ public final class Worker implements AutoCloseable {
 
   /**
    * Writes one log event to {@code System.Logger} and, when its name is a TypeScript event name, to
-   * OpenTelemetry. Both carry {@code workhorse.worker.id}.
+   * OpenTelemetry. Both carry {@code workhorse.worker.id}. A logger that throws never reaches the
+   * caller, because a log record must not change a claim, a settlement, or a handler run.
    */
   void log(System.Logger.Level level, String event, String body, Map<String, ?> attributes) {
     Map<String, @Nullable Object> fields = new LinkedHashMap<>();
     fields.put("workhorse.worker.id", workerId);
     fields.putAll(attributes);
-    telemetry.log(level, event, body, fields);
-    if (!logger.isLoggable(level)) {
-      return;
+    // Each path has its own guard, so a failure of one path does not stop the other.
+    try {
+      telemetry.log(level, event, body, fields);
+    } catch (RuntimeException ignored) {
+      // OpenTelemetry failed.
     }
-    Map<String, @Nullable Object> logged = new LinkedHashMap<>();
-    logged.put("event.name", event);
-    logged.putAll(fields);
-    logger.log(level, body + " " + logged);
+    try {
+      if (!logger.isLoggable(level)) {
+        return;
+      }
+      Map<String, @Nullable Object> logged = new LinkedHashMap<>();
+      logged.put("event.name", event);
+      logged.putAll(fields);
+      logger.log(level, body + " " + logged);
+    } catch (RuntimeException ignored) {
+      // The logger failed.
+    }
   }
 
   /**
@@ -4776,16 +4881,23 @@ public final class Worker implements AutoCloseable {
     }
   }
 
-  /** Logs the error that ended a run of {@link #start} without a stop, with its stack trace. */
+  /**
+   * Logs the type of the error that ended a run of {@link #start} without a stop. The record names
+   * the error type only, because the message and the stack trace can hold application data.
+   */
   private void logFailure(Throwable error) {
-    if (!logger.isLoggable(System.Logger.Level.ERROR)) {
-      return;
+    try {
+      if (!logger.isLoggable(System.Logger.Level.ERROR)) {
+        return;
+      }
+      Map<String, @Nullable Object> fields = new LinkedHashMap<>();
+      fields.put("event.name", "workhorse.worker.run_failed");
+      fields.put("workhorse.worker.id", workerId);
+      fields.put("error.type", error.getClass().getName());
+      logger.log(System.Logger.Level.ERROR, "Worker run ended without a stop " + fields);
+    } catch (RuntimeException ignored) {
+      // The logger failed.
     }
-    Map<String, @Nullable Object> fields = new LinkedHashMap<>();
-    fields.put("event.name", "workhorse.worker.run_failed");
-    fields.put("workhorse.worker.id", workerId);
-    fields.put("error.type", error.getClass().getName());
-    logger.log(System.Logger.Level.ERROR, "Worker run ended without a stop " + fields, error);
   }
 
   private static RuntimeException unchecked(Throwable error) {

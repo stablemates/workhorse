@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Contracts;
@@ -68,7 +69,7 @@ public sealed partial class Queue
         _dataSource = DataSources.Require(dataSource, nameof(dataSource));
         var defaultQueue = options.DefaultQueue ?? throw new ArgumentException("default queue must be a String", nameof(options));
         RequiredBytes(Utf16.Require(defaultQueue, "default queue"), MaxNameBytes, "default queue");
-        _shared = new Shared(defaultQueue, new JsonCodec(options.Json));
+        _shared = new Shared(defaultQueue, new JsonCodec(options.Json), ContainedLogger.Create<Queue>(options.LoggerFactory));
     }
 
     private Queue(Queue source, NpgsqlConnection caller)
@@ -158,7 +159,7 @@ public sealed partial class Queue
                 requests,
                 document => Sql.RowsAsync(call.Connection, SqlCatalogue.EnqueueManyV1, [Parameters.Json(document)], cancellationToken),
                 cancellationToken).ConfigureAwait(false);
-            var results = EnqueueResults(rows, requests.Count);
+            var results = EnqueueResults(rows, requests);
             QueueTelemetry.Enqueued(span, results);
             return results;
         }
@@ -228,7 +229,7 @@ public sealed partial class Queue
                         [Parameters.Uuid(groupId), Parameters.Json(document), Parameters.Uuid(null), Parameters.Text(null), Parameters.Bigint(null)],
                         cancellationToken),
                     cancellationToken).ConfigureAwait(false);
-                return EnqueueResults(rows, pending.Count);
+                return EnqueueResults(rows, pending);
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -339,7 +340,7 @@ public sealed partial class Queue
         var group = await GetTaskGroupAsync(call, id, cancellationToken).ConfigureAwait(false)
             ?? throw new WorkhorseException($"Task group {id} disappeared after its creation");
         var members = rows.Where(row => row.Value("ordinal") is not null).ToList();
-        return new TaskGroupBlockResult { Group = group, Tasks = EnqueueResults(members, requests.Count) };
+        return new TaskGroupBlockResult { Group = group, Tasks = EnqueueResults(members, requests) };
     }
 
     private List<(string Key, Pending Request)> CallbackEntries(TaskGroupCallbacks callbacks)
@@ -444,11 +445,20 @@ public sealed partial class Queue
                     [Parameters.Uuid(taskId), Parameters.Text(options.RequestedBy), Parameters.Text(options.Reason)],
                     cancellationToken).ConfigureAwait(false);
                 var row = TaskGroups.ExactlyOne(rows, "cancel_v1");
+                var status = Wire.Required<CancelStatus>("cancel", row.Text("status"));
+                TaskState? state = row.Text("state") is { } text ? Wire.Required<TaskState>("cancel", text) : null;
+                if (_shared.Logger.IsEnabled(LogLevel.Information))
+                {
+                    var stateText = state is { } known ? Wire.Text(known) : "not_found";
+                    var statusText = Wire.Text(status);
+                    ClientLog.CancellationProcessed(_shared.Logger, taskId, stateText, statusText);
+                }
+
                 return new CancelResult
                 {
-                    Status = Wire.Required<CancelStatus>("cancel", row.Text("status")),
+                    Status = status,
                     TaskId = taskId,
-                    State = row.Text("state") is { } state ? Wire.Required<TaskState>("cancel", state) : null,
+                    State = state,
                     CurrentAttempt = row.Integer("current_attempt"),
                     RequestedAt = row.Instant("requested_at"),
                     RequestedBy = row.Text("requested_by"),
@@ -486,9 +496,16 @@ public sealed partial class Queue
                     throw new SignalIdempotencyConflictException(taskId, name);
                 }
 
+                var status = Wire.Required<SignalStatus>("send_signal", row.Text("status"));
+                if (_shared.Logger.IsEnabled(LogLevel.Information))
+                {
+                    var statusText = Wire.Text(status);
+                    ClientLog.SignalProcessed(_shared.Logger, taskId, name, statusText);
+                }
+
                 return new SignalDeliveryResult
                 {
-                    Status = Wire.Required<SignalStatus>("send_signal", row.Text("status")),
+                    Status = status,
                     TaskId = taskId,
                     Name = name,
                     Payload = row.Json("payload"),
@@ -526,9 +543,16 @@ public sealed partial class Queue
                     throw new HumanWaitIdempotencyConflictException(taskId, name);
                 }
 
+                var status = Wire.Required<HumanWaitStatus>("complete_human_wait", row.Text("status"));
+                if (_shared.Logger.IsEnabled(LogLevel.Information))
+                {
+                    var statusText = Wire.Text(status);
+                    ClientLog.HumanWaitProcessed(_shared.Logger, taskId, name, statusText);
+                }
+
                 return new HumanWaitCompletionResult
                 {
-                    Status = Wire.Required<HumanWaitStatus>("complete_human_wait", row.Text("status")),
+                    Status = status,
                     TaskId = taskId,
                     Name = name,
                     Payload = row.Json("result"),
@@ -654,6 +678,7 @@ public sealed partial class Queue
                     SqlCatalogue.SyncScheduleDefinitionsV2,
                     [Parameters.Text(@namespace), Parameters.Json(Values.Write(document)), Parameters.Boolean(prune)],
                     cancellationToken).ConfigureAwait(false);
+                ClientLog.SchedulesSynchronized(_shared.Logger, @namespace, definitions.Count);
                 return true;
             },
             cancellationToken);
@@ -1275,8 +1300,13 @@ public sealed partial class Queue
         return null;
     }
 
-    private static List<EnqueueResult> EnqueueResults(IReadOnlyList<Row> rows, int count)
+    /// <summary>
+    /// The results of <paramref name="rows"/> in request order. Each result writes the log record of
+    /// its outcome, with the type and the queue of its request.
+    /// </summary>
+    private List<EnqueueResult> EnqueueResults(IReadOnlyList<Row> rows, IReadOnlyList<Pending> requests)
     {
+        var count = requests.Count;
         if (rows.Count != count)
         {
             throw InvalidResult();
@@ -1306,7 +1336,40 @@ public sealed partial class Queue
             results[index] = new EnqueueResult { TaskId = row.RequiredUuid("task_id"), Outcome = outcome, Reason = because };
         }
 
+        var logger = _shared.Logger;
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            for (var index = 0; index < count; index++)
+            {
+                var result = results[index]!;
+                var request = requests[index];
+                LogEnqueue(logger, result.Outcome, result.TaskId, request.TaskType, request.Options.Queue ?? _shared.DefaultQueue);
+            }
+        }
+
         return [.. results.Select(result => result!)];
+    }
+
+    private static void LogEnqueue(ILogger logger, EnqueueOutcome outcome, Guid taskId, string taskType, string queue)
+    {
+        switch (outcome)
+        {
+            case EnqueueOutcome.Accepted:
+                ClientLog.Enqueued(logger, taskId, taskType, queue);
+                break;
+            case EnqueueOutcome.Replayed:
+                ClientLog.EnqueueReplayed(logger, taskId, taskType, queue);
+                break;
+            case EnqueueOutcome.Replaced:
+                ClientLog.Debounced(logger, taskId, taskType, queue);
+                break;
+            case EnqueueOutcome.NonReplaceable:
+                ClientLog.DebounceRejected(logger, taskId, taskType, queue);
+                break;
+            case EnqueueOutcome.Coalesced:
+                ClientLog.Throttled(logger, taskId, taskType, queue);
+                break;
+        }
     }
 
     private static WorkhorseException InvalidResult() => new("PostgreSQL returned an invalid enqueue result");
@@ -1419,7 +1482,7 @@ public sealed partial class Queue
     }
 
     /// <summary>The state that a queue and each of its caller forms share.</summary>
-    private sealed class Shared(string defaultQueue, JsonCodec codec)
+    private sealed class Shared(string defaultQueue, JsonCodec codec, ILogger logger)
     {
         private readonly Lock _lock = new();
         private readonly Dictionary<string, PayloadContract?> _contracts = new(StringComparer.Ordinal);
@@ -1428,6 +1491,8 @@ public sealed partial class Queue
         internal string DefaultQueue { get; } = defaultQueue;
 
         internal JsonCodec Codec { get; } = codec;
+
+        internal ILogger Logger { get; } = logger;
 
         internal CompatibilityCache Compatibility { get; } = new();
 

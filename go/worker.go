@@ -400,11 +400,15 @@ type Worker struct {
 	draining             atomic.Bool
 	remotelyPaused       atomic.Bool
 	registered           atomic.Bool
-	heartbeatMu          sync.Mutex
-	heartbeatMembers     map[*heartbeatMember]struct{}
-	heartbeatWake        chan struct{}
-	heartbeatRunning     bool
-	heartbeatLease       *heartbeatConnectionLease
+	// registrationLogMu guards loggedRegistration, the state that the last
+	// workhorse.worker.registered record named. Nil means that no registration was logged.
+	registrationLogMu  sync.Mutex
+	loggedRegistration *workerRegistrationState
+	heartbeatMu        sync.Mutex
+	heartbeatMembers   map[*heartbeatMember]struct{}
+	heartbeatWake      chan struct{}
+	heartbeatRunning   bool
+	heartbeatLease     *heartbeatConnectionLease
 	// heartbeatRound sends the heartbeat statements of one round and returns the status of each
 	// member, in the order of members. It is queryHeartbeatRound outside tests.
 	heartbeatRound func(members []*heartbeatMember, deadline time.Time) ([]ownershipStatus, error)
@@ -680,6 +684,10 @@ func (worker *Worker) Handle(taskType string, handler Handler) *Worker {
 		panic(nilWorkerHandlerMessage)
 	}
 	worker.registerHandler(taskType, handler)
+	logWorkerEvent(context.Background(), worker.logger, slog.LevelDebug, handlerRegisteredEvent,
+		handlerRegisteredLogMessage, func() []any {
+			return []any{slog.String(taskTypeAttribute, taskType), slog.String(workerIDAttribute, worker.workerID)}
+		})
 	return worker
 }
 
@@ -708,6 +716,11 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	defer releaseRun()
+	// As in TypeScript, the start record comes first, before the readiness check and the first
+	// registration. A run that the check refuses thus has a start record and no stop record.
+	logWorkerEvent(ctx, worker.logger, slog.LevelInfo, workerStartedEvent, workerStartedLogMessage, func() []any {
+		return append(worker.workerQueueAttributes(), slog.Int(workerConcurrencyAttribute, worker.concurrency))
+	})
 	worker.holdHeartbeats()
 	defer worker.releaseHeartbeatConnection()
 	if err := worker.prepareStart(ctx); err != nil {
@@ -720,7 +733,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return errors.New(workerInstanceIDMessage)
 	}
 	worker.instanceID = instanceID
-	worker.registered.Store(false)
+	worker.startRegistration()
 	executor := NewPGXExecutor(worker.pool)
 	// The registration of Run and the registry and claim goroutines run their queries through this
 	// executor. A panic of caller code inside one of them, such as in a pgx tracer, becomes the error
@@ -742,6 +755,14 @@ func (worker *Worker) Run(ctx context.Context) error {
 	notifications := subscribeToTaskNotifications(
 		ctx, worker.pool, worker.queues, worker.pollingOnly, worker.logger, notificationWake,
 	)
+	if worker.pollingOnly {
+		// Polling stays correct without a listener, so the worker runs on, but it says so once.
+		logWorkerEvent(ctx, worker.logger, slog.LevelWarn, workerPollingOnlyEvent, workerPollingOnlyLogMessage,
+			func() []any {
+				return append(worker.workerQueueAttributes(),
+					slog.Int(workerPoolMaxSizeAttribute, int(worker.pool.Config().MaxConns)))
+			})
+	}
 	stopNotificationsAtCancel := context.AfterFunc(ctx, notifications.close)
 	// stopDeadline is the grace period plus the handler unwind window, from the start of the grace.
 	// No step of the stop path waits past it. startGrace sets it before Run returns.
@@ -839,6 +860,12 @@ func (worker *Worker) Run(ctx context.Context) error {
 	})
 
 	startGrace()
+	if ctx.Err() != nil {
+		// The caller stopped the run. A run that a maintenance, claim, or execution error stops
+		// writes no stop record.
+		logWorkerEvent(context.WithoutCancel(ctx), worker.logger, slog.LevelInfo, workerStopRequestedEvent,
+			workerStopRequestedLogMessage, worker.activeSlotAttributes)
+	}
 	worker.draining.Store(true)
 	worker.refreshRegistration(drainContext, guarded, true)
 	stopMaintenance()
@@ -857,7 +884,16 @@ func (worker *Worker) Run(ctx context.Context) error {
 		}
 		return errors.Join(firstError, incomplete)
 	}
+	if firstError == nil {
+		logWorkerEvent(context.WithoutCancel(ctx), worker.logger, slog.LevelInfo, workerStoppedEvent,
+			workerStoppedLogMessage, worker.activeSlotAttributes)
+	}
 	return firstError
+}
+
+// activeSlotAttributes returns the life-cycle attributes of a stop record.
+func (worker *Worker) activeSlotAttributes() []any {
+	return append(worker.workerQueueAttributes(), slog.Int64(workerActiveSlotsAttribute, worker.activeSlots.Load()))
 }
 
 // drainExecutions waits for the active executions to settle. The grace period is the time a handler
@@ -1565,7 +1601,7 @@ func (worker *Worker) RunOnce(ctx context.Context) (bool, error) {
 		return false, errors.New(workerInstanceIDMessage)
 	}
 	worker.instanceID = instanceID
-	worker.registered.Store(false)
+	worker.startRegistration()
 	executor := NewPGXExecutor(worker.pool)
 	worker.refreshRegistration(ctx, executor, false)
 	defer worker.deregister(context.WithoutCancel(ctx), executor)
@@ -1605,6 +1641,7 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 	if !worker.registryEnabled {
 		return
 	}
+	activeSlots := int(worker.activeSlots.Load())
 	rows, err := executor.Query(
 		ctx,
 		internalStatementRegistry[registerWorkerStatementName],
@@ -1621,7 +1658,7 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		int(worker.maintenanceInterval/time.Millisecond),
 		int(worker.maintenanceRoutineInterval/time.Millisecond),
 		int(worker.registryInterval/time.Millisecond),
-		int(worker.activeSlots.Load()),
+		activeSlots,
 		draining,
 		ProtocolVersion,
 		sdkLanguage,
@@ -1631,16 +1668,84 @@ func (worker *Worker) refreshRegistration(ctx context.Context, executor Executor
 		err = errors.New(invalidWorkerRegistrationResultMessage)
 	}
 	if err != nil {
+		worker.logRegistrationFailure(ctx, err)
 		worker.reportRegistrationError(err)
 		return
 	}
 	paused, ok := rows[0][rowPausedField].(bool)
 	if !ok {
-		worker.reportRegistrationError(errors.New(invalidWorkerRegistrationResultMessage))
+		err = errors.New(invalidWorkerRegistrationResultMessage)
+		worker.logRegistrationFailure(ctx, err)
+		worker.reportRegistrationError(err)
 		return
 	}
-	worker.remotelyPaused.Store(paused)
+	worker.logRegistration(ctx, workerRegistrationState{activeSlots: activeSlots, draining: draining, paused: paused})
+	wasPaused := worker.remotelyPaused.Swap(paused)
 	worker.registered.Store(true)
+	if wasPaused != paused {
+		event, message := workerResumedEvent, workerResumedRemotelyLogMessage
+		if paused {
+			event, message = workerPausedEvent, workerPausedRemotelyLogMessage
+		}
+		logWorkerEvent(ctx, worker.registrationLogger(), slog.LevelInfo, event, message, worker.workerQueueAttributes)
+	}
+}
+
+// registrationLogger is the logger of the registration records. A worker that NewWorker made
+// already has a recovering logger, so this returns it unchanged. The registration path also runs
+// the reporter callback, and a logger panic there must not end the refresh.
+func (worker *Worker) registrationLogger() *slog.Logger { return newRecoveringLogger(worker.logger) }
+
+// startRegistration prepares the registration of a new run: the run is not registered yet, and
+// its first registration writes workhorse.worker.registered, as in TypeScript.
+func (worker *Worker) startRegistration() {
+	worker.registered.Store(false)
+	worker.forgetLoggedRegistration()
+}
+
+// forgetLoggedRegistration clears the state of the last workhorse.worker.registered record, so the
+// next registration writes a record.
+func (worker *Worker) forgetLoggedRegistration() {
+	worker.registrationLogMu.Lock()
+	defer worker.registrationLogMu.Unlock()
+	worker.loggedRegistration = nil
+}
+
+// workerRegistrationState is the part of a registration that workhorse.worker.registered names.
+type workerRegistrationState struct {
+	activeSlots int
+	draining    bool
+	paused      bool
+}
+
+// logRegistration writes workhorse.worker.registered after the first successful registration and
+// after a change of the active slots, the draining state, or the pause result of PostgreSQL. An
+// unchanged refresh writes no record (Worker.refreshRegistration in TypeScript).
+func (worker *Worker) logRegistration(ctx context.Context, state workerRegistrationState) {
+	worker.registrationLogMu.Lock()
+	defer worker.registrationLogMu.Unlock()
+	if worker.loggedRegistration != nil && *worker.loggedRegistration == state {
+		return
+	}
+	worker.loggedRegistration = &state
+	logWorkerEvent(ctx, worker.registrationLogger(), slog.LevelDebug, workerRegisteredEvent, workerRegisteredLogMessage,
+		func() []any {
+			return append(worker.workerQueueAttributes(),
+				slog.Int(workerConcurrencyAttribute, worker.concurrency),
+				slog.Int(workerActiveSlotsAttribute, state.activeSlots),
+				slog.Bool(workerDrainingAttribute, state.draining),
+				slog.Bool(workerPausedAttribute, state.paused),
+			)
+		})
+}
+
+// logRegistrationFailure writes workhorse.worker.registration_failed with the Go type of the error.
+// The record never holds the error message, which goes to OnRegistrationError.
+func (worker *Worker) logRegistrationFailure(ctx context.Context, err error) {
+	logWorkerEvent(ctx, worker.registrationLogger(), slog.LevelInfo, workerRegistrationFailedEvent,
+		workerRegistrationFailedLogMessage, func() []any {
+			return append(worker.workerQueueAttributes(), slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)))
+		})
 }
 
 func (worker *Worker) reportRegistrationError(err error) {
@@ -1653,6 +1758,8 @@ func (worker *Worker) reportRegistrationError(err error) {
 }
 
 func (worker *Worker) deregister(ctx context.Context, executor Executor) {
+	// The registration that follows a deregistration is a first registration again.
+	worker.forgetLoggedRegistration()
 	if !worker.registryEnabled || !worker.registered.Swap(false) {
 		return
 	}
@@ -1661,12 +1768,26 @@ func (worker *Worker) deregister(ctx context.Context, executor Executor) {
 	// call cannot delete the row of a later run.
 	deregisterContext, cancel := context.WithTimeout(ctx, deregistrationTimeout)
 	defer cancel()
-	_, _ = executor.Query(
+	rows, err := executor.Query(
 		deregisterContext,
 		internalStatementRegistry[deregisterWorkerStatementName],
 		worker.workerID,
 		worker.instanceID,
 	)
+	if err != nil || len(rows) != 1 {
+		return
+	}
+	deregistered, ok := rows[0][rowDeregisteredField].(bool)
+	if !ok {
+		return
+	}
+	logWorkerEvent(ctx, worker.logger, slog.LevelDebug, workerDeregisteredEvent, workerDeregisteredLogMessage,
+		func() []any {
+			return []any{
+				slog.String(workerIDAttribute, worker.workerID),
+				slog.Bool(workerDeregisteredAttribute, deregistered),
+			}
+		})
 }
 
 func (worker *Worker) acquireRun(ctx context.Context) (func(), error) {
@@ -1751,6 +1872,7 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 		if !phaseOK || !skippedOK {
 			return errors.New(invalidMaintenanceResultMessage)
 		}
+		worker.logMaintenancePhase(ctx, maintenanceTickOperation, phase, skipped, row)
 		if skipped {
 			continue
 		}
@@ -1789,14 +1911,35 @@ func (worker *Worker) runMaintenance(ctx context.Context) error {
 		return err
 	}
 	for _, row := range maintenance {
-		if _, ok := row[rowPhaseField].(string); !ok {
+		phase, ok := row[rowPhaseField].(string)
+		if !ok {
 			return errors.New(invalidMaintenanceResultMessage)
 		}
-		if _, ok := row[rowSkippedLockField].(bool); !ok {
+		skipped, ok := row[rowSkippedLockField].(bool)
+		if !ok {
 			return errors.New(invalidMaintenanceResultMessage)
 		}
+		worker.logMaintenancePhase(ctx, maintenanceRoutinesOperation, phase, skipped, row)
 	}
 	return nil
+}
+
+// logMaintenancePhase writes workhorse.maintenance.completed for a phase that changed rows or
+// returned an error. A successful no-op and a skipped advisory lock write no record.
+func (worker *Worker) logMaintenancePhase(ctx context.Context, operation, phase string, skipped bool, row Row) {
+	rowsAffected, _ := integer(row[rowRowsAffectedField])
+	if rowsAffected == 0 && row[rowErrorField] == nil {
+		return
+	}
+	logWorkerEvent(ctx, worker.logger, slog.LevelInfo, maintenanceCompletedEvent, maintenanceCompletedLogMessage,
+		func() []any {
+			return []any{
+				slog.String(maintenanceOperationAttribute, operation),
+				slog.String(maintenancePhaseAttribute, phase),
+				slog.Int(maintenanceRowsAttribute, rowsAffected),
+				slog.Bool(maintenanceSkippedLockAttr, skipped),
+			}
+		})
 }
 
 // dueForMaintenanceRoutines reports whether this pass offers the slow routines, and claims the
@@ -1858,7 +2001,7 @@ func (worker *Worker) recordRecovery(ctx context.Context, row Row) {
 // A nil evaluation instant asks the database for its own clock, so schedules, budgets, and rate
 // limits all advance on one clock rather than on this process's.
 func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor) error {
-	_, err := executor.Query(
+	rows, err := executor.Query(
 		ctx,
 		internalStatementRegistry[fireDueSchedulesStatementName],
 		worker.scheduleNamespaces,
@@ -1866,7 +2009,34 @@ func (worker *Worker) fireDueSchedules(ctx context.Context, executor Executor) e
 		worker.scheduleCatchupLimit,
 		worker.maintenanceInterval.Milliseconds(),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	// Each row is one occurrence. A task ID is a new task, and no task ID is an occurrence that an
+	// earlier evaluation already fired.
+	for _, row := range rows {
+		namespace, _ := row[rowNamespaceField].(string)
+		name, _ := row[rowScheduleNameField].(string)
+		if taskID, ok := uuidString(row[rowTaskIDField]); ok {
+			logWorkerEvent(ctx, worker.logger, slog.LevelInfo, scheduleFiredEvent, scheduleFiredLogMessage,
+				func() []any {
+					return []any{
+						slog.String(scheduleNamespaceAttribute, namespace),
+						slog.String(scheduleNameAttribute, name),
+						slog.String(taskIDAttribute, taskID),
+					}
+				})
+			continue
+		}
+		logWorkerEvent(ctx, worker.logger, slog.LevelDebug, scheduleFireReplayedEvent, scheduleFireReplayedLogMessage,
+			func() []any {
+				return []any{
+					slog.String(scheduleNamespaceAttribute, namespace),
+					slog.String(scheduleNameAttribute, name),
+				}
+			})
+	}
+	return nil
 }
 
 func (worker *Worker) runOnce(ctx context.Context, executor Executor) (bool, error) {
@@ -2490,14 +2660,7 @@ func (worker *Worker) execute(
 	ctx = handlerParent
 	outcome := handlerOutcomeUnknown
 	startedAt := time.Now()
-	logWorkerEvent(
-		handlerParent,
-		worker.logger,
-		slog.LevelDebug,
-		handlerStartedEvent,
-		handlerStartedLogMessage,
-		func() []any { return taskLogAttributes(task, worker.workerID) },
-	)
+	worker.logHandlerStarted(handlerParent, task)
 	settledAfterShutdown := false
 	defer func() {
 		// The stop still ends execute with its error, but a settled task is not a failed span.
@@ -2506,29 +2669,9 @@ func (worker *Worker) execute(
 			spanError = nil
 		}
 		finishHandlerSpan(span, outcome, spanError)
-		worker.metrics.recordHandler(handlerParent, task, outcome, time.Since(startedAt))
-		attributes := func() []any {
-			return append(
-				taskLogAttributes(task, worker.workerID),
-				slog.String(handlerOutcomeAttribute, string(outcome)),
-			)
-		}
-		logWorkerEvent(
-			handlerParent,
-			worker.logger,
-			slog.LevelInfo,
-			executionFinishedEvent,
-			executionFinishedLogMessage,
-			attributes,
-		)
-		logWorkerEvent(
-			handlerParent,
-			worker.logger,
-			slog.LevelDebug,
-			handlerFinishedEvent,
-			handlerFinishedLogMessage,
-			attributes,
-		)
+		duration := time.Since(startedAt)
+		worker.metrics.recordHandler(handlerParent, task, outcome, duration)
+		worker.logHandlerFinished(handlerParent, task, outcome, spanError == nil, duration)
 	}()
 	// A lost lease ends this attempt only. Lease recovery already owns the task, so the worker
 	// records lease_lost and keeps claiming instead of stopping Run.
@@ -2562,6 +2705,7 @@ func (worker *Worker) execute(
 	durability := &HandlerContext{
 		Task: task, context: handlerContext, cancel: cancelHandler, executor: executor,
 		contracts: &worker.contracts, compatibility: worker.compatibility, workerID: worker.workerID,
+		logger: worker.logger,
 	}
 	if task.payloadError != nil {
 		handler = func(context.Context, any, *HandlerContext) (any, error) {
@@ -2926,7 +3070,6 @@ func (worker *Worker) superviseOwnership(
 							return append(
 								taskLogAttributes(task, worker.workerID),
 								slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, answer.err)),
-								errorLogField, answer.err,
 							)
 						},
 					)
@@ -3289,7 +3432,8 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 	if err != nil {
 		// The deadline check comes before the log record, so a slow logger cannot change the reason.
 		deadlineReached := !time.Now().Before(deadline)
-		worker.logger.Warn(heartbeatRoundFailedLogMessage, errorLogField, err)
+		// The record holds the error type, never the error text.
+		worker.logger.Warn(heartbeatRoundFailedLogMessage, slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)))
 		worker.recordHeartbeatRoundFailure(context.Background(), err, deadlineReached)
 		return nil
 	}
@@ -3307,6 +3451,8 @@ func (worker *Worker) refreshOwnershipMany(members []*heartbeatMember, deadline 
 		switch status {
 		case workerOwnershipAccepted:
 			member.renew(sentAt)
+			logWorkerEvent(member.ctx, worker.logger, slog.LevelDebug, heartbeatAcceptedEvent,
+				heartbeatAcceptedLogMessage, func() []any { return taskLogAttributes(member.task, worker.workerID) })
 		case workerOwnershipBusy:
 			// Another transaction holds the row. The lease got no renewal and no ownership
 			// verdict, so the watchdog keeps its window and the attempt keeps running.
@@ -3507,6 +3653,10 @@ func (worker *Worker) expireOwnedOnce(ctx context.Context, task ClaimedTask) (ow
 		}
 		span.End()
 	}
+	logWorkerEvent(ctx, worker.logger, slog.LevelInfo, ownershipExpiredEvent, ownershipExpiredLogMessage,
+		func() []any {
+			return append(taskLogAttributes(task, worker.workerID), slog.String(expirationStatusAttribute, string(status)))
+		})
 	return status, nil
 }
 
@@ -3637,6 +3787,10 @@ func (worker *Worker) cancellationAccepted(
 	if !ok {
 		return false, errors.New(invalidCancelAcknowledgeMessage)
 	}
+	logWorkerEvent(ctx, worker.logger, slog.LevelInfo, cancellationAcknowledgedEvent,
+		cancellationAcknowledgedLogMessage, func() []any {
+			return append(taskLogAttributes(task, worker.workerID), slog.Bool(cancelAcceptedAttribute, accepted))
+		})
 	return accepted, nil
 }
 
@@ -3681,20 +3835,19 @@ func (worker *Worker) complete(ctx context.Context, executor Executor, task Clai
 	if err != nil {
 		return err
 	}
+	event, message := completionRejectedEvent, completionRejectedLogMessage
+	if accepted {
+		event, message = taskCompletedEvent, taskCompletedLogMessage
+		if worker.metrics.enabled {
+			worker.metrics.completed.Add(ctx, 1, taskMetricOptions(task))
+		}
+	}
+	logWorkerEvent(ctx, worker.logger, slog.LevelInfo, event, message, func() []any {
+		return append(taskLogAttributes(task, worker.workerID), slog.Bool(completeAcceptedAttribute, accepted))
+	})
 	if !accepted {
 		return &StaleLeaseError{TaskID: task.ID}
 	}
-	if worker.metrics.enabled {
-		worker.metrics.completed.Add(ctx, 1, taskMetricOptions(task))
-	}
-	logWorkerEvent(
-		ctx,
-		worker.logger,
-		slog.LevelInfo,
-		taskCompletedEvent,
-		taskCompletedLogMessage,
-		func() []any { return taskLogAttributes(task, worker.workerID) },
-	)
 	return nil
 }
 
@@ -3746,8 +3899,21 @@ func (worker *Worker) validateResultContract(
 // belongs to whichever worker reaches the handler, so PostgreSQL returns the task to its queue with
 // current_attempt untouched instead of charging this worker's refusal to it. During a rolling
 // deployment that is what keeps the old release from retrying away the new release's task types.
-func (worker *Worker) release(ctx context.Context, executor Executor, task ClaimedTask) error {
+//
+// The release runs under a handler span and writes the records of an execution around it, as the
+// TypeScript worker does: workhorse.handler.started, workhorse.handler.missing, the execution record
+// of the release outcome, and workhorse.handler.finished.
+func (worker *Worker) release(ctx context.Context, executor Executor, task ClaimedTask) (resultError error) {
 	startedAt := time.Now()
+	ctx, span := startHandlerSpan(ctx, task)
+	worker.logHandlerStarted(ctx, task)
+	outcome := handlerOutcomeUnknown
+	defer func() {
+		finishHandlerSpan(span, outcome, resultError)
+		// A lost lease is a known outcome, as on the execution path.
+		settled := resultError == nil || errors.Is(resultError, ErrStaleLease)
+		worker.logHandlerFinished(ctx, task, outcome, settled, time.Since(startedAt))
+	}()
 	logWorkerEvent(
 		ctx,
 		worker.logger,
@@ -3756,9 +3922,63 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 		handlerMissingLogMessage,
 		func() []any { return taskLogAttributes(task, worker.workerID) },
 	)
-	return worker.releaseOwned(ctx, executor, task, func(outcome handlerOutcome) {
-		worker.metrics.recordHandler(ctx, task, outcome, time.Since(startedAt))
+	return worker.releaseOwned(ctx, executor, task, func(released handlerOutcome) {
+		outcome = released
+		worker.metrics.recordHandler(ctx, task, released, time.Since(startedAt))
 	})
+}
+
+// logHandlerStarted writes workhorse.handler.started for one claimed task.
+func (worker *Worker) logHandlerStarted(ctx context.Context, task ClaimedTask) {
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelDebug,
+		handlerStartedEvent,
+		handlerStartedLogMessage,
+		func() []any { return taskLogAttributes(task, worker.workerID) },
+	)
+}
+
+// logHandlerFinished writes workhorse.task.execution_finished and then workhorse.handler.finished.
+// As in TypeScript, the outcome is on the execution record, and the duration is on the handler
+// record. An attempt whose settlement failed has no outcome, so the worker writes no execution
+// record for it, as the TypeScript worker does.
+func (worker *Worker) logHandlerFinished(
+	ctx context.Context,
+	task ClaimedTask,
+	outcome handlerOutcome,
+	settled bool,
+	duration time.Duration,
+) {
+	if settled && outcome != handlerOutcomeUnknown {
+		logWorkerEvent(
+			ctx,
+			worker.logger,
+			slog.LevelInfo,
+			executionFinishedEvent,
+			executionFinishedLogMessage,
+			func() []any {
+				return append(
+					taskLogAttributes(task, worker.workerID),
+					slog.String(handlerOutcomeAttribute, string(outcome)),
+				)
+			},
+		)
+	}
+	logWorkerEvent(
+		ctx,
+		worker.logger,
+		slog.LevelDebug,
+		handlerFinishedEvent,
+		handlerFinishedLogMessage,
+		func() []any {
+			return append(
+				taskLogAttributes(task, worker.workerID),
+				slog.Float64(handlerDurationAttribute, float64(duration)/float64(time.Millisecond)),
+			)
+		},
+	)
 }
 
 // settleAfterShutdown settles the task of a handler that returned once the stop had come, so the
@@ -3825,7 +4045,6 @@ func (worker *Worker) logShutdownSettlementFailure(ctx context.Context, task Cla
 			return append(
 				taskLogAttributes(task, worker.workerID),
 				slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)),
-				slog.String(errorLogField, err.Error()),
 			)
 		},
 	)

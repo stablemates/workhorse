@@ -9,6 +9,86 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A logger failure no longer changes an operation result
+
+A log record observes an operation, so it must not change the operation. Before this change, an
+OpenTelemetry log processor or a `System.Logger` that threw replaced the result of the operation
+with that error. For example, `Queue.cancel` committed the cancel and then threw. The OpenTelemetry
+path and the `System.Logger` path of the worker now stop the error, and the record is lost.
+
+- The queue now checks `Logger.isEnabled` before it builds the attributes of a record. Without
+  OpenTelemetry, or with a disabled logger, a record costs no work.
+- `workhorse.worker.run_failed` no longer gives the error to `System.Logger`. It writes `error.type`
+  only, because the error text and the stack trace can hold application data. The
+  `workhorse.connection.release_failed` warning of the queue and `Admin`, and the warning for a
+  failed cancellation callback, also write the error type only.
+- A worker built with `pollingOnly(true)` now writes `workhorse.worker.polling_only` when `start()`
+  or `run()` begins, as the TypeScript worker does for a run without a subscription. The worker now
+  writes the warning after `workhorse.worker.started`.
+- `Worker.runOnce()` no longer writes `workhorse.worker.started` and `workhorse.worker.stopped`. A
+  one-pass call is not a run, and the TypeScript `runOnce()` writes neither record.
+- A run that ends with an error, such as an incomplete stop, no longer writes
+  `workhorse.worker.stopped`, as in TypeScript.
+- If the settlement of an attempt fails, the worker no longer writes
+  `workhorse.task.execution_finished` with the outcome `unknown`. The TypeScript worker writes no
+  execution record for that attempt. The worker still writes `workhorse.handler.finished`.
+- If a heartbeat delivers a cancellation and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
+  it, the worker no longer writes `workhorse.task.execution_finished` with the outcome `canceled`.
+  The attempt settled nothing, so the handler metrics record the outcome `unknown`. The TypeScript
+  worker writes the `canceled` record only after PostgreSQL accepts the acknowledgement.
+- `Worker.run()` now writes `workhorse.worker.started` first, before the readiness check and before the first
+  `workhorse.worker.registered`, as in TypeScript. A run that fails its readiness check thus has a
+  start record. A run that a stop ends before the readiness check ends writes
+  `workhorse.worker.stopped`.
+- The worker writes `workhorse.worker.polling_only` only for a run without a notification
+  subscription, as in TypeScript. A subscription whose `LISTEN` stalls no longer gives the warning.
+- The dashboard no longer lets a `System.Logger` that throws change a reply. A failed
+  compatibility query still answers 503, and a failed procedure still answers 500.
+
+### The worker log records match the TypeScript records
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. An audit compared each Java record with the TypeScript record.
+
+- Each run writes its first `workhorse.worker.registered`, also after a deregistration that did not
+  end before the stop deadline.
+- `Admin.setWorkerPaused` now writes `workhorse.worker.paused` or `workhorse.worker.resumed` when it
+  finds the worker.
+- The worker now writes `workhorse.maintenance.completed` for each phase of the background
+  routines that changes rows or returns an error, with the operation `background_routines`. The
+  record no longer carries `error.type` `PostgreSQLError`.
+- The dashboard now writes `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, and `workhorse.task.human_wait_processed` for its actions, as
+  the queue does.
+
+### The Java SDK writes more worker log events
+
+An alert or a dashboard that reads a worker log event must find the same record from each SDK.
+The Java SDK did not write 16 events of the TypeScript `WorkhorseLogEvent` union. It now writes
+them with the TypeScript name, severity, body, attributes, and condition:
+
+- `Queue` writes `workhorse.task.enqueued`, `workhorse.task.enqueue_replayed`,
+  `workhorse.task.debounced`, `workhorse.task.debounce_rejected`, and `workhorse.task.throttled`
+  for each enqueue and each task group member. It also writes
+  `workhorse.task.cancellation_processed` and `workhorse.schedules.synchronized`.
+- `Admin` writes `workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.purged`,
+  `workhorse.queue.tier_set`, `workhorse.task.redrive_processed`, and
+  `workhorse.tasks.redrive_processed`.
+- The worker writes `workhorse.task.heartbeat_accepted` for each accepted lease renewal, and
+  `workhorse.leases.recovered` when the recovery phase of maintenance changes rows. If the
+  completion or the release after the shutdown cancellation fails, the worker writes
+  `workhorse.worker.shutdown_settlement_failed` before the run ends with the error.
+
+The queue and the admin write their records only to OpenTelemetry. The new constructor
+`Admin(ConnectionSource, WorkhorseTelemetry)` selects the OpenTelemetry instance. Without it,
+`Admin` uses `GlobalOpenTelemetry`, as a `Queue` with the default options does. No record holds a
+payload, a result, an error message, a cancellation reason, an idempotency key, or an audit field.
+
+The Java SDK has no promote operation and no worker registry prune operation. Thus it writes no
+`workhorse.tasks.promoted` and no `workhorse.worker_registry.pruned`.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

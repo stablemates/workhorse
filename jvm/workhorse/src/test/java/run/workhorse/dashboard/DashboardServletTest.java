@@ -328,6 +328,88 @@ class DashboardServletTest {
         "the driver error reaches the log");
   }
 
+  // As in TypeScript, a logger that throws must not change a reply. Each log of the host writes
+  // through a handler that throws, and each reply stays the reply of a working logger.
+  @Test
+  void aThrowingLoggerChangesNoReply() throws Exception {
+    ConnectionSource unreachable =
+        new ConnectionSource() {
+          @Override
+          public Connection acquire() throws SQLException {
+            throw new PSQLException(
+                "Connection to db.example.invalid:5432 refused.",
+                PSQLState.CONNECTION_UNABLE_TO_CONNECT);
+          }
+
+          @Override
+          public void release(Connection connection, boolean transactional) {}
+        };
+    AtomicInteger calls = new AtomicInteger();
+    Handler throwing =
+        new Handler() {
+          @Override
+          public void publish(LogRecord logRecord) {
+            calls.incrementAndGet();
+            throw new IllegalStateException("the logger failed");
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    Logger logger = Logger.getLogger(Dashboard.class.getName());
+    boolean parentHandlers = logger.getUseParentHandlers();
+    logger.setUseParentHandlers(false);
+    logger.addHandler(throwing);
+    try {
+      try (TestServer server =
+          new TestServer(
+              "",
+              Dashboard.builder(
+                      unreachable, request -> DashboardAuthorization.principal("operator"))
+                  .build())) {
+        TestServer.Response response = server.get("/workhorse/tasks");
+        assertEquals(503, response.status());
+        assertEquals(
+            "{\"error\":\"Unable to verify Workhorse schema compatibility because the database"
+                + " query failed.\"}",
+            response.text());
+      }
+      Dashboard dashboard =
+          builder()
+              .procedures(
+                  Map.of(
+                      "taskCounts",
+                      (input, actor) -> {
+                        throw new IllegalStateException("secret detail");
+                      },
+                      "queues",
+                      (input, actor) -> {
+                        throw new IllegalArgumentException("application detail");
+                      },
+                      "humanWaits",
+                      (input, actor) -> new Object()))
+              .build();
+      String internal =
+          "{\"json\":{\"defined\":false,\"code\":\"INTERNAL_SERVER_ERROR\",\"status\":500,"
+              + "\"message\":\"Internal server error\"}}";
+      try (TestServer server = new TestServer("", dashboard)) {
+        String rpc = "/workhorse/rpc/dashboard/";
+        for (String procedure : List.of("taskCounts", "queues", "humanWaits")) {
+          TestServer.Response response = server.post(rpc + procedure, "{}");
+          assertEquals(500, response.status(), procedure);
+          assertEquals(internal, response.text(), procedure);
+        }
+      }
+    } finally {
+      logger.removeHandler(throwing);
+      logger.setUseParentHandlers(parentHandlers);
+    }
+    assertEquals(4, calls.get(), "each failure reached the logger");
+  }
+
   @Test
   void keepsTheContentLengthOfTheAuthorizersResponse() throws Exception {
     Dashboard dashboard =

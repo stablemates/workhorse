@@ -1181,7 +1181,7 @@ also a later run of the same worker, so it proves the headroom of the pool at th
 listener subscribes only after both steps, and it stays best effort. Its failures go to
 `on_notification_error`, and the worker polls while the listener reconnects. The worker checks no
 pool size before the listener subscribes, because construction already refused a pool below 3 or of
-unknown size. The worker logs no polling warning.
+unknown size. A continuous run without a subscription logs `workhorse.worker.polling_only` once.
 
 **Claim gate.** The reservation is ready while it holds its connection or lends it to a round
 within that round's time. While it is not ready, the worker starts no claim. Each run has a
@@ -2470,7 +2470,9 @@ opt-out, and the error text names the removal. Every worker built on one pool sh
 `Worker::Heartbeat`. That heartbeat holds one pool connection while a worker on the pool runs or a
 member remains. Each run reserves it before the worker registers, as
 [Heartbeat connection](lifecycle.md#heartbeat-connection) describes. A run subscribes to
-`Worker::Listener.shared(pool)` unless `polling_only` is set. The worker logs no polling warning.
+`Worker::Listener.shared(pool)` unless `polling_only` is set. A continuous run without a
+subscription logs `workhorse.worker.polling_only` once, as
+[Structured logs](telemetry.md#structured-logs) states.
 
 | Option                         | Default                                                                                    | Accepts                                                          |
 | ------------------------------ | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
@@ -3474,8 +3476,8 @@ default.
   names the `DataSource`, the budget, the size rule, and the declared `poolMaxSize` or that none is
   declared. The budget is at least 3 connections: the listener, the heartbeat, and one statement. A
   worker that does not listen needs at least 2. The listener is best effort. If it does not listen
-  when its wait ends, the worker logs `workhorse.worker.polling_only` once and polls, and the
-  listener keeps trying. The readiness check proves only the headroom at that moment. It does not
+  when its wait ends, the worker polls, and the listener keeps trying. A run with a subscription
+  logs no `workhorse.worker.polling_only`; only a run without one logs it. The readiness check proves only the headroom at that moment. It does not
   prove later availability, or the total budget of one physical pool across wrappers. As for the
   other steps before the claims, a stop ends each wait when the stop deadline passes, and a stopping
   worker ends its run without the error.
@@ -3531,8 +3533,8 @@ run continues.
 - `start()` runs the loop on its own thread and returns at once. `close()` calls `stop()`, waits for
   the drain, and throws a failure of the `start` loop. If that loop ends with an error and no
   `stop()` came first, the worker logs the error at once at `ERROR`, as
-  `workhorse.worker.run_failed` with its `error.type` and stack trace. `close()` does not log it
-  again.
+  `workhorse.worker.run_failed` with its `error.type` only. The record has no error text and no
+  stack trace, because they can hold application data. `close()` does not log it again.
 - `isRunning()` returns `true` from `start` until its thread ends, and while `run` or `runOnce`
   runs, including the drain.
 - `pause()` and `resume()` change a local pause. `isPaused()` is also true while an operator pause

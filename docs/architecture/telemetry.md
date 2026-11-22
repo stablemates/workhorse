@@ -423,8 +423,10 @@ files. Its SDK metric and trace packages are test dependencies.
 The application installs global providers and a W3C `propagation.TraceContext`. If they are absent,
 the API instruments are no-ops.
 
-The Go worker accepts an optional `*slog.Logger` as `WorkerOptions.Logger`. A nil logger uses a
-disabled handler. Thus routine lifecycle records do not write to the process default logger.
+The Go worker accepts an optional `*slog.Logger` as `WorkerOptions.Logger`. A nil logger selects
+`slog.Default()`. `Queue.WithLogger` and `Admin.WithLogger` give the queue and the operator client a
+`*slog.Logger`. Without one, the queue and the operator client write no record, as in the other
+SDKs. If the handler of a logger panics, the SDK drops that record, and the operation continues.
 
 ### Trace context propagation
 
@@ -610,8 +612,49 @@ internal constants. The .NET SDK does not emit `workhorse.heartbeat` or
 ### Structured logs
 
 The TypeScript runtime submits vendor-neutral structured records to `WorkhorseTelemetryProvider`.
-The OpenTelemetry adapter emits them through `@opentelemetry/api-logs`. The Python worker uses
-`opentelemetry._logs` for the matching worker event names.
+The OpenTelemetry adapter emits them through `@opentelemetry/api-logs`. Each other SDK writes the
+same event names through the log channel of its language:
+
+| SDK    | Channel                                  | Queue and `Admin` records                                                              |
+| ------ | ---------------------------------------- | -------------------------------------------------------------------------------------- |
+| Python | `opentelemetry._logs`                    | The same channel.                                                                      |
+| Go     | `log/slog`, `WorkerOptions.Logger`       | `Queue.WithLogger` and `Admin.WithLogger`. Without one, they write no record.          |
+| Rust   | `tracing`                                | The same channel.                                                                      |
+| Ruby   | The `logger:` of `Worker.new`            | The `logger:` of `Queue.new` and `Admin.new`. Without one, they write no record.       |
+| JVM    | OpenTelemetry and `System.Logger`        | OpenTelemetry only, as [JVM logs](#jvm-logs) states.                                   |
+| .NET   | `ILogger`, `WorkerOptions.LoggerFactory` | `QueueOptions.LoggerFactory` and `AdminOptions.LoggerFactory`. Without one, no record. |
+
+[Worker log differences](../parity.md#worker-log-differences) lists the events that only the
+TypeScript SDK writes, and the details of the records that differ.
+
+A log record observes an operation, so a logger failure must not change the operation. If the
+logger throws or raises, the TypeScript `emitLog`, the Python `emit_log`, the Ruby `Telemetry.log`,
+and the JVM `Telemetry.log` and `Worker.log` stop the failure, and the record is lost. The queue,
+`Admin`, dashboard, or worker operation then returns its usual result, and the handler runs.
+
+The Python, Ruby, and JVM queues check that the logger is enabled before they build the attributes
+of a record. The Python queue uses `Logger.enabled` of the OpenTelemetry API. The Ruby queue
+compares the event severity with the `level` of its logger. The JVM queue uses `Logger.isEnabled`.
+
+A one-pass call, such as `runOnce()` or `run_once`, is not a run. Each of the seven workers writes
+`workhorse.worker.started` and `workhorse.worker.stopped` only for a run. A run writes
+`workhorse.worker.started` first, before its readiness check and its first registration. It writes
+`workhorse.worker.stopped` only when it ends without an error.
+`workhorse.task.execution_finished` states a known outcome. If the settlement of an attempt fails,
+also the acknowledgement of a cancellation, the attempt has no outcome, and the worker writes no
+execution record for it. It still writes `workhorse.handler.finished`.
+
+The TypeScript dashboard calls the queue for a cancel, a signal, or a human decision, so the queue
+writes `workhorse.task.cancellation_processed`, `workhorse.task.signal_processed`, or
+`workhorse.task.human_wait_processed`. The .NET dashboard also calls its queue. The Python, Go,
+Rust, Ruby, and Java dashboards run the statement themselves, and they write the same record. The
+Go dashboard writes it to `slog.Default()`, as its host error records. The Ruby dashboard writes it to the `logger:` of
+`Dashboard.new`, which it also gives to its `Admin`. Without a logger, the Ruby dashboard writes no
+record.
+
+A failing logger never changes the result of an operation. The Go SDK drops a record whose
+`slog.Handler` panics. The Rust SDK writes each record through one internal macro that stops a
+panic of the `tracing` subscriber.
 
 #### JVM logs
 
@@ -628,13 +671,17 @@ worker maps the `System.Logger` levels to severities in this way:
 
 `Telemetry.log` emits a record only for an event name in `Names.LOG_EVENTS`, which holds the
 `WorkhorseLogEvent` union. An event that only the Java SDK has, such as
-`workhorse.worker.claims_abandoned`, goes only to `System.Logger`. The queue emits
-`workhorse.task.signal_processed` and `workhorse.task.human_wait_processed` only to OpenTelemetry.
+`workhorse.worker.claims_abandoned`, goes only to `System.Logger`. No JVM worker, queue, or `Admin`
+record gives a throwable to `System.Logger`. A diagnostic record, such as
+`workhorse.worker.run_failed` or `workhorse.connection.release_failed`, writes `error.type` only,
+because the error text and the stack trace can hold application data.
 
-The Java SDK does not emit these TypeScript events: the enqueue, debounce, and throttle events, the
-cancellation, run-now, redrive, promotion, recovery, and policy events, the queue administration
-events, `workhorse.schedules.synchronized`, `workhorse.task.heartbeat_accepted`,
-`workhorse.worker.shutdown_settlement_failed`, and `workhorse.worker_registry.pruned`.
+The queue and `Admin` emit their events only to OpenTelemetry. The queue emits the enqueue,
+debounce, and throttle events, `workhorse.task.cancellation_processed`,
+`workhorse.task.signal_processed`, `workhorse.task.human_wait_processed`, and
+`workhorse.schedules.synchronized`. `Admin` emits the queue administration and redrive events.
+`Admin(ConnectionSource, WorkhorseTelemetry)` selects the telemetry instance, and
+`Admin(ConnectionSource)` uses `WorkhorseTelemetry.global()`, as `QueueOptions` does.
 
 #### .NET logs
 
@@ -644,8 +691,29 @@ logger from `WorkerOptions.LoggerFactory`. Without a factory, it logs nothing. T
 record is its Workhorse event name, such as `workhorse.task.heartbeat_rejected`. The
 `Workhorse.Hosting` package logs its own `workhorse.hosting.*` events in the same way.
 
-The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log record itself. The
-.NET `Queue` writes no log record.
+The .NET `Queue` and `Admin` log in the same way through `QueueOptions.LoggerFactory` and
+`AdminOptions.LoggerFactory`. Without a factory, they log nothing. `Workhorse.Hosting` gives the
+worker, the queue, and `Admin` the logger factory of the container. A queue options object that
+names a factory keeps it. The worker writes `workhorse.leases.recovered` from the `recover` phase
+of its maintenance tick, as the workers of the other six SDKs do.
+
+Each .NET template carries the values of the TypeScript record. A task record carries `TaskId`,
+`TaskType`, `Attempt`, `Queue`, and `WorkerId`. `Queues` is a list value. A record of the
+`Workhorse` package never carries an exception, because the exception holds the error message. A
+diagnostic record carries `ErrorType`, the full name of the exception type. Two packages give the
+exception to `ILogger` by design. `Workhorse.Hosting` gives it in `workhorse.hosting.worker_failed`,
+because that record is the only place where an operator sees why the host stopped. The
+`Workhorse.AspNetCore` dashboard host gives it for a failed authorizer, compatibility check, or
+procedure, because the answer of the dashboard hides a driver error and the log must keep it
+(SM-1473). The Rust and JVM dashboards keep the error text in their logs for the same reason. If the logger
+of the dashboard host throws, the dashboard drops that record and answers as before.
+
+If the `ILogger` of the application throws, the .NET worker, queue, `Admin`, `Workhorse.Hosting`,
+and the dashboard host drop that record. A logger factory that throws gives a logger that writes
+nothing.
+The result of the operation does not change, and a handler still runs.
+
+The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log record itself.
 
 #### Severity coverage
 
@@ -659,6 +727,9 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 
 - `workhorse.task.enqueued`
 - `workhorse.task.enqueue_replayed`
+- `workhorse.task.debounced`
+- `workhorse.task.debounce_rejected`
+- `workhorse.task.throttled`
 - `workhorse.task.claimed`
 - `workhorse.task.heartbeat_accepted`
 - `workhorse.task.checkpoint_saved`
@@ -686,7 +757,11 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 - `workhorse.task.cancellation_acknowledged`
 - `workhorse.task.redrive_processed`
 - `workhorse.task.wait_processed`
+- `workhorse.task.signal_processed`
+- `workhorse.task.human_wait_processed`
 - `workhorse.task.child_processed`
+- `workhorse.task.release_processed`
+- `workhorse.handler.batch_dispatched`
 - `workhorse.task.completed`
 - `workhorse.task.completion_rejected`
 - `workhorse.task.failure_processed`
@@ -700,15 +775,16 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 - `workhorse.worker.stop_requested`
 - `workhorse.worker.stopped`
 
-`workhorse.retention_policy.synchronized` and `workhorse.maintenance_policy.synchronized` record
-successful configuration changes at info.
+`workhorse.retention_policy.synchronized`, `workhorse.maintenance_policy.synchronized`, and
+`workhorse.cold_export_policy.synchronized` record successful configuration changes at info.
 
 #### Conditional events
 
-| Event                              | Severity and condition                                                                                                                                                                                   |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workhorse.maintenance.completed`  | Info. Workhorse emits it only when the phase changes rows or returns an error. Successful no-ops and skipped advisory locks emit no log. Maintenance counters and duration histograms still record them. |
-| `workhorse.worker_registry.pruned` | Debug when no stale registrations exist. Info when PostgreSQL removes registrations.                                                                                                                     |
+| Event                              | Severity and condition                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workhorse.maintenance.completed`  | Info. Workhorse emits it only when the phase changes rows or returns an error. Successful no-ops and skipped advisory locks emit no log. Maintenance counters and duration histograms still record them. Each worker emits it for the phases of `tick_v1`, with the operation `tick`, and for the phases of `run_maintenance_v1`, with the operation `background_routines`. |
+| `workhorse.leases.recovered`       | Info. Each worker emits it when the `recover` phase of `tick_v1` changes rows. `Queue.recoverExpired` in TypeScript also emits it.                                                                                                                                                                                                                                          |
+| `workhorse.worker_registry.pruned` | Debug when no stale registrations exist. Info when PostgreSQL removes registrations.                                                                                                                                                                                                                                                                                        |
 
 #### Warning event names
 
@@ -716,7 +792,7 @@ successful configuration changes at info.
   `workhorse.handler.outcome`, which is `suspended`. It never carries the swallowed value or error.
   Each of the seven workers emits it when a handler returns a value after a durable call suspended
   it ([Worker suspension](lifecycle.md#worker-suspension)). The .NET record names the values
-  `TaskId`, `WorkerId`, and `HandlerOutcome` by its log template.
+  `TaskId`, `TaskType`, `Attempt`, `Queue`, `WorkerId`, and `HandlerOutcome` by its log template.
 - `workhorse.handler.missing` carries `workhorse.task.id`, `workhorse.task.type`,
   `workhorse.task.attempt`, `workhorse.queue.name`, and `workhorse.worker.id`. The worker emits it
   when it claims a task of a type that it has no handler for. The worker then returns the task to
@@ -730,7 +806,9 @@ successful configuration changes at info.
   implementation has no batch evidence operation.
 - `workhorse.worker.polling_only` carries `workhorse.worker.id`, `workhorse.worker.queues`, and
   `workhorse.worker.pool_max_size`, the pool maximum size that the worker found or `unknown`. A
-  `Worker.run()` that starts without a notification subscription emits it once.
+  `Worker.run()` that starts without a notification subscription emits it once. The Ruby and JVM
+  workers also emit it when the application configures them to poll only. The JVM worker emits it
+  after `workhorse.worker.started`, as the TypeScript worker does.
 - `workhorse.worker.statement_slow` carries `workhorse.worker.id`, `workhorse.worker.statement`
   (`maintenance` or `claim`), and `workhorse.worker.elapsed_ms`, the milliseconds that the statement
   waited at the moment of the warning. A maintenance pass or a claim that waits longer than the stop
@@ -740,7 +818,7 @@ successful configuration changes at info.
   ([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry)).
 
 - `workhorse.worker.shutdown_settlement_failed` carries bounded task and worker identity and
-  `error.type`. The TypeScript, Python, and Go workers emit it when the completion or the release
+  `error.type`. Each of the seven workers emits it when the completion or the release
   after the shutdown abort fails. The run then ends with that error, and lease recovery settles the
   task ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
 
@@ -750,9 +828,9 @@ successful configuration changes at info.
   timers](lifecycle.md#local-timers)). `error.type` is the type of the error. It is the error name
   in TypeScript and the type name in Python. It is the full type name in Ruby and Java, and the `%T`
   type in Go. In Rust, it is the variant of `workhorse::Error`, such as `Postgres`. The .NET worker
-  logs the event name through `ILogger` with the exception, and its template names the values
-  `TaskId`, `WorkerId`, and `ErrorType`. The Go and Rust records also carry the error text in
-  `error`. A heartbeat answer can report the expiry while no request of the local timer is in
+  logs the event name through `ILogger` without the exception, and its template names the values
+  `TaskId`, `TaskType`, `Attempt`, `Queue`, `WorkerId`, and `ErrorType`. No record carries the
+  error text. A heartbeat answer can report the expiry while no request of the local timer is in
   flight. Then the TypeScript worker sends its own request. It does not ask again after a failed
   request, and the record comes at settlement. A handler can end while a request of the local timer
   is in flight. Each worker then waits for its answer. If that request fails, the TypeScript,
@@ -805,6 +883,11 @@ union. They set `eventName`, `severityNumber`, `severityText`, and a stable text
 
 The durable heartbeat still runs at `registryIntervalMs`. An unchanged refresh emits no log.
 
+If a registration fails, the worker emits `workhorse.worker.registration_failed` at info. The record
+carries `workhorse.worker.id`, `workhorse.worker.queues`, and `error.type`, the type of the error in
+the language of the SDK. It never carries the error message. The worker keeps its last pause state
+and gives the error to its registration reporter callback.
+
 #### Log content limits
 
 Logs can include task, worker, schedule, and checkpoint identity because logs are event records.
@@ -817,6 +900,20 @@ Workhorse never logs these values:
 - cancellation reasons
 - idempotency keys
 - progress and checkpoint values
+
+A diagnostic record names the kind of an error in `error.type`, not its text. Two kinds of host
+record keep the error text by design, and only in the log of the host:
+
+- The dashboard host of .NET, Rust, and the JVM logs the error of a failed authorizer, compatibility
+  check, or procedure. The answer of the dashboard hides a driver error, which can name the database
+  host, user, or path, so the log keeps it (SM-1473).
+- The .NET `Workhorse.Hosting` record `workhorse.hosting.worker_failed` gives the exception of a
+  failed hosted worker. It is the only place where an operator sees why the host stopped.
+
+An exception can hold any text, also a value of a task. Thus an operator who exports these host
+records must treat them as sensitive.
+
+A failure of the logger itself never changes the result of an operation. The SDK drops that record.
 
 The active OpenTelemetry context stays attached at emission. Thus an SDK can correlate handler logs
 with the current trace. If the host installs no Logs SDK, the API stays a no-op. Queue behavior does

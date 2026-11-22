@@ -60,7 +60,12 @@ from ._task_groups import (
     optional_task_group as _optional_task_group,
     task_group_link as _task_group_link,
 )
-from ._telemetry import inject_trace_context as _inject_trace_context
+from ._telemetry import (
+    WorkhorseLogEvent as _WorkhorseLogEvent,
+    emit_log as _emit_log,
+    inject_trace_context as _inject_trace_context,
+    log_enabled as _log_enabled,
+)
 from .errors import (
     HumanWaitIdempotencyConflictError,
     SignalIdempotencyConflictError,
@@ -229,6 +234,7 @@ class Queue:
                 _raise_translated(error)
             stale_types = _contract_mismatch(rows)
             if stale_types is None:
+                _log_enqueue_outcomes(rows, requests, self.default_queue)
                 return rows
             for task_type in stale_types:
                 loaded.add(task_type)
@@ -282,6 +288,7 @@ class Queue:
                 )
         payload = _encode_request_values(values)
         self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
+        _log_schedules_synchronized(namespace, len(definitions))
 
     def sync_concurrency_policies(
         self,
@@ -637,6 +644,7 @@ class AsyncQueue:
                 _raise_translated(error)
             stale_types = _contract_mismatch(rows)
             if stale_types is None:
+                _log_enqueue_outcomes(rows, requests, self.default_queue)
                 return rows
             for task_type in stale_types:
                 loaded.add(task_type)
@@ -690,6 +698,7 @@ class AsyncQueue:
                 )
         payload = _encode_request_values(values)
         await self._executor.rows(_STATEMENTS.sync_schedules, (namespace, payload, prune))
+        _log_schedules_synchronized(namespace, len(definitions))
 
     async def sync_concurrency_policies(
         self,
@@ -942,7 +951,24 @@ def _health_document(value: object) -> QueueHealth:
     return cast(QueueHealth, dict(value))
 
 
+def _log_cancellation_processed(row: Mapping[str, object], task_id: str) -> None:
+    """Log the cancel_v1 result of one task. The dashboard backend writes the same record."""
+    if not _log_enabled("INFO"):
+        return
+    _emit_log(
+        "INFO",
+        "workhorse.task.cancellation_processed",
+        "Task cancellation processed",
+        {
+            "workhorse.task.id": task_id,
+            "workhorse.task.state": str(row["state"] or "not_found"),
+            "workhorse.operation.status": str(row["status"]),
+        },
+    )
+
+
 def _cancel_result(row: _Row, task_id: str) -> CancelResult:
+    _log_cancellation_processed(row, task_id)
     return CancelResult(
         status=cast(Any, row["status"]),
         task_id=task_id,
@@ -1016,6 +1042,60 @@ def _contract_mismatch(rows: Sequence[_Row]) -> list[str] | None:
             raise RuntimeError("PostgreSQL returned invalid contract mismatch details")
         return cast(list[str], task_types)
     return None
+
+
+# The event name and the body of the log record for each enqueue outcome, as in TypeScript.
+_ENQUEUE_LOGS: dict[str, tuple[_WorkhorseLogEvent, str]] = {
+    "accepted": ("workhorse.task.enqueued", "Task enqueued"),
+    "replayed": ("workhorse.task.enqueue_replayed", "Idempotent enqueue replayed"),
+    "replaced": ("workhorse.task.debounced", "Pending task replaced"),
+    "non_replaceable": ("workhorse.task.debounce_rejected", "Debounced task not replaceable"),
+    "coalesced": ("workhorse.task.throttled", "Throttled enqueue coalesced"),
+}
+
+
+def _log_enqueue_outcomes(
+    rows: Sequence[_Row], requests: Sequence[EnqueueRequest], default_queue: str
+) -> None:
+    """Write one debug record for each enqueue request that PostgreSQL answered.
+
+    A row without an ordinal is a task group callback, so it writes no record.
+    """
+    if not _log_enabled("DEBUG"):
+        return
+    for row in rows:
+        ordinal = row.get("ordinal")
+        task_id = row.get("task_id")
+        log = _ENQUEUE_LOGS.get(cast(str, row.get("outcome")))
+        if ordinal is None or task_id is None or log is None:
+            continue
+        index = int(cast(int, ordinal)) - 1
+        if not 0 <= index < len(requests):
+            continue
+        request = requests[index]
+        _emit_log(
+            "DEBUG",
+            log[0],
+            log[1],
+            {
+                "workhorse.task.id": str(task_id),
+                "workhorse.task.type": request.type,
+                "workhorse.queue.name": (
+                    default_queue if request.options.queue is None else request.options.queue
+                ),
+            },
+        )
+
+
+def _log_schedules_synchronized(namespace: str, count: int) -> None:
+    if not _log_enabled("INFO"):
+        return
+    _emit_log(
+        "INFO",
+        "workhorse.schedules.synchronized",
+        "Recurring schedules synchronized",
+        {"workhorse.schedule.namespace": namespace, "workhorse.schedule.count": count},
+    )
 
 
 def _results(rows: Sequence[_Row]) -> list[EnqueueResult]:
@@ -1170,9 +1250,42 @@ def _signal_parameters(
     )
 
 
+def _log_signal_processed(task_id: str, name: str, status: str) -> None:
+    """Log the send_signal_v2 result of one task. The dashboard backend writes the same record."""
+    if not _log_enabled("INFO"):
+        return
+    _emit_log(
+        "INFO",
+        "workhorse.task.signal_processed",
+        "Task signal processed",
+        {
+            "workhorse.task.id": task_id,
+            "workhorse.signal.name": name,
+            "workhorse.signal.status": status,
+        },
+    )
+
+
+def _log_human_wait_processed(task_id: str, name: str, status: str) -> None:
+    """Log the complete_human_wait_v1 result. The dashboard backend writes the same record."""
+    if not _log_enabled("INFO"):
+        return
+    _emit_log(
+        "INFO",
+        "workhorse.task.human_wait_processed",
+        "Human wait completion processed",
+        {
+            "workhorse.task.id": task_id,
+            "workhorse.human_wait.name": name,
+            "workhorse.human_wait.status": status,
+        },
+    )
+
+
 def _signal_result(row: _Row, task_id: str, name: str) -> SignalDeliveryResult:
     if row["status"] == "conflict":
         raise SignalIdempotencyConflictError(task_id, name)
+    _log_signal_processed(task_id, name, str(row["status"]))
     return SignalDeliveryResult(
         status=cast(Any, row["status"]),
         task_id=task_id,
@@ -1202,6 +1315,7 @@ def _human_parameters(
 def _human_result(row: _Row, task_id: str, name: str) -> HumanWaitCompletionResult:
     if row["status"] == "conflict":
         raise HumanWaitIdempotencyConflictError(task_id, name)
+    _log_human_wait_processed(task_id, name, str(row["status"]))
     return HumanWaitCompletionResult(
         status=cast(Any, row["status"]),
         task_id=task_id,

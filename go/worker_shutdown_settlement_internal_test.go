@@ -47,17 +47,20 @@ func TestWorkerLogsTheShutdownSettlementFailedEvent(t *testing.T) {
 	logged := output.String()
 	for _, field := range []string{
 		"level=WARN",
-		`msg="Shutdown settlement failed; lease recovery will settle the task"`,
+		`msg="Worker could not settle a task after the shutdown abort"`,
 		"event.name=workhorse.worker.shutdown_settlement_failed",
 		"workhorse.task.id=" + task.ID,
 		"workhorse.queue.name=billing",
 		"workhorse.worker.id=shutdown-worker",
 		"error.type=*errors.errorString",
-		`error="registry is offline"`,
 	} {
 		if !strings.Contains(logged, field) {
 			t.Fatalf("expected %s in the warning:\n%s", field, logged)
 		}
+	}
+	// docs/architecture/telemetry.md, "Log content limits": a record never holds the error message.
+	if strings.Contains(logged, "registry is offline") {
+		t.Fatalf("the warning holds the error message:\n%s", logged)
 	}
 }
 

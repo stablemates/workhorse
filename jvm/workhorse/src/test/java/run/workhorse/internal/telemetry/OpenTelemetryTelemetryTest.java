@@ -12,6 +12,8 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import java.util.Map;
@@ -264,5 +266,30 @@ class OpenTelemetryTelemetryTest {
     assertNull(Telemetry.NOOP.injectTraceContext());
     assertNull(Telemetry.NOOP.currentContext());
     assertTrue(recording.spans().isEmpty());
+  }
+
+  @Test
+  void containsALoggerThatThrowsAndReportsItsEnabledState() {
+    try (OpenTelemetrySdk failing =
+        OpenTelemetrySdk.builder()
+            .setLoggerProvider(
+                SdkLoggerProvider.builder()
+                    .addLogRecordProcessor(
+                        (context, log) -> {
+                          throw new IllegalStateException("the logger failed");
+                        })
+                    .build())
+            .build()) {
+      Telemetry subject = OpenTelemetryTelemetry.of(failing);
+      assertTrue(subject.logEnabled(Telemetry.Severity.INFO));
+      subject.log(
+          Telemetry.Severity.INFO,
+          "workhorse.queue.purged",
+          "Queue purged",
+          Map.of(Names.QUEUE_NAME, "mail"));
+    }
+    assertFalse(
+        OpenTelemetryTelemetry.of(OpenTelemetry.noop()).logEnabled(Telemetry.Severity.INFO));
+    assertFalse(Telemetry.NOOP.logEnabled(Telemetry.Severity.WARN));
   }
 }

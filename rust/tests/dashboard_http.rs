@@ -606,3 +606,96 @@ async fn an_unexpected_procedure_error_gets_the_fixed_500_answer() {
         } })
     );
 }
+
+#[derive(Clone, Default)]
+struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for CapturedLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The TypeScript dashboard calls the queue, which writes one record for each cancel, signal, and
+/// human wait. The Rust dashboard runs the statements itself, so it writes the same records.
+#[tokio::test]
+async fn a_dashboard_cancel_signal_and_human_wait_write_the_queue_records() {
+    let Some(database) = support::scratch_database("dashboard_http_records").await else {
+        return;
+    };
+    let log = CapturedLog::default();
+    let _subscriber = tracing::subscriber::set_default({
+        let log = log.clone();
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || log.clone())
+            .finish()
+    });
+    let dashboard = dashboard::handler(options(pool(database.url()), "operator")).unwrap();
+    let missing = "00000000-0000-4000-8000-00000000dead";
+    let base = "https://example.test/workhorse/rpc/dashboard";
+    for (procedure, input) in [
+        ("cancelTask", json!({ "id": missing, "audit": audit() })),
+        (
+            "signalTask",
+            json!({ "id": missing, "name": "approval", "payload": { "secret": "never-log-this" },
+                    "idempotencyKey": "key-1", "audit": audit() }),
+        ),
+        (
+            "completeHumanWait",
+            json!({ "id": missing, "name": "review", "result": { "secret": "never-log-this" },
+                    "idempotencyKey": "key-2", "audit": audit() }),
+        ),
+    ] {
+        let request = mutation(
+            &format!("{base}/{procedure}"),
+            "https://example.test",
+            json!({ "json": input }),
+        );
+        let (status, body) = send_json(dashboard.clone(), request).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{procedure}: {body}");
+    }
+
+    let text = String::from_utf8_lossy(&log.0.lock().unwrap()).into_owned();
+    for (event, fields) in [
+        (
+            "workhorse.task.cancellation_processed",
+            [
+                format!("workhorse.task.id={missing}"),
+                "workhorse.task.state=\"not_found\"".to_owned(),
+                "workhorse.operation.status=\"not_found\"".to_owned(),
+            ],
+        ),
+        (
+            "workhorse.task.signal_processed",
+            [
+                format!("workhorse.task.id={missing}"),
+                "workhorse.signal.name=\"approval\"".to_owned(),
+                "workhorse.signal.status=\"not_found\"".to_owned(),
+            ],
+        ),
+        (
+            "workhorse.task.human_wait_processed",
+            [
+                format!("workhorse.task.id={missing}"),
+                "workhorse.human_wait.name=\"review\"".to_owned(),
+                "workhorse.human_wait.status=\"not_found\"".to_owned(),
+            ],
+        ),
+    ] {
+        let marker = format!("event.name=\"{event}\"");
+        let lines: Vec<_> = text.lines().filter(|line| line.contains(&marker)).collect();
+        assert_eq!(lines.len(), 1, "{event}: {text}");
+        assert!(lines[0].contains(" INFO "), "{}", lines[0]);
+        for field in fields {
+            assert!(lines[0].contains(&field), "{field} in {}", lines[0]);
+        }
+    }
+    assert!(!text.contains("never-log-this"), "{text}");
+}

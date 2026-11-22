@@ -26,6 +26,9 @@ public sealed partial class Worker
     private readonly Lock _registryLock = new();
     private long _generation;
     private bool _registered;
+
+    /// <summary>The state of the last <c>workhorse.worker.registered</c> record of this run, under the registry lock.</summary>
+    private RegistrationState? _loggedRegistration;
     private Task _registryWrite = Task.CompletedTask;
     private long _lastRegistryAt = Never;
     private long _maintenanceAt = Never;
@@ -209,6 +212,9 @@ public sealed partial class Worker
         {
             _registered = false;
             _remotelyPaused = false;
+            // Each run writes its first registration record, also when the deregistration of the run
+            // before did not clear the saved state.
+            _loggedRegistration = null;
             var run = new RunState(version, Interlocked.Increment(ref _generation));
             _latestRun = run;
             return run;
@@ -223,6 +229,13 @@ public sealed partial class Worker
         }
 
         var run = StartRun(version);
+        // As in TypeScript, only RunAsync writes the life-cycle records, and it writes the start
+        // first. RunOnceAsync writes none.
+        if (continuous)
+        {
+            WorkerLog.Started(_logger, WorkerId, Concurrency, _queues);
+        }
+
         // ADR 0071 rule 3: within one startup budget, the worker reserves the heartbeat connection,
         // and then borrows one ordinary connection for the compatibility query. The listener starts
         // between the two steps, and its wait uses none of the budget.
@@ -230,6 +243,8 @@ public sealed partial class Worker
         var startupDeadline = Monotonic.Now() + Monotonic.Millis(Math.Max(_heartbeatMs, StartupBudgetFloorMs));
         if (await ReserveHeartbeatAsync(run, startupDeadline, listens).ConfigureAwait(false) is null)
         {
+            // A stop came during the startup. The run did not fail.
+            LogStopped(continuous, _active.Count);
             return false;
         }
 
@@ -271,12 +286,16 @@ public sealed partial class Worker
 
         if (!ready)
         {
+            LogStopped(continuous, _active.Count);
             return false;
         }
 
-        if (continuous && !_pollingOnly && listener is null)
+        // As in TypeScript, a run that starts without a notification subscription warns once. A run
+        // under PollingOnly has no subscription. A subscription whose listener does not listen yet
+        // is still a subscription, so it gives no warning.
+        if (continuous && listener is null)
         {
-            WorkerLog.PollingOnly(_logger, WorkerId);
+            WorkerLog.PollingOnly(_logger, WorkerId, _queues, _poolMaxSize is { } size ? size : "unknown");
         }
 
         _instanceId = Guid.NewGuid();
@@ -287,7 +306,6 @@ public sealed partial class Worker
         try
         {
             await StepAsync(() => RegistryStep(() => RefreshRegistrationAsync(force: true, run.Generation)), run, "registration").ConfigureAwait(false);
-            WorkerLog.Started(_logger, Concurrency, _queueText);
             if (continuous && !StopRequested(run))
             {
                 // ADR 0078: a long-running worker starts its first claim beside its startup maintenance.
@@ -336,7 +354,6 @@ public sealed partial class Worker
             // that were in flight. A timer cancels it on the thread pool. The cancellation can contact
             // PostgreSQL's cancel endpoint, and nothing on the stop path waits for it.
             run.StopPath.CancelAfter(Monotonic.Span(statementsEnd - Monotonic.Now()));
-            WorkerLog.Stopped(_logger, _queueText, abandoned);
         }
 
         if (abandoned > 0)
@@ -354,7 +371,18 @@ public sealed partial class Worker
             ExceptionDispatchInfo.Throw(error);
         }
 
+        // As in TypeScript, a run that fails writes no workhorse.worker.stopped record.
+        LogStopped(continuous, abandoned);
         return claimedAny;
+    }
+
+    /// <summary>Writes <c>workhorse.worker.stopped</c> at the end of a RunAsync call that did not fail.</summary>
+    private void LogStopped(bool continuous, int activeSlots)
+    {
+        if (continuous)
+        {
+            WorkerLog.Stopped(_logger, WorkerId, _queues, activeSlots);
+        }
     }
 
     /// <summary>
@@ -405,7 +433,7 @@ public sealed partial class Worker
     /// <summary>
     /// Waits until the listener holds its connection or listens, until it reports a failure, or until
     /// <paramref name="deadline"/>. The listener is best effort: if it does not listen yet, the
-    /// worker logs one warning and polls.
+    /// worker polls until it listens.
     /// </summary>
     private async Task AwaitListenerAsync(Listener.Subscription listener, Func<bool> failed, RunState run, long deadline)
     {
@@ -414,10 +442,6 @@ public sealed partial class Worker
             await Task.Delay(Monotonic.Span(Math.Min(deadline - Monotonic.Now(), IdleCheckNanos))).ConfigureAwait(false);
         }
 
-        if (!listener.IsListening && !StopRequested(run))
-        {
-            WorkerLog.PollingOnly(_logger, WorkerId);
-        }
     }
 
     /// <summary>
@@ -688,6 +712,7 @@ public sealed partial class Worker
                 .ConfigureAwait(false))
             {
                 pass.Phase(row);
+                LogMaintenancePhase("tick", row);
             }
 
             if (routineDue)
@@ -697,6 +722,7 @@ public sealed partial class Worker
                     .ConfigureAwait(false))
                 {
                     pass.Phase(row);
+                    LogMaintenancePhase("background_routines", row);
                 }
             }
         }
@@ -705,6 +731,29 @@ public sealed partial class Worker
         if (_scheduleNamespaces.Length > 0)
         {
             await FireSchedulesAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Writes the record of one maintenance phase row that changed rows or returned an error. The
+    /// <c>recover</c> phase of a tick that recovered rows also writes <c>workhorse.leases.recovered</c>.
+    /// </summary>
+    private void LogMaintenancePhase(string operation, Row row)
+    {
+        var phase = row.Text("phase") ?? "unknown";
+        var rows = row.Long("rows_affected") ?? 0;
+        if (rows == 0 && row.Text("error") is null)
+        {
+            return;
+        }
+
+        var skipped = row.Boolean("skipped_lock") == true;
+        WorkerLog.MaintenanceCompleted(_logger, operation, phase, rows, skipped);
+        if (phase == "recover" && rows > 0)
+        {
+            var expired = row.Has("expired_leases") ? row.Long("expired_leases") ?? 0 : 0;
+            var retried = row.Has("retried") ? row.Long("retried") ?? 0 : 0;
+            WorkerLog.LeasesRecovered(_logger, rows, expired, retried);
         }
     }
 
@@ -725,11 +774,22 @@ public sealed partial class Worker
         foreach (var row in rows)
         {
             WorkerTelemetry.ScheduleFiredOf(row, now);
-            if (row.Text("task_id") is { } taskId && _logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information))
+            var taskId = row.Text("task_id");
+            if (!_logger.IsEnabled(taskId is null ? Microsoft.Extensions.Logging.LogLevel.Debug : Microsoft.Extensions.Logging.LogLevel.Information))
             {
-                var @namespace = row.Text("namespace");
-                var schedule = row.Text("schedule_name");
+                continue;
+            }
+
+            var @namespace = row.Text("namespace");
+            var schedule = row.Text("schedule_name");
+            if (taskId is not null)
+            {
                 WorkerLog.ScheduleFired(_logger, @namespace, schedule, taskId);
+            }
+            else
+            {
+                // PostgreSQL already holds the occurrence, so the pass fired no task.
+                WorkerLog.ScheduleFireReplayed(_logger, @namespace, schedule);
             }
         }
     }
@@ -827,13 +887,16 @@ public sealed partial class Worker
         }
         catch (Exception error) when (error is WorkhorseException or NpgsqlException or InvalidOperationException or IOException)
         {
-            WorkerLog.RegistrationFailed(_logger, error);
+            var errorType = error.GetType();
+            WorkerLog.RegistrationFailed(_logger, WorkerId, _queues, errorType.FullName ?? errorType.Name);
             OnRegistrationError(error);
             return;
         }
 
         var paused = rows.Count > 0 && rows[0].Boolean("paused") == true;
         bool changed;
+        var state = new RegistrationState(slots, stopping, paused);
+        bool logged;
         lock (_registryLock)
         {
             // A response that arrives after a later run started belongs to its own run, which ended.
@@ -845,17 +908,25 @@ public sealed partial class Worker
             changed = _remotelyPaused != paused;
             _remotelyPaused = paused;
             _registered = true;
+            // Only the first registration of a run and a changed state write a record.
+            logged = _loggedRegistration != state;
+            _loggedRegistration = state;
+        }
+
+        if (logged)
+        {
+            WorkerLog.Registered(_logger, _queues, WorkerId, Concurrency, slots, stopping, paused);
         }
 
         if (changed)
         {
             if (paused)
             {
-                WorkerLog.Paused(_logger, "remotely", _queueText);
+                WorkerLog.Paused(_logger, WorkerId, "remotely", _queues);
             }
             else
             {
-                WorkerLog.Resumed(_logger, "remotely", _queueText);
+                WorkerLog.Resumed(_logger, WorkerId, "remotely", _queues);
             }
 
             _wake.Bump();
@@ -867,7 +938,14 @@ public sealed partial class Worker
     {
         lock (_registryLock)
         {
-            if (Interlocked.Read(ref _generation) != generation || !_registered)
+            if (Interlocked.Read(ref _generation) != generation)
+            {
+                return;
+            }
+
+            // The next run logs its first registration again.
+            _loggedRegistration = null;
+            if (!_registered)
             {
                 return;
             }
@@ -875,17 +953,25 @@ public sealed partial class Worker
             _registered = false;
         }
 
+        IReadOnlyList<Row> rows;
         try
         {
             await using var connection = await DataSources.OpenAsync(_dataSource, CancellationToken.None).ConfigureAwait(false);
-            await Sql.RowsAsync(connection, SqlCatalogue.DeregisterWorkerV2, [Parameters.Text(WorkerId), Parameters.Uuid(instance)], CancellationToken.None)
+            rows = await Sql.RowsAsync(connection, SqlCatalogue.DeregisterWorkerV2, [Parameters.Text(WorkerId), Parameters.Uuid(instance)], CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception error) when (error is WorkhorseException or NpgsqlException or InvalidOperationException or IOException)
         {
             // The registry expires a worker that stops reporting.
+            return;
         }
+
+        var deregistered = rows.Count > 0 && rows[0].Boolean("deregistered") == true;
+        WorkerLog.Deregistered(_logger, WorkerId, deregistered);
     }
+
+    /// <summary>The registration state that the last <c>workhorse.worker.registered</c> record of a run holds.</summary>
+    private readonly record struct RegistrationState(int ActiveSlots, bool Draining, bool Paused);
 
     /// <summary>
     /// Waits until the shutdown deadline, cancels what still runs with
@@ -921,7 +1007,8 @@ public sealed partial class Worker
                 }
                 catch (Exception error) when (error is WorkhorseException or OperationCanceledException or NpgsqlException)
                 {
-                    WorkerLog.ReleaseFailed(_logger, task.Task.Id, error);
+                    // The record names the error type only, because the message can hold application data.
+                    WorkerLog.ReleaseFailed(_logger, task.Task.Id, error.GetType().FullName ?? error.GetType().Name);
                 }
             }
         });

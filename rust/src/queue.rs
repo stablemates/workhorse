@@ -340,6 +340,7 @@ impl<E: Executor> Queue<E> {
         let row = exactly_one(&rows, "cancel_v1")?;
         let status: &str = row.try_get("status")?;
         let state: Option<&str> = row.try_get("state")?;
+        log_cancellation_processed(task_id, state, status);
         Ok(CancelResult {
             status: parse_status(Operation::Cancel, status)?,
             task_id,
@@ -369,6 +370,7 @@ impl<E: Executor> Queue<E> {
         if status == "conflict" {
             return Err(Error::SignalIdempotencyConflict { task_id, name: name.into() });
         }
+        log_signal_processed(task_id, name, status);
         Ok(SignalDeliveryResult {
             status: parse_status(Operation::SendSignal, status)?,
             task_id,
@@ -403,6 +405,7 @@ impl<E: Executor> Queue<E> {
         if status == "conflict" {
             return Err(Error::HumanWaitIdempotencyConflict { task_id, name: name.into() });
         }
+        log_human_wait_processed(task_id, name, status);
         Ok(HumanWaitCompletionResult {
             status: parse_status(Operation::CompleteHumanWait, status)?,
             task_id,
@@ -512,6 +515,13 @@ impl<E: Executor> Queue<E> {
         self.executor
             .rows(sql::SYNC_SCHEDULE_DEFINITIONS_V2, &[&namespace, &document, &prune])
             .await?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.schedules.synchronized",
+            workhorse.schedule.namespace = namespace,
+            workhorse.schedule.count = definitions.len(),
+            "Recurring schedules synchronized"
+        );
         Ok(())
     }
 
@@ -783,6 +793,43 @@ pub(crate) fn trace_context() -> Option<Value> {
 #[cfg(not(feature = "opentelemetry"))]
 pub(crate) fn trace_context() -> Option<Value> {
     None
+}
+
+/// Writes the record of one `cancel_v1` result. The dashboard backend runs the statement itself and
+/// writes the same record, as the TypeScript dashboard does through its queue.
+pub(crate) fn log_cancellation_processed(task_id: Uuid, state: Option<&str>, status: &str) {
+    crate::telemetry::log_event!(
+        info,
+        event.name = "workhorse.task.cancellation_processed",
+        workhorse.task.id = %task_id,
+        workhorse.task.state = state.unwrap_or("not_found"),
+        workhorse.operation.status = status,
+        "Task cancellation processed"
+    );
+}
+
+/// Writes the record of one `send_signal_v2` result that is not a conflict.
+pub(crate) fn log_signal_processed(task_id: Uuid, name: &str, status: &str) {
+    crate::telemetry::log_event!(
+        info,
+        event.name = "workhorse.task.signal_processed",
+        workhorse.task.id = %task_id,
+        workhorse.signal.name = name,
+        workhorse.signal.status = status,
+        "Task signal processed"
+    );
+}
+
+/// Writes the record of one `complete_human_wait_v1` result that is not a conflict.
+pub(crate) fn log_human_wait_processed(task_id: Uuid, name: &str, status: &str) {
+    crate::telemetry::log_event!(
+        info,
+        event.name = "workhorse.task.human_wait_processed",
+        workhorse.task.id = %task_id,
+        workhorse.human_wait.name = name,
+        workhorse.human_wait.status = status,
+        "Human wait completion processed"
+    );
 }
 
 #[cfg(test)]

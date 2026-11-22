@@ -167,6 +167,7 @@ RSpec.describe "Worker against PostgreSQL" do
     records = output.string.lines.grep(/ workhorse\.handler\.signal_swallowed: /)
     expect(records.size).to eq(1), output.string
     expect(records.first).to start_with("W, ")
+    expect(records.first).to include("workhorse.handler.signal_swallowed: Task handler swallowed its abort signal {")
     attributes = JSON.parse(records.first[/\{.*\}/])
     expect(attributes).to include(
       "workhorse.handler.outcome" => "suspended",
@@ -203,6 +204,38 @@ RSpec.describe "Worker against PostgreSQL" do
     expect(status(task_id)["state"]).to eq("scheduled")
     finished = output.string.lines.find { |line| line.include?("workhorse.task.execution_finished") }
     expect(JSON.parse(finished[/\{.*\}/])["workhorse.handler.outcome"]).to eq("suspended")
+  end
+
+  # TypeScript writes the canceled outcome only after PostgreSQL accepts the acknowledgement. The
+  # heartbeat submits the cancellation first, so an acknowledgement that fails or that PostgreSQL
+  # refuses must not give a canceled execution record.
+  %w[fails refused].each do |acknowledgement|
+    it "writes no canceled execution record when the cancellation acknowledgement #{acknowledgement}" do
+      task_id = queue.enqueue("cancel-me", {}).task_id
+      output = StringIO.new
+      subject = worker(lease: 10, heartbeat: 0.1, logger: Logger.new(output)).handle("cancel-me") do |_payload, context|
+        expect(queue.cancel(task_id, requested_by: "spec").status).to eq(:cancel_requested)
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+        sleep 0.01 until context.cancellation.cancelled? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        expect(context.cancellation.cancelled?).to be(true)
+        raise "the handler stopped for the cancellation"
+      end
+      allow(subject.instance_variable_get(:@executor)).to receive(:fenced_rows).and_wrap_original do |original, sql, *arguments|
+        next original.call(sql, *arguments) unless sql == W::SqlCatalogue::ACKNOWLEDGE_CANCEL_V1
+        raise PG::ConnectionBad, "the acknowledgement failed" if acknowledgement == "fails"
+
+        [{"accepted" => "f"}]
+      end
+      begin
+        subject.run_once
+      rescue
+        nil
+      end
+
+      expect(output.string).to include("workhorse.handler.finished")
+      finished = output.string.lines.select { |line| line.include?("workhorse.task.execution_finished") }
+      expect(finished.map { |line| JSON.parse(line[/\{.*\}/])["workhorse.handler.outcome"] }).not_to include("canceled")
+    end
   end
 
   [false, true].each do |second|
@@ -657,6 +690,60 @@ RSpec.describe "Worker against PostgreSQL" do
     runner.value
 
     expect(status(task_id).values_at("state", "attempt")).to eq(["ready", "1"])
+  end
+
+  # A completion or a release after the shutdown abort that fails ends the run with its error, and
+  # the worker logs workhorse.worker.shutdown_settlement_failed first. Lease recovery settles the task.
+  {"release" => [W::SqlCatalogue::RELEASE_OWNED_V1, :raise], "completion" => [W::SqlCatalogue::COMPLETE_V1, :return]}
+    .each do |settlement, (statement, ending)|
+      it "logs a failed #{settlement} after the shutdown abort and ends the run with its error" do
+        task_id = queue.enqueue("stopping", {}, max_attempts: 1).task_id
+        output = StringIO.new
+        started = Queue.new
+        subject = worker(shutdown_grace: 0.05, logger: Logger.new(output)).handle("stopping") do |_payload, context|
+          started << true
+          raise "the shutdown never reached the handler" unless context.cancellation.wait(5)
+          raise ArgumentError, "the upstream call failed" if ending == :raise
+
+          {"late" => true}
+        end
+        allow(subject).to receive(:fenced_row).and_wrap_original do |original, sql, *rest|
+          raise PG::ConnectionBad, "connection lost" if sql == statement
+
+          original.call(sql, *rest)
+        end
+        runner = Thread.new { subject.run }
+        runner.report_on_exception = false
+        started.pop
+        subject.stop
+
+        expect { runner.value }.to raise_error(PG::ConnectionBad, "connection lost")
+        line = output.string.lines.find { |entry| entry.include?("workhorse.worker.shutdown_settlement_failed") }
+        expect(line).to include("WARN", "Worker could not settle a task after the shutdown abort")
+        attributes = JSON.parse(line[/\{.*\}/])
+        expect(attributes).to eq("workhorse.worker.id" => subject.worker_id, "workhorse.task.id" => task_id,
+          "workhorse.task.type" => "stopping", "workhorse.task.attempt" => 1, "workhorse.queue.name" => @queue_name,
+          "error.type" => "PG::ConnectionBad")
+        expect(status(task_id)["state"]).to eq("active")
+      end
+    end
+
+  it "logs no failed settlement for a release after the shutdown abort that succeeds" do
+    queue.enqueue("stopping", {}, max_attempts: 1)
+    output = StringIO.new
+    started = Queue.new
+    subject = worker(shutdown_grace: 0.05, logger: Logger.new(output)).handle("stopping") do |_payload, context|
+      started << true
+      context.cancellation.wait(5)
+      context.cancellation.check!
+    end
+    runner = Thread.new { subject.run }
+    started.pop
+    subject.stop
+    runner.value
+
+    expect(output.string).to include("workhorse.task.release_processed")
+    expect(output.string).not_to include("workhorse.worker.shutdown_settlement_failed")
   end
 
   # The limit of ADR 0117: a handler that fails during the grace, before the cancellation, keeps

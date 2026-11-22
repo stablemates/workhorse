@@ -481,6 +481,7 @@ public sealed partial class Worker
             if (await ClaimFastAsync(run, queue, Math.Min(limit, fastLimit) - claimed.Count).ConfigureAwait(false) is { } fast)
             {
                 WorkerTelemetry.Claimed(span, queue, probedAt, fast, 0, static entry => entry.Task, fullTier: false);
+                LogClaims(fast, 0, queue);
                 claimed.AddRange(fast);
                 continue;
             }
@@ -524,7 +525,23 @@ public sealed partial class Worker
                 // The claim duration starts at the probe, so it holds a rejected fast probe and the
                 // wait for the pool, as on the JVM. The lease window starts at startedAt.
                 WorkerTelemetry.Claimed(span, queue, probedAt, claimed, first, static entry => entry.Task, fullTier: true);
+                LogClaims(claimed, first, queue);
             }
+        }
+    }
+
+    /// <summary>Writes one <c>workhorse.task.claimed</c> record for each claim of <paramref name="claimed"/> from <paramref name="first"/> on.</summary>
+    private void LogClaims(List<Claimed> claimed, int first, string queue)
+    {
+        if (!_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+        {
+            return;
+        }
+
+        for (var index = first; index < claimed.Count; index++)
+        {
+            var task = claimed[index].Task;
+            WorkerLog.Claimed(_logger, task.Id, task.Type, task.Attempt, queue, WorkerId);
         }
     }
 

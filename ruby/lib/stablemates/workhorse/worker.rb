@@ -305,7 +305,7 @@ module Stablemates
         @reporter_failures = {}
         @reporter_failures_lock = Mutex.new
         @logger = logger
-        @queue = Queue.new(@executor, default_queue: @queues.first)
+        @queue = Queue.new(@executor, default_queue: @queues.first, logger: @logger)
         @heartbeat = Heartbeat.dedicated(pool)
         @handlers = Concurrent::Map.new
         @batch_coordinators = Concurrent::Map.new
@@ -327,6 +327,9 @@ module Stablemates
         @last_routine_at = -Float::INFINITY
         @last_registry_at = -Float::INFINITY
         @registered = Concurrent::AtomicBoolean.new(false)
+        # The active slots, draining state, and pause state of the last workhorse.worker.registered
+        # record, or nil before the first registration of a run.
+        @logged_registration = nil
         # The newest registry write thread (+registry_step+). Each write waits for the one before it.
         @registry_lock = Mutex.new
         @registry_write = nil
@@ -355,11 +358,8 @@ module Stablemates
       # Registers the block that runs tasks of +task_type+. The block receives the payload and a
       # HandlerContext; its return value is the task's JSON result. A second call replaces the first.
       def handle(task_type, &handler)
-        raise ArgumentError, "task_type must be a non-empty String" unless task_type.is_a?(String) && !task_type.empty?
-        raise ArgumentError, "handle requires a block" if handler.nil?
-
-        @handlers[task_type] = handler
-        @batch_coordinators.delete(task_type)
+        register_handler(task_type, handler)
+        log(:debug, "workhorse.handler.registered", "Task handler registered", "workhorse.task.type" => task_type)
         self
       end
 
@@ -407,6 +407,14 @@ module Stablemates
       attr_reader :executor # :nodoc:
 
       private
+
+      def register_handler(task_type, handler)
+        raise ArgumentError, "task_type must be a non-empty String" unless task_type.is_a?(String) && !task_type.empty?
+        raise ArgumentError, "handle requires a block" if handler.nil?
+
+        @handlers[task_type] = handler
+        @batch_coordinators.delete(task_type)
+      end
 
       # Raises the ArgumentError of a keyword that +initialize+ does not take. Any keyword other
       # than the removed +shared_heartbeats+ gets the message Ruby gives for an unknown keyword, and
@@ -531,13 +539,20 @@ module Stablemates
         # One startup budget bounds the wait for the previous run and the startup reservation.
         budget = [@heartbeat_ms / 1000.0, STARTUP_BUDGET_FLOOR].max
         deadline = monotonic + budget
+        # As in TypeScript, a run writes its start record first: before the readiness check and
+        # before the first registration. A one-pass call is not a run, so it writes no start and no
+        # stop record.
+        if continuous
+          log(:info, "workhorse.worker.started", "Worker started",
+            "workhorse.worker.concurrency" => @concurrency, "workhorse.worker.queues" => @queues)
+        end
         # A stop during that wait ends the run before it changes any state.
-        return false if await_previous_stop(deadline, budget, version) == :stopped
+        return stopped_before_start(continuous) if await_previous_stop(deadline, budget, version) == :stopped
 
         @run_version = version
         reservation = start_heartbeat(version, deadline, budget)
         # A stop during the startup wait ends the run before it registers.
-        return false if reservation == :stopped
+        return stopped_before_start(continuous) if reservation == :stopped
 
         begin
           run_reserved(continuous, version, reservation)
@@ -624,6 +639,7 @@ module Stablemates
       def run_reserved(continuous, version, gate)
         @instance_id = SecureRandom.uuid
         @registered.make_false
+        @logged_registration = nil
         # Every registry write of the previous run has ended (+await_previous_stop+), so a failure
         # that one of them recorded after its run ended does not reach this run.
         @registry_failure.set(nil)
@@ -641,8 +657,7 @@ module Stablemates
           end
           registry_step("workhorse-registration") { refresh_registration(force: true) }.join
           raise_registry_failure
-          log(:info, "workhorse.worker.started", "Worker started",
-            "workhorse.worker.concurrency" => @concurrency, "workhorse.worker.queues" => @queues)
+          log_polling_only if continuous && listener.nil?
           if continuous && !stop_requested?(version)
             startup = Thread.new do
               run_maintenance_if_due
@@ -672,8 +687,6 @@ module Stablemates
           @state_lock.synchronize { @dispatch_slots = nil }
           instance_id = @instance_id
           within(final_deadline, registry_step("workhorse-deregistration") { deregister(instance_id) })
-          log(:info, "workhorse.worker.stopped", "Worker stopped",
-            "workhorse.worker.active_slots" => abandoned, "workhorse.worker.queues" => @queues)
         end
         # A registry write that failed after the last dispatch pass raises only now, so the drain and
         # the deregistration still ran. A write that has not ended by the final deadline is not known.
@@ -682,7 +695,21 @@ module Stablemates
         raise maintenance_errors.first unless maintenance_errors.empty?
         raise run_errors.first unless run_errors.empty?
 
+        # As in TypeScript, only a run that ends without an error writes the stop record.
+        log_stopped(abandoned) if continuous
         claimed_any
+      end
+
+      # If a stop comes before the readiness check ends, the run ends without an error. TypeScript
+      # then writes the stop record, so this run writes it too. Returns false: the run claimed nothing.
+      def stopped_before_start(continuous)
+        log_stopped(0) if continuous
+        false
+      end
+
+      def log_stopped(active_slots)
+        log(:info, "workhorse.worker.stopped", "Worker stopped",
+          "workhorse.worker.active_slots" => active_slots, "workhorse.worker.queues" => @queues)
       end
 
       # Reserves the heartbeat connection of the pool, then borrows one other connection for the
@@ -1027,7 +1054,8 @@ module Stablemates
           "workhorse.queue.name" => queue, "workhorse.claim.result" => tasks.empty? ? "empty" : "claimed")
         tasks.each do |task|
           Telemetry.add("workhorse.tasks.claimed", 1, Telemetry.task_metric_attributes(task))
-          log(:debug, "workhorse.task.claimed", "Task claimed", Telemetry.task_span_attributes(task))
+          log(:debug, "workhorse.task.claimed", "Task claimed",
+            Telemetry.task_span_attributes(task).merge("workhorse.queue.name" => task.queue))
         end
       end
 
@@ -1481,22 +1509,20 @@ module Stablemates
           ])
         rescue => e
           log(:info, "workhorse.worker.registration_failed", "Worker registration failed",
-            "error.type" => error_name(e))
+            "workhorse.worker.queues" => @queues, "error.type" => error_name(e))
           call_reporter(:on_registration_error, @on_registration_error, e)
           return
         end
         paused = rows.first&.fetch("paused", nil) == "t"
         changed = paused ? @remotely_paused.make_true : @remotely_paused.make_false
         @registered.make_true
-        log(:debug, "workhorse.worker.registered", "Worker registration refreshed",
-          "workhorse.worker.active_slots" => active, "workhorse.worker.draining" => @draining,
-          "workhorse.worker.paused" => paused)
+        log_registration([active, @draining, paused])
         return unless changed
 
         if paused
-          log(:info, "workhorse.worker.paused", "Worker paused remotely")
+          log(:info, "workhorse.worker.paused", "Worker paused remotely", "workhorse.worker.queues" => @queues)
         else
-          log(:info, "workhorse.worker.resumed", "Worker resumed remotely")
+          log(:info, "workhorse.worker.resumed", "Worker resumed remotely", "workhorse.worker.queues" => @queues)
         end
         wake_dispatcher
       end
@@ -1506,9 +1532,34 @@ module Stablemates
       def deregister(instance_id)
         return unless @registered.make_false
 
-        @executor.rows(SqlCatalogue::DEREGISTER_WORKER_V2, [@worker_id, instance_id])
+        @logged_registration = nil
+        rows = @executor.rows(SqlCatalogue::DEREGISTER_WORKER_V2, [@worker_id, instance_id])
+        log(:debug, "workhorse.worker.deregistered", "Worker deregistered",
+          "workhorse.worker.deregistered" => rows.first&.fetch("deregistered", nil) == "t")
       rescue
         nil
+      end
+
+      # Writes workhorse.worker.registered after the first registration of a run and when +state+,
+      # the active slots, the draining state, and the pause state, differs from the last record. An
+      # unchanged refresh writes nothing. Only the registry writes call it, one after the other.
+      def log_registration(state)
+        return if state == @logged_registration
+
+        active, draining, paused = state
+        log(:debug, "workhorse.worker.registered", "Worker registration changed",
+          "workhorse.worker.queues" => @queues, "workhorse.worker.concurrency" => @concurrency,
+          "workhorse.worker.active_slots" => active, "workhorse.worker.draining" => draining,
+          "workhorse.worker.paused" => paused)
+        @logged_registration = state
+      end
+
+      # A run without a notification listener dispatches by polling. Polling stays correct, so the
+      # worker runs on, but it says so once for each run.
+      def log_polling_only
+        size = @pool.respond_to?(:size) ? @pool.size : nil
+        log(:warn, "workhorse.worker.polling_only", "Worker has no notification listener and dispatches by polling",
+          "workhorse.worker.queues" => @queues, "workhorse.worker.pool_max_size" => size.is_a?(Integer) ? size : "unknown")
       end
 
       # Runs one maintenance pass when its interval elapsed. Returns whether it ran. The interval
@@ -1526,12 +1577,12 @@ module Stablemates
           total = 0
           Telemetry.span("workhorse.recovery", {}) do |recovery|
             @executor.rows(SqlCatalogue::TICK_V1, ["100", "100"]).each do |row|
-              total += record_maintenance(row, recovery, log: true)
+              total += record_maintenance(row, recovery, operation: "tick")
             end
             if now - @last_routine_at >= @routine_ms / 1000.0
               @last_routine_at = now
               @executor.rows(SqlCatalogue::RUN_MAINTENANCE_V1, [DATABASE_NOW]).each do |row|
-                total += record_maintenance(row, nil, log: false)
+                total += record_maintenance(row, nil, operation: "background_routines")
               end
             end
           end
@@ -1541,8 +1592,9 @@ module Stablemates
         fire_schedules unless @schedule_namespaces.empty?
       end
 
-      # Records one maintenance phase row and returns its affected row count. Only tick rows log.
-      def record_maintenance(row, recovery, log:)
+      # Records and logs one maintenance phase row and returns its affected row count. Only a tick
+      # row has a recovery span.
+      def record_maintenance(row, recovery, operation:)
         phase = row["phase"]
         rows = Values.parse_integer(row["rows_affected"]) || 0
         skipped = row["skipped_lock"] == "t"
@@ -1553,14 +1605,11 @@ module Stablemates
         Telemetry.add("workhorse.maintenance.rows", rows, attributes)
         Telemetry.record("workhorse.maintenance.duration", row["duration_ms"].to_f, attributes)
         Telemetry.add("workhorse.maintenance.errors", 1, attributes) if error
-        return rows unless log
-
-        record_recovery(row, rows, skipped, error, recovery) if phase == "recover"
+        record_recovery(row, rows, skipped, error, recovery) if recovery && phase == "recover"
         if rows.positive? || error
-          details = {"workhorse.maintenance.operation" => "tick", "workhorse.maintenance.phase" => phase,
-                     "workhorse.maintenance.rows_affected" => rows, "workhorse.maintenance.skipped_lock" => skipped}
-          details["error.type"] = "PostgreSQLError" if error
-          log(:info, "workhorse.maintenance.completed", "Maintenance phase completed", details)
+          log(:info, "workhorse.maintenance.completed", "Maintenance phase completed",
+            "workhorse.maintenance.operation" => operation, "workhorse.maintenance.phase" => phase,
+            "workhorse.maintenance.rows_affected" => rows, "workhorse.maintenance.skipped_lock" => skipped)
         end
         rows
       end
@@ -1627,7 +1676,7 @@ module Stablemates
       def execute(task, claim_started_at, active)
         handler = @handlers[task.type]
         arbiter = Arbiter.new
-        state = {span_outcome: nil, errors: []}
+        state = {span_outcome: nil, errors: [], raised: false}
         started_at = monotonic
         attributes = {"workhorse.queue.name" => task.queue}.merge(Telemetry.task_span_attributes(task))
         Telemetry.span("workhorse.handler", attributes, trace_context: task.trace_context, consumer: true) do |span|
@@ -1639,6 +1688,7 @@ module Stablemates
               run_handler(task, handler, claim_started_at, active, arbiter, state)
             end
           rescue Exception => e # rubocop:disable Lint/RescueException
+            state[:raised] = true
             Telemetry.record_error(span, error_name(e))
             raise
           ensure
@@ -1650,6 +1700,10 @@ module Stablemates
       def finish_telemetry(task, span, arbiter, state, started_at, attributes)
         duration = (monotonic - started_at) * 1000
         outcome = TELEMETRY_OUTCOMES.fetch(arbiter.reported_outcome, "unknown")
+        # A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each settlement raises
+        # if that acknowledgement fails or PostgreSQL refuses it. The attempt then settled nothing, so
+        # its outcome is unknown, as in TypeScript.
+        outcome = "unknown" if outcome == "canceled" && state[:raised]
         Telemetry.set_attribute(span, "workhorse.handler.outcome",
           state[:span_outcome] || SPAN_OUTCOMES.fetch(arbiter.reported_outcome, "unknown"))
         Telemetry.record_error(span, state[:errors].first) unless state[:errors].empty?
@@ -1659,6 +1713,10 @@ module Stablemates
         Telemetry.add("workhorse.handler.executions", 1, metric.merge("workhorse.handler.outcome" => outcome))
         log(:debug, "workhorse.handler.finished", "Task handler finished",
           attributes.merge("workhorse.handler.duration_ms" => duration))
+        # An attempt whose settlement failed has no outcome. TypeScript writes no execution record
+        # for it, so this worker writes none.
+        return if outcome == "unknown"
+
         log(:info, "workhorse.task.execution_finished", "Task execution finished",
           attributes.merge("workhorse.handler.outcome" => outcome))
       end
@@ -1715,7 +1773,9 @@ module Stablemates
           # this, not the class of the error. A handler that failed before the cancellation keeps
           # its usual settlement.
           if stopped
-            state[:span_outcome] = release_owned(task, arbiter, Telemetry.task_span_attributes(task), ownership)
+            state[:span_outcome] = settle_after_shutdown(task) do
+              release_owned(task, arbiter, Telemetry.task_span_attributes(task), ownership)
+            end
             return
           end
 
@@ -1727,7 +1787,20 @@ module Stablemates
         end
         return if finish_suspended(task, ownership, arbiter)
 
-        complete(task, ownership, encoded, arbiter)
+        complete(task, ownership, encoded, arbiter, after_shutdown: stopped)
+      end
+
+      # Runs the completion or the release of an attempt after the shutdown abort. If it fails, the
+      # worker logs the failure and raises the error, so the run raises, as in every SDK (SM-2073).
+      # Lease recovery settles the task. A lost lease is an outcome of the attempt, not a failure.
+      def settle_after_shutdown(task)
+        yield
+      rescue LeaseLostError
+        raise
+      rescue => e
+        log(:warn, "workhorse.worker.shutdown_settlement_failed", "Worker could not settle a task after the shutdown abort",
+          Telemetry.task_span_attributes(task).merge("workhorse.queue.name" => task.queue, "error.type" => error_name(e)))
+        raise
       end
 
       # Runs a handler inside the Rails executor when Rails is loaded, so code reloading and Active
@@ -1766,13 +1839,17 @@ module Stablemates
         end
       end
 
-      def complete(task, ownership, encoded, arbiter)
+      # +after_shutdown+ is true when the handler returned after the shutdown abort.
+      def complete(task, ownership, encoded, arbiter, after_shutdown: false)
         accepted = Telemetry.span("workhorse.complete", Telemetry.task_span_attributes(task)) do |span|
-          accepted = if fast_task?(task)
-            complete_fast_task(task, encoded)
-          else
-            fenced_row(SqlCatalogue::COMPLETE_V1, task, encoded)["accepted"] == "t"
+          write = lambda do
+            if fast_task?(task)
+              complete_fast_task(task, encoded)
+            else
+              fenced_row(SqlCatalogue::COMPLETE_V1, task, encoded)["accepted"] == "t"
+            end
           end
+          accepted = after_shutdown ? settle_after_shutdown(task, &write) : write.call
           Telemetry.set_attribute(span, "workhorse.complete.accepted", accepted)
           attributes = Telemetry.task_span_attributes(task).merge("workhorse.complete.accepted" => accepted)
           if accepted
@@ -2017,7 +2094,7 @@ module Stablemates
         return false unless finish_ownership(task, ownership, arbiter)
 
         if arbiter.suspended?
-          log(:warn, "workhorse.handler.signal_swallowed", "Task handler swallowed its suspension signal",
+          log(:warn, "workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal",
             {"workhorse.queue.name" => task.queue}.merge(Telemetry.task_span_attributes(task),
               "workhorse.handler.outcome" => "suspended"))
         end

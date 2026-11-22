@@ -202,7 +202,20 @@ impl HandlerContext {
         let params: [&(dyn tokio_postgres::types::ToSql + Sync); 3] = [&name, &value, &fingerprint];
         let row = self.call(sql::SAVE_CHECKPOINT_V3, "save_checkpoint_v3", &params).await?;
         match status(&row)?.as_str() {
-            "saved" | "existing" => Ok(row.try_get::<_, Value>("checkpoint_value")?),
+            status @ ("saved" | "existing") => {
+                crate::telemetry::log_event!(
+                    debug,
+                    event.name = "workhorse.task.checkpoint_saved",
+                    workhorse.task.id = %task.id,
+                    workhorse.task.type = %task.task_type,
+                    workhorse.task.attempt = task.attempt,
+                    workhorse.checkpoint.name = name,
+                    workhorse.checkpoint.status = status,
+                    workhorse.worker.id = %self.inner.worker_id,
+                    "Task checkpoint persisted"
+                );
+                Ok(row.try_get::<_, Value>("checkpoint_value")?)
+            }
             "value_too_large" => Err(HandlerError::from(Error::CheckpointValueSizeLimit {
                 task_id: task.id,
                 name: name.to_owned(),
@@ -247,7 +260,20 @@ impl HandlerContext {
         self.check(Operation::Progress)?;
         let row = self.call(sql::UPDATE_PROGRESS_V1, "update_progress_v1", &[&value]).await?;
         match status(&row)?.as_str() {
-            "updated" | "unchanged" => Ok(()),
+            status @ ("updated" | "unchanged") => {
+                let task = &self.inner.task;
+                crate::telemetry::log_event!(
+                    debug,
+                    event.name = "workhorse.task.progress_updated",
+                    workhorse.task.id = %task.id,
+                    workhorse.task.type = %task.task_type,
+                    workhorse.task.attempt = task.attempt,
+                    workhorse.progress.status = status,
+                    workhorse.worker.id = %self.inner.worker_id,
+                    "Task progress persisted"
+                );
+                Ok(())
+            }
             "rate_limited" => {
                 let retry_after = row
                     .try_get::<_, Option<String>>("retry_after_ms")?

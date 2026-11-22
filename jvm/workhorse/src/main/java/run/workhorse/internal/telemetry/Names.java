@@ -64,6 +64,7 @@ public final class Names {
   public static final String MAINTENANCE_PHASE = "workhorse.maintenance.phase";
   public static final String MAINTENANCE_ROWS_AFFECTED = "workhorse.maintenance.rows_affected";
   public static final String MAINTENANCE_SKIPPED_LOCK = "workhorse.maintenance.skipped_lock";
+  public static final String OPERATION_STATUS = "workhorse.operation.status";
   public static final String PROGRESS_STATUS = "workhorse.progress.status";
   public static final String QUEUE_NAME = "workhorse.queue.name";
   public static final String QUEUE_TIER = "workhorse.queue.tier";
@@ -71,14 +72,19 @@ public final class Names {
   public static final String RECOVERY_RETRIED = "workhorse.recovery.retried";
   public static final String RECOVERY_ROWS_AFFECTED = "workhorse.recovery.rows_affected";
   public static final String RECOVERY_SKIPPED = "workhorse.recovery.skipped";
+  public static final String REDRIVE_DRY_RUN = "workhorse.redrive.dry_run";
+  public static final String REDRIVE_TARGET_TASK_ID = "workhorse.redrive.target_task_id";
   public static final String RELEASE_STATUS = "workhorse.release.status";
   public static final String RETRY_OUTCOME = "workhorse.retry.outcome";
+  public static final String SCHEDULE_COUNT = "workhorse.schedule.count";
   public static final String SCHEDULE_NAME = "workhorse.schedule.name";
   public static final String SCHEDULE_NAMESPACE = "workhorse.schedule.namespace";
   public static final String SIGNAL_NAME = "workhorse.signal.name";
   public static final String SIGNAL_STATUS = "workhorse.signal.status";
   public static final String TASK_ATTEMPT = "workhorse.task.attempt";
+  public static final String TASK_COUNT = "workhorse.task.count";
   public static final String TASK_ID = "workhorse.task.id";
+  public static final String TASK_STATE = "workhorse.task.state";
   public static final String TASK_TYPE = "workhorse.task.type";
   public static final String WAIT_NAME = "workhorse.wait.name";
   public static final String WAIT_STATUS = "workhorse.wait.status";

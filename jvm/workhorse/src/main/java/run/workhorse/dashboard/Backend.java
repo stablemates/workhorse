@@ -39,6 +39,7 @@ import run.workhorse.internal.Json;
 import run.workhorse.internal.Row;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
+import run.workhorse.internal.telemetry.Telemetry;
 
 /**
  * Answers each {@code dashboard/v1} procedure through {@link Admin}, {@link Queue}, and the
@@ -97,6 +98,7 @@ final class Backend {
   private final Map<String, @Nullable Object> maintenanceLoops;
   private final boolean readOnly;
   private final boolean redactErrorStacks;
+  private final Telemetry telemetry;
   private final ReentrantLock healthLock = new ReentrantLock();
   private long healthExpiresAt;
   private @Nullable Map<String, @Nullable Object> health;
@@ -109,6 +111,31 @@ final class Backend {
       boolean readOnly,
       Duration statementTimeout,
       boolean redactErrorStacks) {
+    this(
+        connections,
+        environment,
+        configuredWorkers,
+        maintenanceLoops,
+        readOnly,
+        statementTimeout,
+        redactErrorStacks,
+        Telemetry.global());
+  }
+
+  /**
+   * The dashboard runs the cancel and delivery statements itself, so it writes the records of the
+   * queue through {@code telemetry}. The admin client and the queue use the global telemetry.
+   */
+  Backend(
+      ConnectionSource connections,
+      String environment,
+      List<String> configuredWorkers,
+      Map<String, @Nullable Object> maintenanceLoops,
+      boolean readOnly,
+      Duration statementTimeout,
+      boolean redactErrorStacks,
+      Telemetry telemetry) {
+    this.telemetry = telemetry;
     this.connections = connections;
     this.statementTimeoutMs = Long.toString(statementTimeout.toMillis());
     this.admin = new Admin(connections);
@@ -383,6 +410,17 @@ final class Backend {
   private Object cancelTask(Map<String, ? extends @Nullable Object> input, String actor) {
     Row row =
         operation(
+            answer -> {
+              String state = answer.text("state");
+              processed(
+                  "workhorse.task.cancellation_processed",
+                  "Task cancellation processed",
+                  text(input, "id"),
+                  "workhorse.task.state",
+                  state == null ? "not_found" : state,
+                  "workhorse.operation.status",
+                  answer.text("status"));
+            },
             SqlCatalogue.CANCEL_V1,
             text(input, "id"),
             actor,
@@ -402,6 +440,15 @@ final class Backend {
   private Object signalTask(Map<String, ? extends @Nullable Object> input, String actor) {
     Row row =
         operation(
+            answer ->
+                delivered(
+                    answer,
+                    "workhorse.task.signal_processed",
+                    "Task signal processed",
+                    text(input, "id"),
+                    "workhorse.signal.name",
+                    text(input, "name"),
+                    "workhorse.signal.status"),
             SqlCatalogue.SEND_SIGNAL_V2,
             text(input, "id"),
             text(input, "name"),
@@ -421,6 +468,15 @@ final class Backend {
   private Object completeHumanWait(Map<String, ? extends @Nullable Object> input, String actor) {
     Row row =
         operation(
+            answer ->
+                delivered(
+                    answer,
+                    "workhorse.task.human_wait_processed",
+                    "Human wait completion processed",
+                    text(input, "id"),
+                    "workhorse.human_wait.name",
+                    text(input, "name"),
+                    "workhorse.human_wait.status"),
             SqlCatalogue.COMPLETE_HUMAN_WAIT_V1,
             text(input, "id"),
             text(input, "name"),
@@ -557,11 +613,53 @@ final class Backend {
   }
 
   private Row operation(SqlCatalogue.Statement statement, @Nullable Object... parameters) {
+    return operation(row -> {}, statement, parameters);
+  }
+
+  /** Runs one task operation and gives its row to {@code logged} before a missing task throws. */
+  private Row operation(
+      java.util.function.Consumer<Row> logged,
+      SqlCatalogue.Statement statement,
+      @Nullable Object... parameters) {
     Row row = one(statement, parameters);
+    logged.accept(row);
     if ("not_found".equals(row.text("status"))) {
       throw DashboardRpcException.notFound("Task not found");
     }
     return row;
+  }
+
+  /** Writes the record of a delivery that is not a conflict, as the queue does. */
+  private void delivered(
+      Row row,
+      String event,
+      String body,
+      String taskId,
+      String nameKey,
+      String name,
+      String statusKey) {
+    if (!"conflict".equals(row.text("status"))) {
+      processed(event, body, taskId, nameKey, name, statusKey, row.text("status"));
+    }
+  }
+
+  /**
+   * Writes one info record of the queue. The TypeScript dashboard calls the queue, which writes it,
+   * so the Java dashboard writes the same record for the statement it runs itself.
+   */
+  private void processed(
+      String event,
+      String body,
+      String taskId,
+      String firstKey,
+      String first,
+      String secondKey,
+      @Nullable String second) {
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put("workhorse.task.id", taskId);
+    attributes.put(firstKey, first);
+    attributes.put(secondKey, second);
+    telemetry.log(Telemetry.Severity.INFO, event, body, attributes);
   }
 
   private List<Row> run(SqlCatalogue.Statement statement, @Nullable Object... parameters) {

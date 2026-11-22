@@ -151,6 +151,15 @@ impl Worker {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(task_type.into(), erased);
+        crate::telemetry::log_event!(
+            debug,
+            event.name = "workhorse.handler.registered",
+            workhorse.task.type = task_type,
+            workhorse.handler.batch.max_size = options.max_size,
+            workhorse.handler.batch.linger_ms = options.linger.as_millis() as u64,
+            workhorse.worker.id = %self.0.worker_id,
+            "Batch task handler registered"
+        );
         self
     }
 }
@@ -269,7 +278,8 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
         let linger_ms = linger.as_secs_f64() * 1000.0;
         worker.metrics.record(Histogram::BatchSize, batch.len() as f64, &attributes);
         worker.metrics.record(Histogram::BatchLinger, linger_ms, &attributes);
-        tracing::debug!(
+        crate::telemetry::log_event!(
+            info,
             event.name = "workhorse.handler.batch_dispatched",
             workhorse.queue.name = %queue,
             workhorse.task.type = %self.task_type,
@@ -277,7 +287,7 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             workhorse.handler.batch.size = batch.len(),
             workhorse.handler.batch.linger_ms = linger_ms,
             workhorse.handler.batch.full = full,
-            "Batch dispatched"
+            "Task batch dispatched"
         );
         let batch_id = Uuid::new_v4();
         let mut items = Vec::with_capacity(batch.len());
@@ -290,7 +300,8 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
             items.push(member.item);
         }
         let tasks: Vec<_> = senders.iter().map(|(_, task)| *task).collect();
-        record(&worker, sql::RECORD_BATCH_DISPATCH_V1, batch_id, &tasks).await;
+        let evidence = Evidence { queue: &queue, task_type: &self.task_type, full, batch_id };
+        evidence.record(&worker, "dispatch", &tasks).await;
         let expected = items.len();
         // The callback runs inside the caught future, so a panic before it returns its future is
         // caught like a panic while that future is polled.
@@ -329,25 +340,51 @@ impl<P: Send + 'static, R: Send + 'static> Coordinator<P, R> {
                     token.mark_returned();
                     *saved = Some(Err(error.clone()));
                 }
-                record(&worker, sql::RECORD_BATCH_FAILURE_V1, batch_id, &tasks).await;
+                evidence.record(&worker, "failure", &tasks).await;
                 drop(senders);
             }
         }
     }
 }
 
-/// Records batch membership for operators; a failed write never affects settlement.
-async fn record(worker: &Inner, statement: &str, batch_id: Uuid, tasks: &[(Uuid, i32, i64)]) {
-    let (mut ids, mut attempts, mut fences) = (Vec::new(), Vec::new(), Vec::new());
-    for &(id, attempt, fence) in tasks {
-        ids.push(id);
-        attempts.push(attempt);
-        fences.push(fence);
-    }
-    let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
-        [&batch_id, &ids, &attempts, &fences, &worker.worker_id];
-    if let Err(error) = fenced_rows(&worker.statements(), statement, &params).await {
-        tracing::debug!(error = %error, "batch membership was not recorded");
+/// The batch that one dispatch records for operators.
+struct Evidence<'a> {
+    queue: &'a str,
+    task_type: &'a str,
+    full: bool,
+    batch_id: Uuid,
+}
+
+impl Evidence<'_> {
+    /// Records batch membership for operators; a failed write never affects settlement. It logs
+    /// `workhorse.handler.batch_evidence_failed`, and the worker still calls the batch callback.
+    async fn record(&self, worker: &Inner, phase: &'static str, tasks: &[(Uuid, i32, i64)]) {
+        let statement = match phase {
+            "dispatch" => sql::RECORD_BATCH_DISPATCH_V1,
+            _ => sql::RECORD_BATCH_FAILURE_V1,
+        };
+        let (mut ids, mut attempts, mut fences) = (Vec::new(), Vec::new(), Vec::new());
+        for &(id, attempt, fence) in tasks {
+            ids.push(id);
+            attempts.push(attempt);
+            fences.push(fence);
+        }
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 5] =
+            [&self.batch_id, &ids, &attempts, &fences, &worker.worker_id];
+        if let Err(error) = fenced_rows(&worker.statements(), statement, &params).await {
+            crate::telemetry::log_event!(
+                warn,
+                event.name = "workhorse.handler.batch_evidence_failed",
+                workhorse.queue.name = self.queue,
+                workhorse.task.type = self.task_type,
+                workhorse.handler.batch.full = self.full,
+                workhorse.handler.batch.size = tasks.len(),
+                workhorse.handler.batch.evidence_phase = phase,
+                workhorse.worker.id = %worker.worker_id,
+                error.r#type = %error.type_name(),
+                "Batch execution evidence could not be persisted"
+            );
+        }
     }
 }
 

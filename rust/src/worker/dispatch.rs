@@ -498,7 +498,7 @@ impl<D: Dispatch> Dispatcher<D> {
         let (id, claimed) = match result {
             Ok((id, claimed)) => (id, Some(claimed)),
             Err(error) => {
-                tracing::warn!(error = %error, "task claim panicked");
+                crate::telemetry::log_event!(warn, error.type = if error.is_panic() { "panic" } else { "cancelled" }, "task claim panicked");
                 (error.id(), None)
             }
         };

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import io
 import json
 import subprocess
 import threading
@@ -11,10 +12,13 @@ from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 import pytest
+import workhorse._telemetry
 import workhorse.worker
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
@@ -28,13 +32,26 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from eventual_conditions import eventually
+from reservations import ScriptedHeartbeats, ScriptedPool
 from workhorse import (
+    Admin,
+    AdminAudit,
+    AsyncAdmin,
     AsyncHandlerContext,
+    AsyncQueue,
     AsyncWorker,
+    BulkRedriveOptions,
+    DeadLetterFilter,
+    Debounce,
     EnqueueOptions,
+    EnqueueRequest,
     HandlerContext,
+    Idempotency,
     Json,
     Queue,
+    ScheduleDefinition,
+    ScheduledTask,
+    Throttle,
     Worker,
 )
 from workhorse._telemetry import (
@@ -192,20 +209,14 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     events = {record.log_record.event_name for record in LOG_EXPORTER.get_finished_logs()}
     assert {
         "workhorse.handler.registered",
-        "workhorse.worker.started",
         "workhorse.task.claimed",
         "workhorse.handler.started",
         "workhorse.task.completed",
         "workhorse.task.execution_finished",
         "workhorse.handler.finished",
-        "workhorse.worker.stopped",
     } <= events
-    stopped = next(
-        record.log_record
-        for record in LOG_EXPORTER.get_finished_logs()
-        if record.log_record.event_name == "workhorse.worker.stopped"
-    )
-    assert stopped.attributes["workhorse.worker.active_slots"] == 0
+    # A one-pass call is not a run, so it writes no start and no stop record, as in TypeScript.
+    assert not {"workhorse.worker.started", "workhorse.worker.stopped"} & events
 
 
 class _ContextThread(threading.Thread):
@@ -373,6 +384,7 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
         if record.log_record.event_name == "workhorse.handler.signal_swallowed"
     ]
     assert warning.severity_text == "WARN"
+    assert warning.body == "Task handler swallowed its abort signal"
     assert warning.attributes["workhorse.handler.outcome"] == "suspended"
     assert not any(
         record.log_record.event_name == "workhorse.task.completed"
@@ -673,3 +685,920 @@ def test_a_stale_settlement_after_a_lapsed_lease_reports_the_settled_cause(
         and value != executions_before.get(attributes, 0)
     }
     assert added == {metric_outcome: 1}
+
+
+# The worker log events of the TypeScript union `WorkhorseLogEvent` (typescript/core/src/telemetry.ts).
+# Each test checks the name, the severity, the body, and the attributes that TypeScript writes.
+
+
+def _log_records(event_name: str) -> list[Any]:
+    return [
+        record.log_record
+        for record in LOG_EXPORTER.get_finished_logs()
+        if record.log_record.event_name == event_name
+    ]
+
+
+def _log_record(event_name: str) -> tuple[str | None, Any, dict[str, Any]]:
+    records = _log_records(event_name)
+    assert len(records) == 1, f"{event_name}: {len(records)} records"
+    return records[0].severity_text, records[0].body, dict(records[0].attributes or {})
+
+
+def _queue_name(label: str) -> str:
+    return f"logs-{label}-{uuid4().hex[:8]}"
+
+
+def test_enqueue_logs_each_enqueue_outcome(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("enqueue")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection, queue_name)
+        accepted = queue.enqueue_with_result(
+            "mail.send", {"secret": "payload"}, EnqueueOptions(idempotency=Idempotency("one"))
+        )
+        replayed = queue.enqueue_with_result(
+            "mail.send", {"secret": "payload"}, EnqueueOptions(idempotency=Idempotency("one"))
+        )
+        debounce = Debounce("digest", 60_000, "reset")
+        queue.enqueue_with_result("mail.digest", {"revision": 1}, EnqueueOptions(debounce=debounce))
+        replaced = queue.enqueue_with_result(
+            "mail.digest", {"revision": 2}, EnqueueOptions(debounce=debounce)
+        )
+        rejected = queue.enqueue_with_result(
+            "mail.send",
+            {"revision": 3},
+            EnqueueOptions(debounce=Debounce("one", 60_000, "reset")),
+        )
+        throttle = Throttle("account-42", 60_000)
+        queue.enqueue_with_result(
+            "mail.throttled", {"account": 42}, EnqueueOptions(throttle=throttle)
+        )
+        coalesced = queue.enqueue_with_result(
+            "mail.throttled", {"account": 42}, EnqueueOptions(throttle=throttle)
+        )
+
+    assert (accepted.outcome, replayed.outcome, replaced.outcome) == (
+        "accepted",
+        "replayed",
+        "replaced",
+    )
+    assert (rejected.outcome, coalesced.outcome) == ("non_replaceable", "coalesced")
+    expected = {
+        "workhorse.task.enqueue_replayed": ("Idempotent enqueue replayed", replayed, "mail.send"),
+        "workhorse.task.debounced": ("Pending task replaced", replaced, "mail.digest"),
+        "workhorse.task.debounce_rejected": (
+            "Debounced task not replaceable",
+            rejected,
+            "mail.send",
+        ),
+        "workhorse.task.throttled": ("Throttled enqueue coalesced", coalesced, "mail.throttled"),
+    }
+    for event_name, (body, result, task_type) in expected.items():
+        assert _log_record(event_name) == (
+            "DEBUG",
+            body,
+            {
+                "workhorse.task.id": result.task_id,
+                "workhorse.task.type": task_type,
+                "workhorse.queue.name": queue_name,
+            },
+        )
+    enqueued = [
+        (record.severity_text, record.body, dict(record.attributes or {}))
+        for record in _log_records("workhorse.task.enqueued")
+    ]
+    assert (
+        "DEBUG",
+        "Task enqueued",
+        {
+            "workhorse.task.id": accepted.task_id,
+            "workhorse.task.type": "mail.send",
+            "workhorse.queue.name": queue_name,
+        },
+    ) in enqueued
+    assert len(enqueued) == 3
+
+
+def test_a_task_group_logs_the_enqueue_of_its_members_only(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("group")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection, queue_name)
+        with queue.task_group(on_finish=EnqueueRequest("group.finished", {})) as group:
+            group.add([EnqueueRequest("group.member", {"index": 1})])
+
+    tasks = group.result.tasks
+    assert [
+        dict(record.attributes or {}) for record in _log_records("workhorse.task.enqueued")
+    ] == [
+        {
+            "workhorse.task.id": tasks[0].task_id,
+            "workhorse.task.type": "group.member",
+            "workhorse.queue.name": queue_name,
+        }
+    ]
+
+
+def test_cancel_signal_and_human_wait_log_their_processing(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    missing = str(uuid4())
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection, _queue_name("cancel"))
+        canceled = queue.cancel(missing, requested_by="api", reason="secret reason")
+        signal = queue.send_signal(
+            missing, "approval", {"secret": True}, idempotency_key="key", requested_by="api"
+        )
+        human = queue.complete_human_wait(
+            missing, "review", {"secret": True}, idempotency_key="key", requested_by="api"
+        )
+
+    assert _log_record("workhorse.task.cancellation_processed") == (
+        "INFO",
+        "Task cancellation processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.task.state": "not_found",
+            "workhorse.operation.status": canceled.status,
+        },
+    )
+    assert _log_record("workhorse.task.signal_processed") == (
+        "INFO",
+        "Task signal processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.signal.name": "approval",
+            "workhorse.signal.status": signal.status,
+        },
+    )
+    assert _log_record("workhorse.task.human_wait_processed") == (
+        "INFO",
+        "Human wait completion processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.human_wait.name": "review",
+            "workhorse.human_wait.status": human.status,
+        },
+    )
+
+
+def _dashboard_post(host: Any, procedure: str, input_value: object) -> int:
+    payload = json.dumps({"json": input_value}).encode()
+    environ: dict[str, object] = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": f"/workhorse/rpc/dashboard/{procedure}",
+        "wsgi.url_scheme": "https",
+        "HTTP_HOST": "example.test",
+        "HTTP_ORIGIN": "https://example.test",
+        "CONTENT_LENGTH": str(len(payload)),
+        "CONTENT_TYPE": "application/json",
+        "wsgi.input": io.BytesIO(payload),
+    }
+    captured: dict[str, int] = {}
+
+    def start_response(status: str, _headers: list[tuple[str, str]]) -> None:
+        captured["status"] = int(status.split(maxsplit=1)[0])
+
+    b"".join(host(environ, start_response))
+    return captured["status"]
+
+
+def test_dashboard_cancel_signal_and_human_wait_log_their_processing(database_url: str) -> None:
+    from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+    missing = str(uuid4())
+    audit = {"actor": "operator", "reason": "test", "requestId": "request-1"}
+    LOG_EXPORTER.clear()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        host = DashboardHost(connection, authorize=lambda _: DashboardPrincipal("operator"))
+        assert _dashboard_post(host, "cancelTask", {"id": missing, "audit": audit}) == 404
+        signal = {"id": missing, "name": "approval", "payload": {"secret": "never-log-this"}}
+        assert (
+            _dashboard_post(host, "signalTask", {**signal, "idempotencyKey": "k1", "audit": audit})
+            == 404
+        )
+        human = {"id": missing, "name": "review", "result": {"secret": "never-log-this"}}
+        assert (
+            _dashboard_post(
+                host, "completeHumanWait", {**human, "idempotencyKey": "k2", "audit": audit}
+            )
+            == 404
+        )
+
+    assert _log_record("workhorse.task.cancellation_processed") == (
+        "INFO",
+        "Task cancellation processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.task.state": "not_found",
+            "workhorse.operation.status": "not_found",
+        },
+    )
+    assert _log_record("workhorse.task.signal_processed") == (
+        "INFO",
+        "Task signal processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.signal.name": "approval",
+            "workhorse.signal.status": "not_found",
+        },
+    )
+    assert _log_record("workhorse.task.human_wait_processed") == (
+        "INFO",
+        "Human wait completion processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.human_wait.name": "review",
+            "workhorse.human_wait.status": "not_found",
+        },
+    )
+    assert "never-log-this" not in str(LOG_EXPORTER.get_finished_logs())
+
+
+@pytest.mark.asyncio
+async def test_the_async_queue_logs_the_same_events(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("async")
+    missing = str(uuid4())
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as connection:
+        queue = AsyncQueue.from_psycopg(connection, queue_name)
+        accepted = await queue.enqueue_with_result("mail.send", {})
+        canceled = await queue.cancel(missing)
+        await queue.sync_schedules(
+            queue_name,
+            [ScheduleDefinition("nightly", "0 2 * * *", ScheduledTask("mail.send", {}))],
+        )
+        await queue.send_signal(missing, "approval", {}, idempotency_key="k", requested_by="api")
+        await queue.complete_human_wait(
+            missing, "review", {}, idempotency_key="k", requested_by="api"
+        )
+
+    assert _log_record("workhorse.task.enqueued")[2]["workhorse.task.id"] == accepted.task_id
+    assert _log_record("workhorse.task.cancellation_processed")[2] == {
+        "workhorse.task.id": missing,
+        "workhorse.task.state": "not_found",
+        "workhorse.operation.status": canceled.status,
+    }
+    assert _log_record("workhorse.schedules.synchronized")[2] == {
+        "workhorse.schedule.namespace": queue_name,
+        "workhorse.schedule.count": 1,
+    }
+    assert _log_records("workhorse.task.signal_processed")
+    assert _log_records("workhorse.task.human_wait_processed")
+
+
+def test_sync_schedules_logs_the_synchronization(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    namespace = _queue_name("schedules")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        Queue(connection, namespace).sync_schedules(
+            namespace,
+            [
+                ScheduleDefinition("nightly", "0 2 * * *", ScheduledTask("mail.send", {})),
+                ScheduleDefinition("hourly", "0 * * * *", ScheduledTask("mail.send", {})),
+            ],
+        )
+
+    assert _log_record("workhorse.schedules.synchronized") == (
+        "INFO",
+        "Recurring schedules synchronized",
+        {"workhorse.schedule.namespace": namespace, "workhorse.schedule.count": 2},
+    )
+
+
+def test_admin_logs_each_queue_and_redrive_operation(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("admin")
+    missing = str(uuid4())
+    audit = AdminAudit("python-test", "secret audit reason", f"request-{uuid4()}")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        Queue(connection, queue_name).enqueue("mail.send", {})
+        admin = Admin(connection)
+        admin.pause_queue(queue_name, audit)
+        admin.resume_queue(queue_name, AdminAudit("python-test", "resume", f"request-{uuid4()}"))
+        tier = admin.set_queue_tier(queue_name, "full", audit)
+        purged = admin.purge_queue(queue_name, AdminAudit("python-test", "purge", f"r-{uuid4()}"))
+        redrive = admin.redrive(missing, audit)
+        bulk = admin.redrive_many(
+            DeadLetterFilter(queue=queue_name), audit, BulkRedriveOptions(dry_run=True)
+        )
+        worker_pause = admin.set_worker_paused(f"missing-{uuid4()}", True, audit)
+
+    assert worker_pause is None
+    assert purged == 1
+    queue_attributes = {"workhorse.queue.name": queue_name}
+    assert _log_record("workhorse.queue.paused") == ("INFO", "Queue paused", queue_attributes)
+    assert _log_record("workhorse.queue.resumed") == ("INFO", "Queue resumed", queue_attributes)
+    assert _log_record("workhorse.queue.tier_set") == (
+        "INFO",
+        "Queue tier set",
+        {**queue_attributes, "workhorse.queue.tier": tier},
+    )
+    assert _log_record("workhorse.queue.purged") == (
+        "INFO",
+        "Queue purged",
+        {**queue_attributes, "workhorse.task.count": 1},
+    )
+    assert _log_record("workhorse.task.redrive_processed") == (
+        "INFO",
+        "Dead-letter task redrive processed",
+        {
+            "workhorse.task.id": missing,
+            "workhorse.redrive.target_task_id": "none",
+            "workhorse.operation.status": redrive.status,
+        },
+    )
+    assert _log_record("workhorse.tasks.redrive_processed") == (
+        "INFO",
+        "Dead-letter task redrive batch processed",
+        {"workhorse.task.count": len(bulk.results), "workhorse.redrive.dry_run": True},
+    )
+    # A pause request that finds no worker row writes no record, as in TypeScript.
+    assert _log_records("workhorse.worker.paused") == []
+
+
+def test_admin_logs_a_remote_worker_pause_and_resume(database_url: str) -> None:
+    worker_id = f"python-admin-pause-{uuid4().hex[:8]}"
+    errors: list[BaseException] = []
+    worker = Worker(
+        worker_pool,
+        queue=_queue_name("pause"),
+        worker_id=worker_id,
+        on_registration_error=errors.append,
+    )
+    # A run gives each registration its instance ID. This test registers outside a run.
+    worker._instance_id = str(uuid4())
+    worker._refresh_registration(force=True)
+    assert worker._registered, repr(errors)
+    LOG_EXPORTER.clear()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        admin = Admin(connection)
+        admin.set_worker_paused(worker_id, True, AdminAudit("python-test", "pause", "pause-1"))
+        admin.set_worker_paused(worker_id, False, AdminAudit("python-test", "resume", "resume-1"))
+    worker._deregister(deadline=monotonic() + 5)
+
+    assert _log_record("workhorse.worker.paused") == (
+        "INFO",
+        "Worker paused",
+        {"workhorse.worker.id": worker_id},
+    )
+    assert _log_record("workhorse.worker.resumed") == (
+        "INFO",
+        "Worker resumed",
+        {"workhorse.worker.id": worker_id},
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_admin_logs_the_same_events(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("async-admin")
+    missing = str(uuid4())
+    audit = AdminAudit("python-test", "async audit", f"request-{uuid4()}")
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as connection:
+        admin = AsyncAdmin.from_psycopg(connection)
+        await admin.pause_queue(queue_name, audit)
+        await admin.resume_queue(queue_name, AdminAudit("python-test", "r", f"r-{uuid4()}"))
+        await admin.set_queue_tier(queue_name, "full", audit)
+        await admin.purge_queue(queue_name, AdminAudit("python-test", "p", f"p-{uuid4()}"))
+        await admin.redrive(missing, audit)
+        await admin.redrive_many(DeadLetterFilter(queue=queue_name), audit)
+
+    for event_name in (
+        "workhorse.queue.paused",
+        "workhorse.queue.resumed",
+        "workhorse.queue.tier_set",
+        "workhorse.queue.purged",
+        "workhorse.task.redrive_processed",
+        "workhorse.tasks.redrive_processed",
+    ):
+        assert _log_record(event_name)[0] == "INFO"
+    assert _log_record("workhorse.tasks.redrive_processed")[2] == {
+        "workhorse.task.count": 0,
+        "workhorse.redrive.dry_run": False,
+    }
+
+
+class _RegistryExecutor:
+    """Answer the registration and the deregistration statements, with a pause flag to change."""
+
+    def __init__(self) -> None:
+        self.paused = False
+        self.fail = False
+        self.registrations = 0
+        self.routines: list[dict[str, object]] = []
+
+    def rows(self, statement: Any, _parameters: Any = ()) -> list[dict[str, object]]:
+        if statement is workhorse.worker._STATEMENTS.register_worker:
+            self.registrations += 1
+            if self.fail:
+                raise RuntimeError("never-log-this")
+            return [{"paused": self.paused}]
+        if statement is workhorse.worker._STATEMENTS.run_maintenance:
+            return self.routines
+        if statement is workhorse.worker._STATEMENTS.deregister_worker:
+            return [{"deregistered": True}]
+        raise AssertionError(f"unexpected statement {statement}")
+
+
+def _registry_worker(executor: _RegistryExecutor) -> Worker:
+    return Worker(
+        ScriptedPool(),  # type: ignore[arg-type]
+        queues=["mail", "billing"],
+        worker_id="python-registration-log",
+        concurrency=3,
+        registry_interval_ms=100,
+        _executor=executor,  # type: ignore[arg-type]
+    )
+
+
+def test_an_unchanged_worker_registration_does_not_log_at_every_refresh() -> None:
+    LOG_EXPORTER.clear()
+    executor = _RegistryExecutor()
+    worker = _registry_worker(executor)
+
+    for _ in range(3):
+        worker._refresh_registration(force=True)
+    assert executor.registrations == 3
+    executor.paused = True
+    worker._refresh_registration(force=True)
+    worker._refresh_registration(force=True)
+    worker._refresh_registration(force=True, draining=True)
+
+    base = {
+        "workhorse.worker.queues": ("mail", "billing"),
+        "workhorse.worker.id": "python-registration-log",
+        "workhorse.worker.concurrency": 3,
+        "workhorse.worker.active_slots": 0,
+    }
+    assert [
+        (record.severity_text, record.body, dict(record.attributes or {}))
+        for record in _log_records("workhorse.worker.registered")
+    ] == [
+        (
+            "DEBUG",
+            "Worker registration changed",
+            {**base, "workhorse.worker.draining": False, "workhorse.worker.paused": False},
+        ),
+        (
+            "DEBUG",
+            "Worker registration changed",
+            {**base, "workhorse.worker.draining": False, "workhorse.worker.paused": True},
+        ),
+        (
+            "DEBUG",
+            "Worker registration changed",
+            {**base, "workhorse.worker.draining": True, "workhorse.worker.paused": True},
+        ),
+    ]
+
+
+def test_a_failed_worker_registration_logs_the_queues_and_the_error_type() -> None:
+    executor = _RegistryExecutor()
+    executor.fail = True
+    worker = _registry_worker(executor)
+    LOG_EXPORTER.clear()
+
+    worker._refresh_registration(force=True)
+
+    assert _log_record("workhorse.worker.registration_failed") == (
+        "INFO",
+        "Worker registration failed",
+        {
+            "workhorse.worker.queues": ("mail", "billing"),
+            "workhorse.worker.id": "python-registration-log",
+            "error.type": "RuntimeError",
+        },
+    )
+    assert "never-log-this" not in str(LOG_EXPORTER.get_finished_logs())
+
+
+def test_a_remote_pause_and_resume_log_the_worker_queues() -> None:
+    executor = _RegistryExecutor()
+    worker = _registry_worker(executor)
+    worker._refresh_registration(force=True)
+    LOG_EXPORTER.clear()
+
+    executor.paused = True
+    worker._refresh_registration(force=True)
+    executor.paused = False
+    worker._refresh_registration(force=True)
+
+    attributes = {
+        "workhorse.worker.id": "python-registration-log",
+        "workhorse.worker.queues": ("mail", "billing"),
+    }
+    assert _log_record("workhorse.worker.paused") == ("INFO", "Worker paused remotely", attributes)
+    assert _log_record("workhorse.worker.resumed") == (
+        "INFO",
+        "Worker resumed remotely",
+        attributes,
+    )
+
+
+def test_the_background_routines_log_each_phase_that_changed_rows() -> None:
+    executor = _RegistryExecutor()
+    executor.routines = [
+        {
+            "phase": "history_retention",
+            "rows_affected": 4,
+            "duration_ms": 1,
+            "skipped_lock": False,
+            "error": None,
+        },
+        {
+            "phase": "stat_rollup",
+            "rows_affected": 0,
+            "duration_ms": 1,
+            "skipped_lock": False,
+            "error": None,
+        },
+        {
+            "phase": "terminal_storage",
+            "rows_affected": 0,
+            "duration_ms": 1,
+            "skipped_lock": False,
+            "error": "never-log-this",
+        },
+    ]
+    worker = _registry_worker(executor)
+    LOG_EXPORTER.clear()
+
+    worker._run_due_maintenance(monotonic(), tick_due=False, routines_due=True)
+
+    assert [
+        (record.severity_text, record.body, dict(record.attributes or {}))
+        for record in _log_records("workhorse.maintenance.completed")
+    ] == [
+        (
+            "INFO",
+            "Maintenance phase completed",
+            {
+                "workhorse.maintenance.operation": "background_routines",
+                "workhorse.maintenance.phase": phase,
+                "workhorse.maintenance.rows_affected": rows,
+                "workhorse.maintenance.skipped_lock": False,
+            },
+        )
+        for phase, rows in (("history_retention", 4), ("terminal_storage", 0))
+    ]
+    assert "never-log-this" not in str(LOG_EXPORTER.get_finished_logs())
+
+
+def test_a_worker_logs_its_deregistration() -> None:
+    executor = _RegistryExecutor()
+    worker = _registry_worker(executor)
+    worker._refresh_registration(force=True)
+    LOG_EXPORTER.clear()
+
+    worker._deregister(deadline=monotonic() + 5)
+
+    assert _log_record("workhorse.worker.deregistered") == (
+        "DEBUG",
+        "Worker deregistered",
+        {"workhorse.worker.id": "python-registration-log", "workhorse.worker.deregistered": True},
+    )
+
+
+def test_a_worker_without_a_notification_listener_warns_that_it_polls(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    worker = Worker(
+        worker_pool,
+        queue=_queue_name("polling"),
+        worker_id="python-polling-only",
+        poll_ms=10,
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
+    )
+    worker._hub_source = lambda: (None, lambda: None)
+    running = threading.Thread(target=worker.run, daemon=True)
+    running.start()
+    try:
+        eventually(
+            lambda: bool(_log_records("workhorse.worker.polling_only")),
+            "the worker never logged that it polls",
+        )
+    finally:
+        worker.stop()
+        running.join(10)
+    assert not running.is_alive()
+
+    assert _log_record("workhorse.worker.polling_only") == (
+        "WARN",
+        "Worker has no notification listener and dispatches by polling",
+        {
+            "workhorse.worker.queues": (worker.queues[0],),
+            "workhorse.worker.id": "python-polling-only",
+            "workhorse.worker.pool_max_size": 3,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_async_worker_without_a_listener_subscription_warns_that_it_polls() -> None:
+    LOG_EXPORTER.clear()
+    worker = AsyncWorker.from_psycopg(ScriptedPool(), queue="async-polling", worker_id="async-poll")  # type: ignore[arg-type]
+    worker._start_run()
+    try:
+        worker._wants_listener = True
+        # A run with no hub, or whose subscription does not finish in time, has no listener.
+        await asyncio.to_thread(worker._subscribe_listener)
+    finally:
+        worker._threads.close()
+        worker._running = False
+
+    assert _log_record("workhorse.worker.polling_only") == (
+        "WARN",
+        "Worker has no notification listener and dispatches by polling",
+        {
+            "workhorse.worker.queues": ("async-polling",),
+            "workhorse.worker.id": "async-poll",
+            "workhorse.worker.pool_max_size": 10,
+        },
+    )
+
+
+def test_a_failed_run_writes_no_stop_record(database_url: str) -> None:
+    """As in TypeScript, a run that ends with an error writes no workhorse.worker.stopped."""
+    LOG_EXPORTER.clear()
+    worker = Worker(
+        worker_pool,
+        queue=_queue_name("failed-run"),
+        worker_id="python-failed-run",
+        poll_ms=10,
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
+    )
+    worker._hub_source = lambda: (None, lambda: None)
+
+    def fail(_slots: object) -> float:
+        raise RuntimeError("loop failure")
+
+    worker._dispatch_wait_seconds = fail  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="loop failure"):
+        worker.run()
+    assert _log_records("workhorse.worker.started")
+    assert not _log_records("workhorse.worker.stopped")
+
+
+def test_only_a_run_writes_the_start_and_stop_records(database_url: str) -> None:
+    LOG_EXPORTER.clear()
+    worker = Worker(
+        worker_pool,
+        queue=_queue_name("lifecycle"),
+        worker_id="python-lifecycle",
+        poll_ms=10,
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
+    )
+    worker._hub_source = lambda: (None, lambda: None)
+    assert worker.run_once() is False
+    assert not _log_records("workhorse.worker.started")
+    assert not _log_records("workhorse.worker.stopped")
+
+    running = threading.Thread(target=worker.run, daemon=True)
+    running.start()
+    try:
+        eventually(
+            lambda: bool(_log_records("workhorse.worker.started")),
+            "the run never logged its start",
+        )
+    finally:
+        worker.stop()
+        running.join(10)
+    assert not running.is_alive()
+
+    assert _log_record("workhorse.worker.started") == (
+        "INFO",
+        "Worker started",
+        {
+            "workhorse.worker.id": "python-lifecycle",
+            "workhorse.worker.concurrency": worker.concurrency,
+            "workhorse.worker.queues": (worker.queues[0],),
+        },
+    )
+    assert _log_record("workhorse.worker.stopped") == (
+        "INFO",
+        "Worker stopped",
+        {
+            "workhorse.worker.id": "python-lifecycle",
+            "workhorse.worker.active_slots": 0,
+            "workhorse.worker.queues": (worker.queues[0],),
+        },
+    )
+
+
+def test_a_failed_settlement_writes_no_execution_record(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TypeScript writes task.execution_finished only for a known outcome, so no SDK writes unknown."""
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name("settlement")
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, queue_name).enqueue("settlement.fails", {})
+        connection.commit()
+    send = workhorse.worker._fenced_write_rows
+
+    def fenced_write_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+        if statement is workhorse.worker._STATEMENTS.fail:
+            raise psycopg.OperationalError("the settlement failed")
+        return send(executor, statement, parameters)
+
+    monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", fenced_write_rows)
+
+    def fail(_payload: object, _context: HandlerContext) -> None:
+        raise RuntimeError("the handler failed")
+
+    worker = Worker(worker_pool, queue=queue_name, worker_id="python-failed-settlement")
+    worker.handle("settlement.fails", fail)
+    with suppress(Exception):
+        worker.run_once()
+
+    finished = [
+        record
+        for record in _log_records("workhorse.handler.finished")
+        if record.attributes["workhorse.task.id"] == task_id
+    ]
+    assert len(finished) == 1
+    assert not [
+        record
+        for record in _log_records("workhorse.task.execution_finished")
+        if record.attributes["workhorse.task.id"] == task_id
+    ]
+
+
+@pytest.mark.parametrize("acknowledgement", ["fails", "refused"])
+def test_an_unacknowledged_cancellation_writes_no_execution_record(
+    database_url: str, monkeypatch: pytest.MonkeyPatch, acknowledgement: str
+) -> None:
+    """TypeScript writes the canceled outcome only after PostgreSQL accepts the acknowledgement.
+
+    The heartbeat submits the cancellation first. If acknowledge_cancel_v1 then fails or refuses,
+    the worker settled nothing, so it writes no task.execution_finished record.
+    """
+    LOG_EXPORTER.clear()
+    queue_name = _queue_name(f"cancel-{acknowledgement}")
+    with psycopg.connect(database_url) as connection:
+        task_id = Queue(connection, queue_name).enqueue("cancel.unacknowledged", {})
+        connection.commit()
+    send = workhorse.worker._fenced_write_rows
+
+    def fenced_write_rows(executor: Any, statement: Any, parameters: Any) -> Any:
+        if statement is workhorse.worker._STATEMENTS.acknowledge_cancel:
+            if acknowledgement == "fails":
+                raise psycopg.OperationalError("the acknowledgement failed")
+            return [{"accepted": False}]
+        return send(executor, statement, parameters)
+
+    monkeypatch.setattr(workhorse.worker, "_fenced_write_rows", fenced_write_rows)
+
+    def handle(_payload: object, context: HandlerContext) -> None:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            Queue(connection, queue_name).cancel(task_id, requested_by="api")
+        eventually(
+            lambda: context.cancellation.cancelled,
+            "the heartbeat never delivered the cancellation",
+            timeout_s=10,
+        )
+        raise RuntimeError("the handler stopped for the cancellation")
+
+    worker = Worker(
+        worker_pool,
+        queue=queue_name,
+        worker_id=f"python-cancel-{acknowledgement}",
+        lease_ms=3_000,
+        heartbeat_ms=100,
+    )
+    worker.handle("cancel.unacknowledged", handle)
+    with suppress(Exception):
+        worker.run_once()
+
+    assert [
+        record
+        for record in _log_records("workhorse.handler.finished")
+        if record.attributes["workhorse.task.id"] == task_id
+    ]
+    assert not [
+        record
+        for record in _log_records("workhorse.task.execution_finished")
+        if record.attributes["workhorse.task.id"] == task_id
+    ]
+
+
+def test_a_run_writes_its_start_record_before_readiness_and_registration(
+    database_url: str,
+) -> None:
+    """As in TypeScript, run() writes workhorse.worker.started first.
+
+    A failed readiness check thus still has a start record, and the first registration record
+    comes after the start record.
+    """
+    LOG_EXPORTER.clear()
+    failing = Worker(
+        worker_pool,
+        queue=_queue_name("readiness"),
+        worker_id="python-readiness-fails",
+        poll_ms=10,
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
+    )
+
+    def refuse() -> Any:
+        raise TimeoutError("the worker could not reserve its heartbeat connection")
+
+    failing._start_connections = refuse  # type: ignore[method-assign]
+    with pytest.raises(TimeoutError):
+        failing.run()
+    assert [
+        record.attributes["workhorse.worker.id"]
+        for record in _log_records("workhorse.worker.started")
+    ] == ["python-readiness-fails"]
+    assert not _log_records("workhorse.worker.stopped")
+
+    LOG_EXPORTER.clear()
+    worker = Worker(
+        worker_pool,
+        queue=_queue_name("start-order"),
+        worker_id="python-start-order",
+        poll_ms=10,
+        _heartbeat_executor_factory=ScriptedHeartbeats().open,
+    )
+    worker._hub_source = lambda: (None, lambda: None)
+    running = threading.Thread(target=worker.run, daemon=True)
+    running.start()
+    try:
+        eventually(
+            lambda: bool(_log_records("workhorse.worker.registered")),
+            "the run never logged its registration",
+        )
+    finally:
+        worker.stop()
+        running.join(10)
+    assert not running.is_alive()
+    names = [
+        record.log_record.event_name
+        for record in LOG_EXPORTER.get_finished_logs()
+        if record.log_record.event_name
+        in {"workhorse.worker.started", "workhorse.worker.registered"}
+    ]
+    assert names[:2] == ["workhorse.worker.started", "workhorse.worker.registered"]
+
+
+class _FailingLogger:
+    """An OpenTelemetry logger that is enabled and raises for each record."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def enabled(self, **_kwargs: object) -> bool:
+        return True
+
+    def emit(self, *_args: object, **_kwargs: object) -> None:
+        self.calls += 1
+        raise RuntimeError("the logger failed")
+
+
+class _DisabledLogger:
+    """An OpenTelemetry logger that is disabled and counts each record that it gets."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def enabled(self, **_kwargs: object) -> bool:
+        return False
+
+    def emit(self, *_args: object, **_kwargs: object) -> None:
+        self.calls += 1
+
+
+def test_a_failing_logger_does_not_change_a_queue_or_worker_result(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger = _FailingLogger()
+    monkeypatch.setattr(workhorse._telemetry, "_LOGGER", logger)
+    queue_name = _queue_name("failing-logger")
+    with psycopg.connect(database_url) as connection:
+        queue = Queue(connection, queue_name)
+        canceled = queue.enqueue("logger.fails", {})
+        assert queue.cancel(canceled).status == "canceled"
+        handled = queue.enqueue("logger.fails", {})
+        connection.commit()
+
+    ran: list[str] = []
+    worker = Worker(worker_pool, queue=queue_name, worker_id="python-failing-logger")
+    worker.handle("logger.fails", lambda _payload, context: ran.append(context.task.id))
+    assert worker.run_once() is True
+
+    assert ran == [handled]
+    assert logger.calls > 0
+
+
+def test_a_disabled_logger_gets_no_record_from_the_queue(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logger = _DisabledLogger()
+    monkeypatch.setattr(workhorse._telemetry, "_LOGGER", logger)
+    with psycopg.connect(database_url) as connection:
+        queue = Queue(connection, _queue_name("disabled-logger"))
+        task_id = queue.enqueue("logger.disabled", {})
+        assert queue.cancel(task_id).status == "canceled"
+        queue.sync_schedules("disabled-logger", [])
+        connection.commit()
+
+    assert logger.calls == 0

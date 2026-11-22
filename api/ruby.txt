@@ -19,7 +19,7 @@ class Stablemates::Workhorse::ActiveRecordExecutor
   def with
 
 class Stablemates::Workhorse::Admin
-  def initialize(executor)
+  def initialize(executor, logger: nil)
   def assert_compatible
   def cancel_task_group(group_id, audit:)
   def get_checkpoint(task_id, name)
@@ -172,7 +172,7 @@ class Stablemates::Workhorse::ContractValidationError
 
 class Stablemates::Workhorse::Dashboard
   DEFAULT_STATEMENT_TIMEOUT_MS = 15000
-  def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil, read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil, enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {}, statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS, redact_error_stacks: false)
+  def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil, read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil, enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {}, statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS, redact_error_stacks: false, logger: nil)
   def base_path
   def call(env)
   def owns?(path)
@@ -332,7 +332,7 @@ class Stablemates::Workhorse::PurgeIdempotencyConflictError
   def initialize(details)
 
 class Stablemates::Workhorse::Queue
-  def initialize(executor, default_queue: "default")
+  def initialize(executor, default_queue: "default", logger: nil)
   def add_to_task_group(group_id, requests)
   def assert_compatible
   def cancel(task_id, requested_by:, reason: nil)

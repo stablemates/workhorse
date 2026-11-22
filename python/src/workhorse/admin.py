@@ -37,6 +37,7 @@ from ._task_groups import (
     optional_task_group as _optional_task_group,
     repairs as _repairs,
 )
+from ._telemetry import emit_log as _emit_log
 from .errors import (
     PurgeIdempotencyConflictError,
     RedriveIdempotencyConflictError,
@@ -464,13 +465,14 @@ class Admin(_AdminOperations):
         _assert_sync_compatible(self._executor)
         _validate_audit(audit)
         try:
-            return _redrive_result(
+            return _redriven(
+                source_task_id,
                 _one(
                     self._sync_rows(
                         _REDRIVE, (source_task_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
-                )
+                ),
             )
         except Exception as error:
             _raise_admin_error(error)
@@ -485,8 +487,9 @@ class Admin(_AdminOperations):
         _validate_audit(audit)
         value = options or BulkRedriveOptions()
         try:
-            return _bulk_redrive_page(
-                self._sync_rows(_REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value))
+            return _bulk_redriven(
+                self._sync_rows(_REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value)),
+                value.dry_run,
             )
         except Exception as error:
             _raise_admin_error(error)
@@ -542,7 +545,7 @@ class Admin(_AdminOperations):
         rows = self._sync_rows(
             _SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
         )
-        return None if not rows else _worker_pause(rows[0])
+        return _worker_paused(worker_id, paused, rows)
 
     def pause_queue(self, queue_name: str, audit: AdminAudit) -> None:
         self._set_queue_paused(queue_name, True, audit)
@@ -556,6 +559,7 @@ class Admin(_AdminOperations):
         self._sync_rows(
             _SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
         )
+        _log_queue_paused(queue_name, paused)
 
     def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
         """Purge the queue, and return how many tasks the purge deleted or canceled.
@@ -577,7 +581,7 @@ class Admin(_AdminOperations):
                 ),
                 "workhorse.purge_queue_v1",
             )
-            return int(cast(int | str, row["deleted_count"]))
+            return _purged(queue_name, int(cast(int | str, row["deleted_count"])))
         except Exception as error:
             _raise_admin_error(error)
 
@@ -590,7 +594,7 @@ class Admin(_AdminOperations):
                 self._sync_rows(_SET_QUEUE_TIER, (queue_name, tier, audit.actor, audit.reason)),
                 "workhorse.set_queue_tier_v1",
             )
-            return cast(QueueTier, row["tier"])
+            return _tier_set(queue_name, cast(QueueTier, row["tier"]))
         except Exception as error:
             _raise_admin_error(error)
 
@@ -730,13 +734,14 @@ class AsyncAdmin(_AdminOperations):
         await _assert_async_compatible(self._executor)
         _validate_audit(audit)
         try:
-            return _redrive_result(
+            return _redriven(
+                source_task_id,
                 _one(
                     await self._async_rows(
                         _REDRIVE, (source_task_id, audit.actor, audit.reason, audit.request_id)
                     ),
                     "workhorse.redrive_v1",
-                )
+                ),
             )
         except Exception as error:
             _raise_admin_error(error)
@@ -748,10 +753,11 @@ class AsyncAdmin(_AdminOperations):
         _validate_audit(audit)
         value = options or BulkRedriveOptions()
         try:
-            return _bulk_redrive_page(
+            return _bulk_redriven(
                 await self._async_rows(
                     _REDRIVE_MANY, _bulk_redrive_parameters(filter, audit, value)
-                )
+                ),
+                value.dry_run,
             )
         except Exception as error:
             _raise_admin_error(error)
@@ -809,7 +815,7 @@ class AsyncAdmin(_AdminOperations):
         rows = await self._async_rows(
             _SET_WORKER_PAUSED, (worker_id, paused, audit.actor, audit.reason, audit.request_id)
         )
-        return None if not rows else _worker_pause(rows[0])
+        return _worker_paused(worker_id, paused, rows)
 
     async def pause_queue(self, queue_name: str, audit: AdminAudit) -> None:
         await self._set_queue_paused(queue_name, True, audit)
@@ -823,6 +829,7 @@ class AsyncAdmin(_AdminOperations):
         await self._async_rows(
             _SET_QUEUE_PAUSED, (queue_name, paused, audit.actor, audit.reason, audit.request_id)
         )
+        _log_queue_paused(queue_name, paused)
 
     async def purge_queue(self, queue_name: str, audit: AdminAudit) -> int:
         """Purge the queue, and return how many tasks the purge deleted or canceled.
@@ -844,7 +851,7 @@ class AsyncAdmin(_AdminOperations):
                 ),
                 "workhorse.purge_queue_v1",
             )
-            return int(cast(int | str, row["deleted_count"]))
+            return _purged(queue_name, int(cast(int | str, row["deleted_count"])))
         except Exception as error:
             _raise_admin_error(error)
 
@@ -861,7 +868,7 @@ class AsyncAdmin(_AdminOperations):
                 ),
                 "workhorse.set_queue_tier_v1",
             )
-            return cast(QueueTier, row["tier"])
+            return _tier_set(queue_name, cast(QueueTier, row["tier"]))
         except Exception as error:
             _raise_admin_error(error)
 
@@ -1316,6 +1323,32 @@ def _bulk_redrive_parameters(
     )
 
 
+def _redriven(source_task_id: str, row: _Row) -> RedriveResult:
+    result = _redrive_result(row)
+    _emit_log(
+        "INFO",
+        "workhorse.task.redrive_processed",
+        "Dead-letter task redrive processed",
+        {
+            "workhorse.task.id": source_task_id,
+            "workhorse.redrive.target_task_id": result.target_task_id or "none",
+            "workhorse.operation.status": result.status,
+        },
+    )
+    return result
+
+
+def _bulk_redriven(rows: list[_Row], dry_run: bool) -> BulkRedrivePage:
+    page = _bulk_redrive_page(rows)
+    _emit_log(
+        "INFO",
+        "workhorse.tasks.redrive_processed",
+        "Dead-letter task redrive batch processed",
+        {"workhorse.task.count": len(rows), "workhorse.redrive.dry_run": dry_run},
+    )
+    return page
+
+
 def _bulk_redrive_page(rows: list[_Row]) -> BulkRedrivePage:
     last = rows[-1] if rows else None
     cursor = (
@@ -1418,6 +1451,49 @@ def _human_wait_page(rows: list[_Row], limit: int) -> HumanWaitPage:
         ),
         cursor,
     )
+
+
+def _worker_paused(worker_id: str, paused: bool, rows: list[_Row]) -> WorkerPauseResult | None:
+    """Read the pause result. A request that finds no worker row writes no log record."""
+    if not rows:
+        return None
+    result = _worker_pause(rows[0])
+    _emit_log(
+        "INFO",
+        "workhorse.worker.paused" if paused else "workhorse.worker.resumed",
+        "Worker paused" if paused else "Worker resumed",
+        {"workhorse.worker.id": worker_id},
+    )
+    return result
+
+
+def _log_queue_paused(queue_name: str, paused: bool) -> None:
+    _emit_log(
+        "INFO",
+        "workhorse.queue.paused" if paused else "workhorse.queue.resumed",
+        "Queue paused" if paused else "Queue resumed",
+        {"workhorse.queue.name": queue_name},
+    )
+
+
+def _purged(queue_name: str, count: int) -> int:
+    _emit_log(
+        "INFO",
+        "workhorse.queue.purged",
+        "Queue purged",
+        {"workhorse.queue.name": queue_name, "workhorse.task.count": count},
+    )
+    return count
+
+
+def _tier_set(queue_name: str, tier: QueueTier) -> QueueTier:
+    _emit_log(
+        "INFO",
+        "workhorse.queue.tier_set",
+        "Queue tier set",
+        {"workhorse.queue.name": queue_name, "workhorse.queue.tier": tier},
+    )
+    return tier
 
 
 def _worker_pause(row: _Row) -> WorkerPauseResult:

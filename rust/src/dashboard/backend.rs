@@ -512,6 +512,12 @@ impl<E: Executor> Backend<E> {
         let rows = self.rows(sql::CANCEL_V1, &[&id, &actor, &reason]).await?;
         let row = exactly_one(&rows, "cancel_v1")?;
         let status: String = column(row, "status")?;
+        // The queue writes this record, so a dashboard action writes it too.
+        crate::queue::log_cancellation_processed(
+            id,
+            column::<Option<String>>(row, "state")?.as_deref(),
+            &status,
+        );
         if status == "not_found" {
             return Err(RpcError::not_found("Task not found").into());
         }
@@ -556,6 +562,15 @@ impl<E: Executor> Backend<E> {
         let rows = self.rows(statement, &[&id, &name, &document, &key, &actor]).await?;
         let row = rows.first().ok_or_else(|| Error::invalid("delivery returned no row"))?;
         let status: String = column(row, "status")?;
+        // The queue writes these records for each answer but a conflict, so a dashboard action
+        // writes them too.
+        if status != "conflict" {
+            let name = name.unwrap_or_default();
+            match delivery {
+                Delivery::Signal => crate::queue::log_signal_processed(id, name, &status),
+                Delivery::HumanWait => crate::queue::log_human_wait_processed(id, name, &status),
+            }
+        }
         if status == "not_found" {
             return Err(RpcError::not_found("Task not found").into());
         }

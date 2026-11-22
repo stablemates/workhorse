@@ -49,7 +49,7 @@ RSpec.describe "A logger that raises" do
   it "reports its first failure on standard error without calling it again" do
     expect do
       2.times { W::Telemetry.log(logger, :info, "workhorse.test.event", "Test event") }
-    end.to output("workhorse: logger raised IOError while logging workhorse.test.event: formatter broke\n").to_stderr
+    end.to output("workhorse: logger raised IOError while logging workhorse.test.event\n").to_stderr
     expect(logger).to have_received(:add).twice
   end
 end

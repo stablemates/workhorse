@@ -8,6 +8,74 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A logger failure no longer changes an operation result
+
+A log record observes an operation, so it must not change the operation. Before this change, an
+OpenTelemetry logger that raised in `emit` replaced the result of the operation with that error.
+For example, `Queue.cancel` committed the cancel and then raised. `emit_log` now stops the error,
+and the record is lost.
+
+- The queue now checks `Logger.enabled` before it builds the attributes of a record. A disabled
+  logger costs no work.
+- `Worker.run_once` no longer writes `workhorse.worker.started` and `workhorse.worker.stopped`. A
+  one-pass call is not a run, and the TypeScript `runOnce()` writes neither record.
+- A run that ends with an error, such as an incomplete stop, no longer writes
+  `workhorse.worker.stopped`, as in TypeScript.
+- If the settlement of an attempt fails, the worker no longer writes
+  `workhorse.task.execution_finished` with the outcome `unknown`. The TypeScript worker writes no
+  execution record for that attempt. The worker still writes `workhorse.handler.finished`.
+- If a heartbeat delivers a cancellation and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
+  it, the worker no longer writes `workhorse.task.execution_finished` with the outcome `canceled`.
+  The attempt settled nothing, so the handler metrics record the outcome `unknown`. The TypeScript
+  worker writes the `canceled` record only after PostgreSQL accepts the acknowledgement.
+- `Worker.run` now writes `workhorse.worker.started` first, before the readiness check and before the
+  first `workhorse.worker.registered`, as in TypeScript. A run that fails its readiness check thus
+  has a start record.
+
+### The worker log records match the TypeScript records
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. An audit compared each Python record with the TypeScript record.
+
+- `workhorse.worker.registration_failed` and the remote `workhorse.worker.paused` and
+  `workhorse.worker.resumed` records now carry `workhorse.worker.queues`.
+- The worker now writes `workhorse.maintenance.completed` for each phase of the background
+  routines that changes rows or returns an error, with the operation `background_routines`. The
+  record no longer carries `error.type` `PostgreSQLError`.
+- The body of `workhorse.handler.signal_swallowed` is now `Task handler swallowed its abort signal`.
+- The dashboard now writes `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, and `workhorse.task.human_wait_processed` for its actions, as
+  the queue does.
+
+### The worker writes the log events of the TypeScript worker
+
+The Python SDK now writes these log events with the name, severity, body, and attributes of the
+TypeScript SDK:
+
+- `Queue` and `AsyncQueue`: `workhorse.task.enqueued`, `workhorse.task.enqueue_replayed`,
+  `workhorse.task.debounced`, `workhorse.task.debounce_rejected`, and `workhorse.task.throttled`
+  for each enqueue result. A task group writes them for its member tasks only.
+- `Queue` and `AsyncQueue`: `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, `workhorse.task.human_wait_processed`, and
+  `workhorse.schedules.synchronized`.
+- `Admin` and `AsyncAdmin`: `workhorse.queue.paused`, `workhorse.queue.resumed`,
+  `workhorse.queue.tier_set`, `workhorse.queue.purged`, `workhorse.task.redrive_processed`, and
+  `workhorse.tasks.redrive_processed`. If `set_worker_paused` finds the worker, it writes
+  `workhorse.worker.paused` or `workhorse.worker.resumed`.
+- `Worker` and `AsyncWorker`: `workhorse.worker.deregistered` when a run removes its registry row,
+  and `workhorse.worker.polling_only` when a run has no notification listener.
+
+`workhorse.worker.registered` no longer occurs at each registration refresh. The worker writes it
+after the first registration of a run, and when the active slots, the draining state, or the pause
+state changes. Its body is now "Worker registration changed", and it also has the
+`workhorse.worker.queues` and `workhorse.worker.concurrency` attributes. The records contain no
+payloads, results, error messages, or idempotency keys.
+
+The Python SDK has no `promote` or `prune_worker_registry` method, so it does not write
+`workhorse.tasks.promoted` or `workhorse.worker_registry.pruned`.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

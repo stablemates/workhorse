@@ -188,6 +188,7 @@ public final class Queue {
               requests,
               document -> Sql.rows(call.connection, SqlCatalogue.ENQUEUE_MANY_V1, document));
       List<EnqueueResult> results = enqueueResults(rows, requests.size());
+      logEnqueued(rows, requests);
       if (results.size() == 1) {
         span.setAttribute(Names.TASK_ID, results.get(0).taskId());
         span.setAttribute(
@@ -206,11 +207,51 @@ public final class Queue {
     List<String> queues = new ArrayList<>();
     List<String> taskTypes = new ArrayList<>();
     for (EnqueueRequest request : requests) {
-      String named = request.options().queue();
-      queues.add(named == null || named.isEmpty() ? defaultQueue : named);
+      queues.add(queueOf(request));
       taskTypes.add(request.taskType());
     }
     return Names.enqueue(queues, taskTypes);
+  }
+
+  private String queueOf(EnqueueRequest request) {
+    String named = request.options().queue();
+    return named == null || named.isEmpty() ? defaultQueue : named;
+  }
+
+  /**
+   * Emits the debug log record of each enqueue outcome, as the TypeScript queue does for every
+   * enqueue and every task group member. The queue writes it only to OpenTelemetry. It never
+   * carries the payload or the idempotency key.
+   */
+  private void logEnqueued(List<Row> rows, List<EnqueueRequest> requests) {
+    if (!telemetry.logEnabled(Telemetry.Severity.DEBUG)) {
+      return;
+    }
+    for (Row row : rows) {
+      EnqueueRequest request = requests.get((int) row.requiredLong("ordinal") - 1);
+      EnqueueOutcome outcome = enqueueResult(row).outcome();
+      String event =
+          switch (outcome) {
+            case ACCEPTED -> "workhorse.task.enqueued";
+            case REPLAYED -> "workhorse.task.enqueue_replayed";
+            case REPLACED -> "workhorse.task.debounced";
+            case NON_REPLACEABLE -> "workhorse.task.debounce_rejected";
+            case COALESCED -> "workhorse.task.throttled";
+          };
+      String body =
+          switch (outcome) {
+            case ACCEPTED -> "Task enqueued";
+            case REPLAYED -> "Idempotent enqueue replayed";
+            case REPLACED -> "Pending task replaced";
+            case NON_REPLACEABLE -> "Debounced task not replaceable";
+            case COALESCED -> "Throttled enqueue coalesced";
+          };
+      Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+      attributes.put(Names.TASK_ID, row.requiredUuid("task_id").toString());
+      attributes.put(Names.TASK_TYPE, request.taskType());
+      attributes.put(Names.QUEUE_NAME, queueOf(request));
+      telemetry.log(Telemetry.Severity.DEBUG, event, body, attributes);
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -421,7 +462,9 @@ public final class Queue {
         members.add(row);
       }
     }
-    return new TaskGroupBlockResult(group, enqueueResults(members, requests.size()));
+    List<EnqueueResult> results = enqueueResults(members, requests.size());
+    logEnqueued(members, requests);
+    return new TaskGroupBlockResult(group, results);
   }
 
   private static Map<TaskGroupCallbackKind, EnqueueRequest> callbackEntries(
@@ -496,7 +539,9 @@ public final class Queue {
                     member.get(0),
                     member.get(1),
                     member.get(2)));
-    return enqueueResults(rows, requests.size());
+    List<EnqueueResult> results = enqueueResults(rows, requests.size());
+    logEnqueued(rows, requests);
+    return results;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -687,8 +732,21 @@ public final class Queue {
                 call.connection, SqlCatalogue.CANCEL_V1, taskId.toString(), requestedBy, reason),
             "cancel_v1");
     String state = row.text("state");
+    CancelStatus status = Rows.constant(CancelStatus.class, "cancel", row.requiredText("status"));
+    if (telemetry.logEnabled(Telemetry.Severity.INFO)) {
+      Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+      attributes.put(Names.TASK_ID, taskId.toString());
+      attributes.put(Names.TASK_STATE, state == null ? "not_found" : state);
+      attributes.put(Names.OPERATION_STATUS, row.requiredText("status"));
+      // The record never carries the requester or the reason.
+      telemetry.log(
+          Telemetry.Severity.INFO,
+          "workhorse.task.cancellation_processed",
+          "Task cancellation processed",
+          attributes);
+    }
     return new CancelResult(
-        Rows.constant(CancelStatus.class, "cancel", row.requiredText("status")),
+        status,
         taskId,
         state == null ? null : Rows.constant(TaskState.class, "cancel", state),
         row.integer("current_attempt"),
@@ -889,6 +947,9 @@ public final class Queue {
       String name,
       String statusKey,
       @Nullable String status) {
+    if (!telemetry.logEnabled(Telemetry.Severity.INFO)) {
+      return;
+    }
     Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
     attributes.put(Names.TASK_ID, taskId.toString());
     attributes.put(nameKey, name);
@@ -982,6 +1043,16 @@ public final class Queue {
         namespace,
         Json.write(document),
         Boolean.toString(prune));
+    if (telemetry.logEnabled(Telemetry.Severity.INFO)) {
+      Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+      attributes.put(Names.SCHEDULE_NAMESPACE, namespace);
+      attributes.put(Names.SCHEDULE_COUNT, (long) schedules.size());
+      telemetry.log(
+          Telemetry.Severity.INFO,
+          "workhorse.schedules.synchronized",
+          "Recurring schedules synchronized",
+          attributes);
+    }
     return null;
   }
 
@@ -1980,11 +2051,18 @@ public final class Queue {
     try {
       connections.release(connection, transactional);
     } catch (SQLException | RuntimeException error) {
-      LOGGER.log(
-          System.Logger.Level.WARNING,
-          "Connection release failed after a successful call {event.name="
-              + "workhorse.connection.release_failed}",
-          error);
+      // The record names the error type only, because a driver message can hold a host or a
+      // value. A logger that throws must not turn the committed call into a failure.
+      try {
+        LOGGER.log(
+            System.Logger.Level.WARNING,
+            "Connection release failed after a successful call {event.name="
+                + "workhorse.connection.release_failed, error.type="
+                + error.getClass().getName()
+                + "}");
+      } catch (RuntimeException ignored) {
+        // The logger failed.
+      }
     }
     return result;
   }

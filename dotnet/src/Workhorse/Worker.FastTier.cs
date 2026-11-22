@@ -538,6 +538,7 @@ public sealed partial class Worker
         if (sentLimit > 0)
         {
             WorkerTelemetry.Claimed(null, queue, probedAt, claimed, 0, static entry => entry.Task, fullTier: false);
+            LogClaims(claimed, 0, queue);
         }
 
         // Claimed tasks go to the completions in order, each up to the slots that it reserved. A claim

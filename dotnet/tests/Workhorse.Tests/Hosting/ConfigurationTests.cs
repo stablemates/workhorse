@@ -187,7 +187,7 @@ public sealed class ConfigurationTests(ScratchDatabase database) : IClassFixture
             .Where(key => !keys.Contains(key))
             .ToList();
         Assert.Equal(
-            ["Workhorse:Queue:Json", "Workhorse:Worker:Json", "Workhorse:Worker:LoggerFactory", "Workhorse:Worker:RetryDelay"],
+            ["Workhorse:Queue:Json", "Workhorse:Queue:LoggerFactory", "Workhorse:Worker:Json", "Workhorse:Worker:LoggerFactory", "Workhorse:Worker:RetryDelay"],
             unlisted.Order(StringComparer.Ordinal));
         foreach (var key in unlisted)
         {

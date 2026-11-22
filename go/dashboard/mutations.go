@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -187,6 +188,13 @@ func (service *backend) cancelTask(ctx context.Context, input any, actor string)
 		return nil, err
 	}
 	row := rows[0]
+	state := row["state"]
+	if state == nil {
+		state = "not_found"
+	}
+	logOperation(ctx, "workhorse.task.cancellation_processed", "Task cancellation processed",
+		slog.Any("workhorse.task.id", value["id"]), slog.Any("workhorse.task.state", state),
+		slog.Any("workhorse.operation.status", row["status"]))
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
@@ -314,6 +322,11 @@ func (service *backend) signalTask(ctx context.Context, input any, actor string)
 		return nil, err
 	}
 	row := rows[0]
+	if row["status"] != "conflict" {
+		logOperation(ctx, "workhorse.task.signal_processed", "Task signal processed",
+			slog.Any("workhorse.task.id", value["id"]), slog.Any("workhorse.signal.name", value["name"]),
+			slog.Any("workhorse.signal.status", row["status"]))
+	}
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
@@ -332,6 +345,11 @@ func (service *backend) completeHumanWait(ctx context.Context, input any, actor 
 		return nil, err
 	}
 	row := rows[0]
+	if row["status"] != "conflict" {
+		logOperation(ctx, "workhorse.task.human_wait_processed", "Human wait completion processed",
+			slog.Any("workhorse.task.id", value["id"]), slog.Any("workhorse.human_wait.name", value["name"]),
+			slog.Any("workhorse.human_wait.status", row["status"]))
+	}
 	if row["status"] == "not_found" {
 		return nil, &RPCError{Status: 404, Code: "NOT_FOUND", Message: "Task not found"}
 	}
@@ -340,4 +358,17 @@ func (service *backend) completeHumanWait(ctx context.Context, input any, actor 
 		return nil, err
 	}
 	return map[string]any{"status": row["status"], "taskId": value["id"], "name": value["name"], "result": decision, "completedAt": timestamp(row["completed_at"]), "completedBy": row["completed_by"]}, nil
+}
+
+// logOperation writes the info record that the queue writes for the same operation. The dashboard
+// runs the cancel and delivery statements itself, so without it a dashboard action writes no
+// record. It uses slog.Default(), as the host error records of the dashboard do. A logger that
+// panics does not change the result of the operation.
+func logOperation(ctx context.Context, event, message string, attributes ...slog.Attr) {
+	defer func() { _ = recover() }()
+	logger := slog.Default()
+	if !logger.Enabled(ctx, slog.LevelInfo) {
+		return
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, message, append([]slog.Attr{slog.String("event.name", event)}, attributes...)...)
 }

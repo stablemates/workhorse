@@ -115,10 +115,13 @@ module Stablemates
       # feed, and event detail, also from +details.error+ of a +failed+ or +retry_scheduled+ event.
       # The event search then does not match a withheld stack. A request cannot change it. The
       # default +false+ returns each error as stored.
+      #
+      # +logger+ receives the events of each control action, as the +logger:+ of Queue.new and
+      # Admin.new does. Without one, the dashboard writes no record.
       def initialize(executor, authorize:, path: "/workhorse", environment: "development", audit_actor: nil,
         read_only: false, browser_modules: [], configured_workers: [], maintenance_loops: nil,
         enqueue_test: nil, set_schedule_paused: nil, allowed_hosts: [], procedures: {},
-        statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS, redact_error_stacks: false)
+        statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS, redact_error_stacks: false, logger: nil)
         raise ArgumentError, "authorize must respond to call" unless authorize.respond_to?(:call)
         unless statement_timeout_ms.is_a?(Integer) && statement_timeout_ms.positive?
           raise ArgumentError, "statement_timeout_ms must be a positive Integer"
@@ -133,7 +136,7 @@ module Stablemates
         @browser_modules = browser_modules.dup.freeze
         backend = Backend.new(@executor, environment: environment, configured_workers: configured_workers,
           maintenance_loops: maintenance_loops || {"tickIntervalMs" => 1_000}, read_only: read_only,
-          statement_timeout_ms: statement_timeout_ms, redact_error_stacks: redact_error_stacks)
+          statement_timeout_ms: statement_timeout_ms, redact_error_stacks: redact_error_stacks, logger: logger)
         extensions = procedures.to_h { |name, handler| [name.to_s, handler] }
         extensions["enqueueTest"] = enqueue_test if enqueue_test
         extensions["setSchedulePaused"] = set_schedule_paused if set_schedule_paused

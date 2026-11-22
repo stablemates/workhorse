@@ -3,6 +3,7 @@ package workhorse_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -121,9 +122,11 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 		}
 		taskIDs[key] = taskID
 	}
+	var logs lockedBuffer
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
 		Queue: queueName, WorkerID: "go-batch-panic", Concurrency: 2,
 		LeaseDuration: batchTestLease, PollInterval: 5 * time.Millisecond,
+		Logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +164,16 @@ func TestWorkerRecoversBatchHandlerPanicForEveryMember(t *testing.T) {
 	}
 	if dispatched != 2 || failed != 2 {
 		t.Fatalf("unexpected batch evidence: dispatched=%d failed=%d", dispatched, failed)
+	}
+	// TypeScript writes workhorse.handler.batch_dispatched at info with this body.
+	records := jsonLogRecords(t, logs.String(), "workhorse.handler.batch_dispatched")
+	if len(records) == 0 {
+		t.Fatalf("no batch_dispatched record: %s", logs.String())
+	}
+	for _, record := range records {
+		if record["level"] != "INFO" || record["msg"] != "Task batch dispatched" {
+			t.Errorf("batch_dispatched is %v %q, want INFO \"Task batch dispatched\"", record["level"], record["msg"])
+		}
 	}
 }
 
