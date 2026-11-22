@@ -2246,7 +2246,9 @@ The SDKs differ in what a refusal does after the handler has returned.
   flight waits for its answer.
   - If `complete_v1` refuses the write, the worker calls `acknowledge_cancel_v1`. If that call
     accepts, `TaskAttempt` records `canceled` on the span, the metrics, and the log, also when a
-    `stale` heartbeat answer arrived first. Otherwise the worker calls `settleFailure`. It sends
+    `stale` heartbeat answer arrived first. If PostgreSQL refuses it and a heartbeat already
+    delivered a cancellation, the refusal is a lost lease: the worker records `lease_lost`, gives
+    the span `stale`, and writes nothing more. Otherwise the worker calls `settleFailure`. It sends
     the refusal through `fail_v1`, unless the attempt already has an outcome, for example
     `lease_expired` (SM-1863).
 - Go `superviseOwnership` and Python `_run_supervised_attempt` record the time when the handler
@@ -2377,8 +2379,8 @@ records `unknown`, `workhorse.handler.executions` does not count it, and the wor
 and a failed request is `unknown`. The Rust handler span has no outcome attribute. This rule covers
 the direct settlement of a delivered cancellation, as [Structured logs](telemetry.md#structured-logs)
 states. During the reconciliation of a refused settlement, a refused acknowledgement is a lost
-lease, as the paragraph above states. .NET differs when a heartbeat delivered the cancellation
-before that reconciliation: it records `unknown`.
+lease, as the paragraph above states. This rule also applies when a heartbeat delivered the
+cancellation before that reconciliation.
 
 Python ends supervision in one outer `finally` in `_execute_claimed_task_within_span`, on every
 path, including a `BaseException` from the handler.

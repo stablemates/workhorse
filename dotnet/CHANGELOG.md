@@ -11,6 +11,17 @@ adds.
 
 ## Unreleased
 
+### A late cancellation after a refused completion reports a lost lease
+
+PostgreSQL refuses a completion, and the worker reconciles. A heartbeat round already submitted a
+cancellation, and PostgreSQL then refuses its `acknowledge_cancel_v1` call. The .NET worker
+reported no outcome: `workhorse.handler.duration` recorded `unknown`,
+`workhorse.handler.executions` did not count the attempt, and the worker wrote no
+`workhorse.task.execution_finished` record. During the reconciliation, the refusal proves that the
+lease is lost. The worker now reports `lease_lost` and writes the record, as TypeScript, Ruby, and
+the JVM do. The span outcome stays `stale`. When a heartbeat delivers a cancellation while the
+handler runs, a refused acknowledgement still has no outcome.
+
 ### The handler span says stale after a refused acknowledgement
 
 A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
