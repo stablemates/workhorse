@@ -2382,8 +2382,8 @@ class WorkerDatabaseTest {
   }
 
   // SM-1525 (m3): an error that the dispatch throws before the batch handler fails each member, and
-  // no member on another thread waits forever. A metric view whose attribute filter throws makes
-  // the batch metric of the dispatch throw.
+  // no member on another thread waits forever. The telemetry discards a RuntimeException of a
+  // metric, so a metric view whose attribute filter throws an Error makes the dispatch throw.
   @Test
   void failsEveryBatchMemberWhenTheDispatchThrowsBeforeTheHandler() throws Exception {
     List<UUID> taskIds =
@@ -2403,7 +2403,7 @@ class WorkerDatabaseTest {
                         View.builder()
                             .setAttributeFilter(
                                 key -> {
-                                  throw new IllegalStateException("the metric failed");
+                                  throw new AssertionError("the metric failed");
                                 })
                             .build())
                     .build())
@@ -2434,7 +2434,7 @@ class WorkerDatabaseTest {
     }
     assertEquals(0, handled.get(), "the handler did not run");
     for (UUID taskId : taskIds) {
-      assertEquals("IllegalStateException", Json.object(json(status(taskId).error())).get("name"));
+      assertEquals("WorkhorseException", Json.object(json(status(taskId).error())).get("name"));
     }
   }
 

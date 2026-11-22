@@ -8,8 +8,12 @@ import org.jspecify.annotations.Nullable;
  * of Ruby's {@code Telemetry} module and Python's {@code _telemetry}.
  *
  * <p>No signature names an OpenTelemetry type, so the queue and the worker load without the
- * optional API. {@link #global} reads {@code GlobalOpenTelemetry} on each use when the API is on
- * the class path, and is {@link #NOOP} without it.
+ * optional API. {@link #global} reads the current {@code GlobalOpenTelemetry} instance at each use
+ * when the API is on the class path, and installs none. It is {@link #NOOP} without the API.
+ *
+ * <p>A provider, an instrument, or a span that throws never reaches the caller, because telemetry
+ * must not change the result of the operation that it observes. The signal is lost. A failed span
+ * start gives {@link TelemetrySpan#NOOP}.
  */
 public interface Telemetry {
   /** The instrumentation scope name of every tracer and meter. */

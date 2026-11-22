@@ -8,15 +8,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.logs.LogRecordBuilder;
+import io.opentelemetry.api.logs.Logger;
+import io.opentelemetry.api.logs.LoggerBuilder;
+import io.opentelemetry.api.logs.LoggerProvider;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.TracerProvider;
+import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
+import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -291,5 +299,96 @@ class OpenTelemetryTelemetryTest {
     assertFalse(
         OpenTelemetryTelemetry.of(OpenTelemetry.noop()).logEnabled(Telemetry.Severity.INFO));
     assertFalse(Telemetry.NOOP.logEnabled(Telemetry.Severity.WARN));
+  }
+
+  /**
+   * The OpenTelemetry API 1.55.0 of the Spring Boot 4.0 BOM has no {@code Logger.isEnabled}, so the
+   * call fails to link. The telemetry then reports each severity as enabled, and the SDK logger
+   * decides.
+   */
+  @Test
+  void reportsEachSeverityAsEnabledOnAnApiWithoutIsEnabled() {
+    Logger recorder = recording.sdk().getLogsBridge().get("workhorse");
+    AtomicInteger probes = new AtomicInteger();
+    Logger olderApi =
+        new Logger() {
+          @Override
+          public LogRecordBuilder logRecordBuilder() {
+            return recorder.logRecordBuilder();
+          }
+
+          @Override
+          public boolean isEnabled(io.opentelemetry.api.logs.Severity severity, Context context) {
+            probes.incrementAndGet();
+            throw new NoSuchMethodError("Logger.isEnabled");
+          }
+        };
+    LoggerBuilder builder =
+        new LoggerBuilder() {
+          @Override
+          public LoggerBuilder setSchemaUrl(String schemaUrl) {
+            return this;
+          }
+
+          @Override
+          public LoggerBuilder setInstrumentationVersion(String version) {
+            return this;
+          }
+
+          @Override
+          public Logger build() {
+            return olderApi;
+          }
+        };
+    OpenTelemetry openTelemetry =
+        new OpenTelemetry() {
+          @Override
+          public TracerProvider getTracerProvider() {
+            return TracerProvider.noop();
+          }
+
+          @Override
+          public ContextPropagators getPropagators() {
+            return ContextPropagators.noop();
+          }
+
+          @Override
+          public LoggerProvider getLogsBridge() {
+            return name -> builder;
+          }
+        };
+    Telemetry subject = OpenTelemetryTelemetry.of(openTelemetry);
+
+    assertTrue(subject.logEnabled(Telemetry.Severity.DEBUG));
+    assertTrue(subject.logEnabled(Telemetry.Severity.INFO));
+    // A failed link fails again at each call, so the telemetry probes once.
+    assertEquals(1, probes.get());
+    subject.log(Telemetry.Severity.INFO, "workhorse.queue.purged", "Queue purged", Map.of());
+    assertEquals(1, recording.logs("workhorse.queue.purged").size());
+  }
+
+  @Test
+  void reportsALoggerProviderThatFailsAsDisabled() {
+    OpenTelemetry failing =
+        new OpenTelemetry() {
+          @Override
+          public TracerProvider getTracerProvider() {
+            return TracerProvider.noop();
+          }
+
+          @Override
+          public ContextPropagators getPropagators() {
+            return ContextPropagators.noop();
+          }
+
+          @Override
+          public LoggerProvider getLogsBridge() {
+            throw new IllegalStateException("logger provider failed");
+          }
+        };
+    Telemetry subject = OpenTelemetryTelemetry.of(failing);
+
+    assertFalse(subject.logEnabled(Telemetry.Severity.INFO));
+    subject.log(Telemetry.Severity.INFO, "workhorse.queue.purged", "Queue purged", Map.of());
   }
 }

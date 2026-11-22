@@ -147,17 +147,8 @@ RSpec.describe "Failed heartbeat rounds" do
       end
     end
 
-    # W::Telemetry keeps each instrument for the life of the process. An example gets an empty
-    # instrument map, so the worker creates every instrument on the stub provider. The hook restores
-    # the original map after the example, so no later example records into the stub provider (SM-1816).
-    around do |example|
-      shared = W::Telemetry.instance_variable_get(:@instruments)
-      W::Telemetry.instance_variable_set(:@instruments, Concurrent::Map.new)
-      example.run
-    ensure
-      W::Telemetry.instance_variable_set(:@instruments, shared)
-    end
-
+    # W::Telemetry keeps the instruments of the current meter provider only. So the worker creates
+    # each instrument on the stub provider, and no later example records into it (SM-1816).
     before do
       allow(W::Telemetry).to receive(:meter_provider).and_return(provider)
       pending << {
