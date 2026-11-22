@@ -132,6 +132,57 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
         AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "lease_lost"))]);
     }
 
+    /// <summary>
+    /// A heartbeat round delivers the cancellation, and <c>acknowledge_cancel_v1</c> fails or
+    /// PostgreSQL refuses it. The worker settled nothing, so the attempt has no outcome. The span gets
+    /// <c>canceled</c> only after PostgreSQL accepts: a failed acknowledgement gives <c>unknown</c>,
+    /// and a refused one gives <c>stale</c>, as in TypeScript. A trigger of this test database makes
+    /// the acknowledgement fail, or refuses it by deleting no row.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "unknown")]
+    [InlineData(true, "stale")]
+    public async Task AnUnacknowledgedDeliveredCancellationHasNoCanceledSpan(bool refused, string spanOutcome)
+    {
+        var taskId = await EnqueueAsync("email.send", new EnqueueOptions());
+        var body = refused ? "RETURN NULL;" : "RAISE EXCEPTION 'the acknowledgement failed';";
+        await ScalarAsync(DataSource, $"CREATE FUNCTION public.refuse_runtime_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN {body} END; $$");
+        await ScalarAsync(DataSource, $"""
+            CREATE TRIGGER refuse_runtime_delete BEFORE DELETE ON workhorse.task_runtime FOR EACH ROW
+            WHEN (OLD.task_id = '{taskId}') EXECUTE FUNCTION public.refuse_runtime_delete()
+            """);
+        try
+        {
+            await using var worker = new Worker(DataSource, WorkerOptions(options =>
+            {
+                options.Lease = TimeSpan.FromSeconds(3);
+                options.Heartbeat = TimeSpan.FromMilliseconds(100);
+            }));
+            worker.Handle<object?, object?>("email.send", async (context, _) =>
+            {
+                await ScalarAsync(DataSource, "SELECT status FROM workhorse.cancel_v1($1, 'test', 'no longer needed')", taskId);
+                await Task.Delay(Timeout.Infinite, context.CancellationToken);
+                return null;
+            });
+            try
+            {
+                await worker.RunOnceAsync(Token).WaitAsync(Patience, Token);
+            }
+            catch (Exception) when (!refused)
+            {
+                // The failed acknowledgement ends the pass with its error.
+            }
+        }
+        finally
+        {
+            await ScalarAsync(DataSource, "DROP TRIGGER refuse_runtime_delete ON workhorse.task_runtime");
+            await ScalarAsync(DataSource, "DROP FUNCTION public.refuse_runtime_delete()");
+        }
+
+        Assert.Equal(spanOutcome, Handler(taskId).GetTagItem(Names.HandlerOutcome));
+        AssertPoints("workhorse.handler.executions", []);
+    }
+
     // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
     private static EnqueueOptions Boundaries() => new()
     {

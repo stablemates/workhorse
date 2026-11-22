@@ -1676,7 +1676,7 @@ module Stablemates
       def execute(task, claim_started_at, active)
         handler = @handlers[task.type]
         arbiter = Arbiter.new
-        state = {span_outcome: nil, errors: [], raised: false}
+        state = {span_outcome: nil, errors: [], raised: nil}
         started_at = monotonic
         attributes = {"workhorse.queue.name" => task.queue}.merge(Telemetry.task_span_attributes(task))
         Telemetry.span("workhorse.handler", attributes, trace_context: task.trace_context, consumer: true) do |span|
@@ -1688,7 +1688,7 @@ module Stablemates
               run_handler(task, handler, claim_started_at, active, arbiter, state)
             end
           rescue Exception => e # rubocop:disable Lint/RescueException
-            state[:raised] = true
+            state[:raised] = e
             Telemetry.record_error(span, error_name(e))
             raise
           ensure
@@ -1700,12 +1700,16 @@ module Stablemates
       def finish_telemetry(task, span, arbiter, state, started_at, attributes)
         duration = (monotonic - started_at) * 1000
         outcome = TELEMETRY_OUTCOMES.fetch(arbiter.reported_outcome, "unknown")
+        span_outcome = state[:span_outcome] || SPAN_OUTCOMES.fetch(arbiter.reported_outcome, "unknown")
         # A heartbeat submits a cancellation before acknowledge_cancel_v1 runs. Each settlement raises
         # if that acknowledgement fails or PostgreSQL refuses it. The attempt then settled nothing, so
-        # its outcome is unknown, as in TypeScript.
-        outcome = "unknown" if outcome == "canceled" && state[:raised]
-        Telemetry.set_attribute(span, "workhorse.handler.outcome",
-          state[:span_outcome] || SPAN_OUTCOMES.fetch(arbiter.reported_outcome, "unknown"))
+        # its outcome is unknown, as in TypeScript. The span gets canceled only after PostgreSQL
+        # accepts. A refusal is a lost lease, so the span gets stale.
+        if outcome == "canceled" && state[:raised]
+          outcome = "unknown"
+          span_outcome = state[:raised].is_a?(LeaseLostError) ? "stale" : "unknown"
+        end
+        Telemetry.set_attribute(span, "workhorse.handler.outcome", span_outcome)
         Telemetry.record_error(span, state[:errors].first) unless state[:errors].empty?
         metric = Telemetry.task_metric_attributes(task)
         Telemetry.record("workhorse.handler.duration", duration, metric.merge("workhorse.handler.outcome" => outcome))
@@ -1715,14 +1719,15 @@ module Stablemates
         unless outcome == "unknown"
           Telemetry.add("workhorse.handler.executions", 1, metric.merge("workhorse.handler.outcome" => outcome))
         end
+        # As in TypeScript, the execution record comes first, at the settlement, and
+        # workhorse.handler.finished comes last. An attempt whose settlement failed has no outcome.
+        # TypeScript writes no execution record for it, so this worker writes none.
+        unless outcome == "unknown"
+          log(:info, "workhorse.task.execution_finished", "Task execution finished",
+            attributes.merge("workhorse.handler.outcome" => outcome))
+        end
         log(:debug, "workhorse.handler.finished", "Task handler finished",
           attributes.merge("workhorse.handler.duration_ms" => duration))
-        # An attempt whose settlement failed has no outcome. TypeScript writes no execution record
-        # for it, so this worker writes none.
-        return if outcome == "unknown"
-
-        log(:info, "workhorse.task.execution_finished", "Task execution finished",
-          attributes.merge("workhorse.handler.outcome" => outcome))
       end
 
       # Hands a task with no handler back to PostgreSQL. Returns the release status for the handler

@@ -5,6 +5,18 @@ other SDKs carry, because every tag names one release of all of them.
 
 ## Unreleased
 
+### The handler records and span match TypeScript
+
+- For one attempt, the worker now writes `workhorse.task.execution_finished` before
+  `workhorse.handler.finished`, as the TypeScript, Go, Rust, JVM, and .NET workers do. Before, it
+  wrote `workhorse.handler.finished` first.
+- A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` then fails or PostgreSQL refuses
+  it. The worker settled nothing, and lease recovery settles the task later. The
+  `workhorse.handler` span kept the outcome `canceled`, while `workhorse.handler.duration` recorded
+  `unknown`. The span now gets `canceled` only after PostgreSQL accepts the acknowledgement. A
+  failed acknowledgement gives the span the outcome `unknown`, and a refused one gives it `stale`.
+  The handler metrics do not change.
+
 ### An attempt without an outcome is not an execution
 
 An attempt whose settlement fails has no outcome. The TypeScript worker records its
