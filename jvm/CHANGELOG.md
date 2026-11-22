@@ -11,6 +11,15 @@ adds.
 
 ## Unreleased
 
+### A lost lease is not an error of the handler span
+
+A heartbeat delivers a cancellation, and PostgreSQL then refuses `acknowledge_cancel_v1`. Or the
+lease is lost while no handler error came first, for example after a refused completion or a stale
+release after the shutdown. The worker gave the `workhorse.handler` span the error status with the
+type `LeaseLostException`. A lost lease alone now gives the span no error status and no exception
+event, as in TypeScript and .NET. A handler error keeps the error status, also when PostgreSQL then
+reports a lost lease. A failed statement also keeps it.
+
 ### The SDK records through a global instance that the application sets later
 
 An application builds a `Queue`, an `Admin`, or a `Worker` with the default telemetry and uses it.

@@ -9,8 +9,11 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // statementExecutor answers each protocol statement with its rows, or fails it with its error.
@@ -81,6 +84,85 @@ func TestARefusedReleaseAcknowledgementIsALostLease(t *testing.T) {
 	}
 	if len(executions) != 1 || executions[0] != string(handlerOutcomeLeaseLost) {
 		t.Fatalf("workhorse.handler.executions outcomes = %v, want [lease_lost]", executions)
+	}
+}
+
+// A task without a handler is released. As on the execution path and in TypeScript, a lost lease,
+// such as a refused acknowledgement of a cancel_requested answer, does not give the handler span the
+// error status. A failed statement does.
+func TestAReleaseMarksOnlyAFailedStatementAsASpanError(t *testing.T) {
+	task := ClaimedTask{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		Type:       "missing",
+		Queue:      "defaults",
+		Attempt:    1,
+		FenceToken: 7,
+	}
+	releaseFailed := errors.New("release failed")
+	for _, test := range []struct {
+		name     string
+		executor statementExecutor
+		outcome  string
+		code     codes.Code
+	}{
+		{
+			name: "refused acknowledgement",
+			executor: statementExecutor{rows: map[string][]Row{
+				releaseOwnedStatementName:      {{rowStatusField: workerFailureCancelRequested}},
+				acknowledgeCancelStatementName: {{rowAcceptedField: false}},
+			}},
+			outcome: "stale",
+			code:    codes.Unset,
+		},
+		{
+			name:     "failed statement",
+			executor: statementExecutor{errors: map[string]error{releaseOwnedStatementName: releaseFailed}},
+			outcome:  "unknown",
+			code:     codes.Error,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+			previousProvider := otel.GetTracerProvider()
+			otel.SetTracerProvider(provider)
+			t.Cleanup(func() {
+				otel.SetTracerProvider(previousProvider)
+				_ = provider.Shutdown(context.Background())
+			})
+			worker := newDefaultWorker(t, WorkerOptions{})
+
+			_ = worker.release(context.Background(), test.executor, task)
+
+			spans := exporter.GetSpans()
+			if len(spans) != 1 || spans[0].Name != handlerSpanName {
+				t.Fatalf("spans = %v, want one handler span", spans)
+			}
+			span := spans[0]
+			outcome := ""
+			for _, attribute := range span.Attributes {
+				if string(attribute.Key) == handlerOutcomeAttribute {
+					outcome = attribute.Value.AsString()
+				}
+			}
+			if outcome != test.outcome {
+				t.Fatalf("span outcome = %q, want %q", outcome, test.outcome)
+			}
+			exceptions := 0
+			for _, event := range span.Events {
+				if event.Name == "exception" {
+					exceptions++
+				}
+			}
+			wantExceptions := 0
+			if test.code == codes.Error {
+				wantExceptions = 1
+			}
+			if span.Status.Code != test.code || exceptions != wantExceptions {
+				t.Fatalf("span status = %v with %d exception events, want %v with %d",
+					span.Status.Code, exceptions, test.code, wantExceptions)
+			}
+		})
 	}
 }
 

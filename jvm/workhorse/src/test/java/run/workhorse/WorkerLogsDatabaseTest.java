@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.logs.Severity;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.logs.data.LogRecordData;
@@ -653,6 +654,11 @@ class WorkerLogsDatabaseTest {
     assertEquals(
         acknowledgement.equals("fails") ? "unknown" : "stale",
         handler.getAttributes().get(AttributeKey.stringKey(Names.HANDLER_OUTCOME)));
+    // The handler stopped for the cancellation, so only the failed statement is an error of the
+    // span, as in TypeScript. A refused acknowledgement is a lost lease.
+    assertEquals(
+        acknowledgement.equals("fails") ? StatusCode.ERROR : StatusCode.UNSET,
+        handler.getStatus().getStatusCode());
   }
 
   /** The {@code workhorse.handler.outcome} of each point of the metric {@code name}. */

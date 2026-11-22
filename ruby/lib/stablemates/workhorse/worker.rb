@@ -1689,7 +1689,6 @@ module Stablemates
             end
           rescue Exception => e # rubocop:disable Lint/RescueException
             state[:raised] = e
-            Telemetry.record_error(span, error_name(e))
             raise
           ensure
             finish_telemetry(task, span, arbiter, state, started_at, attributes)
@@ -1710,7 +1709,12 @@ module Stablemates
           span_outcome = state[:raised].is_a?(LeaseLostError) ? "stale" : "unknown"
         end
         Telemetry.set_attribute(span, "workhorse.handler.outcome", span_outcome)
+        # As in TypeScript, the handler error comes first, because the worker records it before
+        # fail_v1. A failed statement comes after it. A lost lease is an outcome of the attempt, not
+        # an error of the span.
         Telemetry.record_error(span, state[:errors].first) unless state[:errors].empty?
+        raised = state[:raised]
+        Telemetry.record_error(span, error_name(raised)) if raised && !raised.is_a?(LeaseLostError)
         metric = Telemetry.task_metric_attributes(task)
         Telemetry.record("workhorse.handler.duration", duration, metric.merge("workhorse.handler.outcome" => outcome))
         Telemetry.add("workhorse.handler.runtime", duration, metric)
@@ -1788,8 +1792,10 @@ module Stablemates
             return
           end
 
-          state[:span_outcome] = settle_failure(task, e, arbiter, ownership)
+          # As in TypeScript, the span records the handler error before fail_v1, so it keeps the
+          # error also when PostgreSQL then reports a lost lease or the write fails.
           state[:errors] << (task.redact_error_details ? REDACTED_NAME : error_name(e))
+          state[:span_outcome] = settle_failure(task, e, arbiter, ownership)
           return
         ensure
           ownership.release

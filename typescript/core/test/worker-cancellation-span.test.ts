@@ -25,12 +25,18 @@ const task: ClaimedTask = {
 
 interface Recorded {
   handlerSpan: Record<string, unknown>;
+  handlerErrors: number;
   durationOutcomes: unknown[];
   executionRecords: number;
 }
 
 function recordTelemetry(): { recorded: Recorded; unregister: () => void } {
-  const recorded: Recorded = { handlerSpan: {}, durationOutcomes: [], executionRecords: 0 };
+  const recorded: Recorded = {
+    handlerSpan: {},
+    handlerErrors: 0,
+    durationOutcomes: [],
+    executionRecords: 0,
+  };
   const provider: WorkhorseTelemetryProvider = {
     emitLog: (log) => {
       if (log.eventName === "workhorse.task.execution_finished") recorded.executionRecords += 1;
@@ -58,9 +64,12 @@ function recordTelemetry(): { recorded: Recorded; unregister: () => void } {
           return this;
         },
         setStatus() {
+          if (name === "workhorse.handler") recorded.handlerErrors += 1;
           return this;
         },
-        recordException() {},
+        recordException() {
+          if (name === "workhorse.handler") recorded.handlerErrors += 1;
+        },
       }),
   };
   return { recorded, unregister: registerTelemetryProvider(provider) };
@@ -109,6 +118,9 @@ describe("handler span after a delivered cancellation", () => {
         expect(telemetry.recorded.handlerSpan["workhorse.handler.outcome"]).toBe(spanOutcome);
         expect(telemetry.recorded.durationOutcomes).toEqual([durationOutcome]);
         expect(telemetry.recorded.executionRecords).toBe(acknowledgement === "accepted" ? 1 : 0);
+        // The handler stopped for the cancellation, so the span gets no error status and records no
+        // exception, also when PostgreSQL refuses the acknowledgement.
+        expect(telemetry.recorded.handlerErrors).toBe(0);
       });
     }
   }

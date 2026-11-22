@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import javax.sql.DataSource;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -277,6 +278,8 @@ class WorkerTelemetryDatabaseTest {
         false, complete.getAttributes().get(AttributeKey.booleanKey(Names.COMPLETE_ACCEPTED)));
     SpanData handler = recording.spans(Names.SPAN_HANDLER).get(0);
     assertEquals(spanOutcome, text(handler, Names.HANDLER_OUTCOME));
+    // The handler returned a value, so no cause, also not a lost lease, is an error of the span.
+    assertSpanError(handler, null);
     Attributes task =
         Attributes.builder()
             .put(Names.QUEUE_NAME, queueName)
@@ -318,6 +321,9 @@ class WorkerTelemetryDatabaseTest {
     assertEquals(settledState, state(taskId), "the state when runOnce returned");
     assertEquals(
         spanOutcome, text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    // The span records the handler error before fail_v1, so it keeps it after a lost lease.
+    assertSpanError(
+        recording.spans(Names.SPAN_HANDLER).get(0), IllegalStateException.class.getName());
     assertEquals(
         List.of(executions(metricOutcome)), points(metric("workhorse.handler.executions")));
   }
@@ -369,6 +375,8 @@ class WorkerTelemetryDatabaseTest {
     assertEquals(settledState, state(taskId), "the state after the release");
     assertEquals(
         spanOutcome, text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    // The shutdown stop is not a failure, and a lost lease is not an error of the span.
+    assertSpanError(recording.spans(Names.SPAN_HANDLER).get(0), null);
     assertEquals(
         List.of(executions(metricOutcome)), points(metric("workhorse.handler.executions")));
   }
@@ -411,7 +419,29 @@ class WorkerTelemetryDatabaseTest {
     }
 
     assertEquals("stale", text(recording.spans(Names.SPAN_HANDLER).get(0), Names.HANDLER_OUTCOME));
+    assertSpanError(
+        recording.spans(Names.SPAN_HANDLER).get(0), IllegalStateException.class.getName());
     assertEquals(List.of(executions("lease_lost")), points(metric("workhorse.handler.executions")));
+  }
+
+  /**
+   * As in TypeScript, only a handler error or a failed statement gives the handler span the error
+   * status. A lost lease does not. {@code errorType} is the type of the one exception event, or
+   * {@code null} for a span without the error status.
+   */
+  private static void assertSpanError(SpanData span, @Nullable String errorType) {
+    List<@Nullable String> exceptions =
+        span.getEvents().stream()
+            .filter(event -> event.getName().equals("exception"))
+            .map(event -> event.getAttributes().get(AttributeKey.stringKey("exception.type")))
+            .toList();
+    if (errorType == null) {
+      assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
+      assertEquals(List.of(), exceptions);
+    } else {
+      assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
+      assertEquals(List.of(errorType), exceptions);
+    }
   }
 
   // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
