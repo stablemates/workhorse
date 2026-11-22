@@ -109,7 +109,7 @@ func TestFailPanickedExecutionReturnsAFailedWriteAfterTheStop(t *testing.T) {
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
 
-	_, err := worker.failPanickedExecution(stopped, failingRegistryExecutor{}, task, "defect")
+	_, err := worker.failPanickedExecution(stopped, failingRegistryExecutor{}, task, "defect", nil)
 
 	if err == nil || errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the failed write, received %v", err)

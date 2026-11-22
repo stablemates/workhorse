@@ -25,8 +25,7 @@ PostgreSQL accepts the completion. The same is true for a cancellation acknowled
 expiry, the cancellation acknowledgement of a reconciliation, and a settlement after the shutdown
 cancellation: a write that fails before the attempt has an outcome leaves it without one. Before,
 such an attempt counted as `canceled`, `deadline_exceeded`, `timeout`, or `lease_lost`. A stale
-answer shows a lost lease, which needs no write. Thus an attempt that got a stale answer keeps the
-outcome `lease_lost`, also when a later request of its reconciliation fails. A refused
+answer shows a lost lease, which needs no write. A refused
 acknowledgement of a released task, and a stale failure write after the shutdown, now count as
 `lease_lost`, not `canceled`.
 
@@ -34,6 +33,40 @@ A panic outside the handler, such as in the `Error` method of a handler error, f
 through `fail_v1`. The worker now counts that attempt with the outcome of the write, such as
 `retry`. Before, it recorded no outcome. The release of a task without a handler now also records
 its duration and runtime when the release fails.
+
+### The handler outcome of each refused or late settlement follows TypeScript
+
+An operator compares the handler outcomes of the Go workers with the TypeScript workers on one
+dashboard. In these cases, the Go worker reported another outcome:
+
+- A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` refuses it. The worker settled
+  nothing, but counted the attempt as `lease_lost`. The attempt now has no outcome, as in
+  TypeScript, Python, Ruby, the JVM, and .NET: its duration records `unknown`, the executions
+  counter does not count it, and the worker writes no `workhorse.task.execution_finished`. The
+  handler span outcome is `canceled` only after PostgreSQL accepts the acknowledgement: a refusal
+  is `stale`, and a failed request is `unknown`.
+- A reconciliation of a refused settlement asked `expire_owned_v1`, and the request failed. The
+  worker reported `lease_lost`. The request settled nothing, so the attempt now has no outcome, and
+  the error ends the run, as in TypeScript. The reconciliation now asks `expire_owned_v1` once, as
+  TypeScript `reconcileStale` does. A `not_due` answer after a lapsed lease still reports
+  `lease_lost`.
+- A heartbeat reports a deadline or an attempt timeout, and a cancellation request then wins the
+  fence before the expiry request. The worker acknowledged the cancellation, but reported
+  `deadline_exceeded` or `timeout`. It now reports `canceled`, the cause that PostgreSQL settled.
+- A write after the shutdown settles the attempt: a failure of a panic outside the handler, or a
+  completion or release whose reconciliation settled a cancellation, an expiry, or a lost lease.
+  The worker counted the outcome, but wrote no `workhorse.task.execution_finished`, and the handler
+  span recorded the shutdown cancellation as its error. The worker now writes the execution record,
+  and the span records no error for the stop. The span of a panic outside the handler records the
+  panic as the failure.
+- A release after the shutdown that `release_owned_v1` answers `cancel_requested` reported
+  `canceled` when PostgreSQL refused the acknowledgement. It now reports `lease_lost`, as a
+  failure with the same answer does.
+
+The handler span outcome now has the TypeScript values, not the metric outcome. A failure has the
+state that `fail_v1` returns, such as `ready` or `scheduled` for a retry, and a release has the
+status of `release_owned_v1`. A lost lease is `stale`, and an attempt timeout is
+`timeout_exceeded`. Before, the span had `retry`, `lease_lost`, and `timeout`.
 
 ### The worker records follow the TypeScript triggers
 

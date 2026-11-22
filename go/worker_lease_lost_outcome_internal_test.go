@@ -112,11 +112,10 @@ func TestAStaleFailureWriteAfterTheStopIsALostLease(t *testing.T) {
 	}
 }
 
-// fail_v1 answers stale after the shutdown cancellation. The reconciliation finds no cancellation,
-// and the expiry request then fails. The stale answer already showed a lost lease, so the outcome
-// stays lease_lost, as for the same answer to a release after the stop.
-func TestAStaleFailureRowAfterTheStopKeepsTheLostLease(t *testing.T) {
-	worker := newDefaultWorker(t, WorkerOptions{})
+// fail_v1 answers stale. The reconciliation finds no cancellation, and the expiry request then
+// fails. As in TypeScript, where reconcileStale rejects, the request settled nothing, so the
+// attempt has no outcome and the error ends the run. Before, the Go worker reported lease_lost.
+func TestAFailedExpiryRequestOfAReconciliationHasNoOutcome(t *testing.T) {
 	task := ClaimedTask{
 		ID:         "11111111-1111-1111-1111-111111111111",
 		Type:       "send-invoice",
@@ -129,11 +128,52 @@ func TestAStaleFailureRowAfterTheStopKeepsTheLostLease(t *testing.T) {
 		failStatementName:              {{rowStateField: workerFailureStale}},
 		acknowledgeCancelStatementName: {{rowAcceptedField: false}},
 	}}
+	for _, afterStop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after the stop %v", afterStop), func(t *testing.T) {
+			worker := newDefaultWorker(t, WorkerOptions{})
+			var outcome handlerOutcome
+			var err error
+			if afterStop {
+				outcome, err = worker.failAfterShutdown(context.Background(), executor, task, errors.New("handler failed"))
+			} else {
+				outcome, err = worker.failAttempt(context.Background(), executor, task, errors.New("handler failed"))
+			}
+			if err == nil || errors.Is(err, ErrStaleLease) {
+				t.Fatalf("expected the error of the expiry request, received %v", err)
+			}
+			if outcome != handlerOutcomeUnknown {
+				t.Fatalf("expected the unknown outcome, received %v", outcome)
+			}
+		})
+	}
+}
 
-	outcome, err := worker.failAfterShutdown(context.Background(), executor, task, errors.New("handler failed"))
+// A release after the shutdown cancellation answers cancel_requested, and PostgreSQL then refuses
+// the acknowledgement. The worker settled nothing, so the outcome is lease_lost, as for the same
+// answer to a failure. Before, it was canceled.
+func TestARefusedAcknowledgementOfAShutdownReleaseIsALostLease(t *testing.T) {
+	worker := &Worker{
+		workerID: "shutdown-worker",
+		logger:   slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+	}
+	task := ClaimedTask{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		Type:       "send-invoice",
+		Queue:      "billing",
+		Attempt:    2,
+		FenceToken: 7,
+	}
+	executor := statementExecutor{rows: map[string][]Row{
+		releaseOwnedStatementName:      {{rowStatusField: workerFailureCancelRequested}},
+		acknowledgeCancelStatementName: {{rowAcceptedField: false}},
+	}}
 
-	if err == nil {
-		t.Fatal("expected the failed expiry request")
+	outcome, err := worker.settleAfterShutdown(
+		context.Background(), executor, task, nil, nil, errors.New("handler stopped"),
+	)
+
+	if !errors.Is(err, ErrStaleLease) {
+		t.Fatalf("expected the lost lease, received %v", err)
 	}
 	if outcome != handlerOutcomeLeaseLost {
 		t.Fatalf("expected the lease_lost outcome, received %v", outcome)

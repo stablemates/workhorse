@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // minimumDefaultHeartbeat is the smallest default heartbeat interval. It is the smallest supported
@@ -2651,7 +2652,7 @@ func (worker *Worker) execute(
 	// that panic fails the attempt.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			_, resultError = worker.failPanickedExecution(ctx, executor, task, recovered)
+			_, resultError = worker.failPanickedExecution(ctx, executor, task, recovered, nil)
 		}
 	}()
 	handlerParent, span := startHandlerSpan(ctx, task)
@@ -2668,7 +2669,7 @@ func (worker *Worker) execute(
 		if settledAfterShutdown {
 			spanError = nil
 		}
-		finishHandlerSpan(span, outcome, spanError)
+		finishHandlerSpan(handlerParent, span, outcome, spanError)
 		duration := time.Since(startedAt)
 		worker.metrics.recordHandler(handlerParent, task, outcome, duration)
 		worker.logHandlerFinished(handlerParent, task, outcome, spanError == nil, duration)
@@ -2699,8 +2700,11 @@ func (worker *Worker) execute(
 	// a handler error, fails the attempt while the lease still renews, as a usual settlement does.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			// The telemetry defer runs after this one, so it records the outcome of the write.
-			outcome, resultError = worker.failPanickedExecution(ctx, executor, task, recovered)
+			// The telemetry defer runs after this one, so it records the outcome of the write. A
+			// write after the stop that settled the attempt ends execute with the stop, but the
+			// attempt keeps its outcome, as in settleStopped.
+			outcome, resultError = worker.failPanickedExecution(ctx, executor, task, recovered, span)
+			settledAfterShutdown = outcome != handlerOutcomeUnknown
 		}
 	}()
 	durability := &HandlerContext{
@@ -2761,13 +2765,15 @@ func (worker *Worker) execute(
 			// A written failure keeps the handler error as the only exception of the span.
 			var err error
 			outcome, err = worker.failAfterShutdown(ctx, executor, task, handlerError)
-			settledAfterShutdown = err == nil
+			settledAfterShutdown = outcome != handlerOutcomeUnknown
 			return shutdownSettlementError(err)
 		}
+		// A write that settled the attempt gives it an outcome, also when a reconciliation settled a
+		// cancellation or an expiry, or found the lease lost. The attempt then has its execution
+		// record, as in TypeScript.
 		var err error
 		outcome, err = worker.settleAfterShutdown(ctx, executor, task, result, checked, handlerError)
-		settledAfterShutdown = outcome == handlerOutcomeSucceeded ||
-			outcome == handlerOutcomeReleased
+		settledAfterShutdown = outcome != handlerOutcomeUnknown
 		return shutdownSettlementError(err)
 	}
 	if ownership.err != nil {
@@ -2801,28 +2807,21 @@ func (worker *Worker) execute(
 	}
 	// A settlement write that fails leaves the attempt without an outcome, as in TypeScript. A
 	// stale answer becomes lease_lost in the defer above.
-	settled := func(settledOutcome handlerOutcome, err error) error {
-		if err == nil {
-			outcome = settledOutcome
-		}
+	var err error
+	if ownership.status == workerOwnershipCancelRequested {
+		outcome, err = worker.acknowledgeDeliveredCancellation(ctx, executor, task)
 		return err
 	}
-	if ownership.status == workerOwnershipCancelRequested {
-		return settled(handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task))
-	}
-	if ownership.status == workerOwnershipDeadline {
+	if ownership.status == workerOwnershipDeadline || ownership.status == workerOwnershipTimeout {
 		if ownership.expirationSettled {
 			outcome = handlerOutcomeDeadlineExceeded
+			if ownership.status == workerOwnershipTimeout {
+				outcome = handlerOutcomeTimeout
+			}
 			return nil
 		}
-		return settled(handlerOutcomeDeadlineExceeded, worker.settleExpiration(ctx, executor, task))
-	}
-	if ownership.status == workerOwnershipTimeout {
-		if ownership.expirationSettled {
-			outcome = handlerOutcomeTimeout
-			return nil
-		}
-		return settled(handlerOutcomeTimeout, worker.settleExpiration(ctx, executor, task))
+		outcome, err = worker.settleExpiration(ctx, executor, task)
+		return err
 	}
 	if ownership.status == workerOwnershipStale {
 		outcome = handlerOutcomeLeaseLost
@@ -2832,13 +2831,12 @@ func (worker *Worker) execute(
 		return errExpirationNotDue
 	}
 	if errors.Is(cause, ErrCancellationRequested) {
-		return settled(handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task))
+		outcome, err = worker.acknowledgeDeliveredCancellation(ctx, executor, task)
+		return err
 	}
-	if errors.Is(cause, ErrDeadlineExceeded) {
-		return settled(handlerOutcomeDeadlineExceeded, worker.settleExpiration(ctx, executor, task))
-	}
-	if errors.Is(cause, ErrExecutionTimeout) {
-		return settled(handlerOutcomeTimeout, worker.settleExpiration(ctx, executor, task))
+	if errors.Is(cause, ErrDeadlineExceeded) || errors.Is(cause, ErrExecutionTimeout) {
+		outcome, err = worker.settleExpiration(ctx, executor, task)
+		return err
 	}
 	if errors.Is(cause, ErrLeaseLost) {
 		outcome = handlerOutcomeLeaseLost
@@ -2869,7 +2867,7 @@ func (worker *Worker) execute(
 		outcome = failed
 		return nil
 	}
-	if err := worker.complete(ctx, executor, task, encodedResult); errors.Is(err, ErrStaleLease) {
+	if err = worker.complete(ctx, executor, task, encodedResult); errors.Is(err, ErrStaleLease) {
 		outcome, err = worker.reconcileRejectedSettlement(ctx, executor, task, err)
 		return err
 	} else if err != nil {
@@ -2881,15 +2879,17 @@ func (worker *Worker) execute(
 }
 
 // failPanickedExecution settles an attempt whose execution panicked outside the handler. The
-// panic fails the attempt as a handler panic does, with a HandlerPanicError. Each settlement write
-// is fenced, so if the attempt settled before the panic, PostgreSQL refuses this write and the
-// attempt keeps its settlement. After the stop, the write uses the unwind window of
-// failAfterShutdown. If the settlement panics again, the error ends Run.
+// panic fails the attempt as a handler panic does, with a HandlerPanicError, and span, if not nil,
+// records it as the failure. Each settlement write is fenced, so if the attempt settled before the
+// panic, PostgreSQL refuses this write and the attempt keeps its settlement. After the stop, the
+// write uses the unwind window of failAfterShutdown, and a settled write returns its outcome with
+// the error of the stop. If the settlement panics again, the error ends Run.
 func (worker *Worker) failPanickedExecution(
 	ctx context.Context,
 	executor Executor,
 	task ClaimedTask,
 	recovered any,
+	span trace.Span,
 ) (outcome handlerOutcome, resultError error) {
 	defer func() {
 		if again := recover(); again != nil {
@@ -2898,6 +2898,10 @@ func (worker *Worker) failPanickedExecution(
 		}
 	}()
 	panicked := newHandlerPanicError(executionPanicFormat, task.Type, recovered)
+	if span != nil {
+		span.RecordError(handlerTelemetryError(panicked, task.RedactErrorDetails))
+		span.SetStatus(codes.Error, handlerFailedSpanStatusMessage)
+	}
 	if ctx.Err() != nil {
 		// A failed write of the panic after the stop is an error of the run, as in settleStopped.
 		failed, err := worker.failAfterShutdown(ctx, executor, task, panicked)
@@ -3715,21 +3719,56 @@ func parseOwnershipStatusRow(row Row) (ownershipStatus, error) {
 	}
 }
 
-func (worker *Worker) acknowledgeCancellation(ctx context.Context, executor Executor, task ClaimedTask) error {
+// acknowledgeDeliveredCancellation settles a cancellation that a heartbeat or an expiry request
+// delivered while the handler ran. The handler span outcome is canceled only after PostgreSQL
+// accepts the acknowledgement. If PostgreSQL refuses it, the attempt settled nothing and lost its
+// lease: it has no outcome, the span outcome is stale, and the worker continues, as TypeScript,
+// Python, Ruby, the JVM, and .NET do. If the request fails, the span outcome is unknown.
+func (worker *Worker) acknowledgeDeliveredCancellation(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+) (handlerOutcome, error) {
 	accepted, err := worker.cancellationAccepted(ctx, executor, task)
 	if err != nil {
-		return err
+		setHandlerSpanOutcome(ctx, telemetryUnknownValue)
+		return handlerOutcomeUnknown, err
 	}
 	if !accepted {
-		return &StaleLeaseError{TaskID: task.ID}
+		setHandlerSpanOutcome(ctx, workerFailureStale)
+		return handlerOutcomeUnknown, nil
 	}
-	return nil
+	setHandlerSpanOutcome(ctx, telemetryCanceledValue)
+	return handlerOutcomeCanceled, nil
+}
+
+// acknowledgeRequestedCancellation settles the cancellation that fail_v1 or release_owned_v1
+// answered with, or that expire_owned_v1 answered with during the reconciliation of a refused
+// settlement. If PostgreSQL refuses it, the attempt reports a lost lease with a StaleLeaseError,
+// and the handler span outcome is stale, as in TypeScript. An expiry request outside a
+// reconciliation uses acknowledgeDeliveredCancellation.
+func (worker *Worker) acknowledgeRequestedCancellation(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+) (handlerOutcome, error) {
+	accepted, err := worker.cancellationAccepted(ctx, executor, task)
+	if err != nil {
+		return handlerOutcomeUnknown, err
+	}
+	if !accepted {
+		setHandlerSpanOutcome(ctx, workerFailureStale)
+		return handlerOutcomeLeaseLost, &StaleLeaseError{TaskID: task.ID}
+	}
+	return handlerOutcomeCanceled, nil
 }
 
 // reconcileRejectedSettlement explains a settlement that PostgreSQL refused. It settles the
-// cancellation or expiry that won the fence and returns that cause as the handler outcome. Only a
-// lost lease returns handlerOutcomeLeaseLost with settlementError. A cancellation acknowledgement
-// that fails in another way settled nothing, so it returns handlerOutcomeUnknown, as in TypeScript.
+// cancellation or expiry that won the fence, returns that cause as the handler outcome, and sets
+// it as the handler span outcome. Only a lost lease returns handlerOutcomeLeaseLost with
+// settlementError. As in TypeScript reconcileStale, the worker asks PostgreSQL to expire the
+// ownership once: a not_due answer means that no boundary is due, so the lease is lost. A request
+// that fails settled nothing, so the attempt has no outcome, and the error ends the run.
 func (worker *Worker) reconcileRejectedSettlement(
 	ctx context.Context,
 	executor Executor,
@@ -3738,29 +3777,32 @@ func (worker *Worker) reconcileRejectedSettlement(
 ) (handlerOutcome, error) {
 	accepted, err := worker.cancellationAccepted(ctx, executor, task)
 	if err != nil {
-		return reconciliationFailure(err)
+		return reconciliationFailure(ctx, err)
 	}
 	if accepted {
+		setHandlerSpanOutcome(ctx, telemetryCanceledValue)
 		return handlerOutcomeCanceled, nil
 	}
-	status, err := worker.expireOwnership(ctx, task)
+	status, err := worker.expireOwnedOnce(ctx, task)
 	if err != nil {
-		// The refused settlement already showed that the attempt no longer holds its lease. The
-		// expiry request only looks for a better cause. On a lapsed lease it waits until the
-		// unwind window ends, so its error is the lost lease.
-		return handlerOutcomeLeaseLost, err
+		return handlerOutcomeUnknown, err
 	}
 	switch status {
 	case workerOwnershipCancelRequested:
-		if err := worker.acknowledgeCancellation(ctx, executor, task); err != nil {
-			return reconciliationFailure(err)
+		outcome, err := worker.acknowledgeRequestedCancellation(ctx, executor, task)
+		if err != nil {
+			return reconciliationFailure(ctx, err)
 		}
-		return handlerOutcomeCanceled, nil
+		setHandlerSpanOutcome(ctx, telemetryCanceledValue)
+		return outcome, nil
 	case workerOwnershipDeadline:
+		setHandlerSpanOutcome(ctx, workerFailureDeadline)
 		return handlerOutcomeDeadlineExceeded, nil
 	case workerOwnershipTimeout:
+		setHandlerSpanOutcome(ctx, workerFailureTimeout)
 		return handlerOutcomeTimeout, nil
 	default:
+		setHandlerSpanOutcome(ctx, workerFailureStale)
 		return handlerOutcomeLeaseLost, settlementError
 	}
 }
@@ -3768,27 +3810,37 @@ func (worker *Worker) reconcileRejectedSettlement(
 // reconciliationFailure is the outcome of a cancellation acknowledgement of a reconciliation that
 // failed. A stale answer, or an expiry that is not due, is a lost lease, as in the lease-lost defer
 // of execute. Another error settled nothing, so the attempt has no outcome.
-func reconciliationFailure(err error) (handlerOutcome, error) {
+func reconciliationFailure(ctx context.Context, err error) (handlerOutcome, error) {
 	if errors.Is(err, ErrStaleLease) || errors.Is(err, errExpirationNotDue) {
+		setHandlerSpanOutcome(ctx, workerFailureStale)
 		return handlerOutcomeLeaseLost, err
 	}
 	return handlerOutcomeUnknown, err
 }
 
-func (worker *Worker) settleExpiration(ctx context.Context, executor Executor, task ClaimedTask) error {
+// settleExpiration settles a deadline or an attempt timeout that a heartbeat or the handler
+// cancellation reported, and returns the cause that PostgreSQL settled. A cancellation that won the
+// fence before the expiry request is that cause, as in TypeScript.
+func (worker *Worker) settleExpiration(
+	ctx context.Context,
+	executor Executor,
+	task ClaimedTask,
+) (handlerOutcome, error) {
 	status, err := worker.expireOwnership(ctx, task)
 	if err != nil {
-		return err
+		return handlerOutcomeUnknown, err
 	}
 	switch status {
 	case workerOwnershipCancelRequested:
-		return worker.acknowledgeCancellation(ctx, executor, task)
-	case workerOwnershipDeadline, workerOwnershipTimeout:
-		return nil
+		return worker.acknowledgeDeliveredCancellation(ctx, executor, task)
+	case workerOwnershipDeadline:
+		return handlerOutcomeDeadlineExceeded, nil
+	case workerOwnershipTimeout:
+		return handlerOutcomeTimeout, nil
 	case workerOwnershipStale:
-		return &StaleLeaseError{TaskID: task.ID}
+		return handlerOutcomeUnknown, &StaleLeaseError{TaskID: task.ID}
 	default:
-		return errExpirationNotDue
+		return handlerOutcomeUnknown, errExpirationNotDue
 	}
 }
 
@@ -3940,7 +3992,7 @@ func (worker *Worker) release(ctx context.Context, executor Executor, task Claim
 		if errors.Is(resultError, ErrStaleLease) {
 			outcome = handlerOutcomeLeaseLost
 		}
-		finishHandlerSpan(span, outcome, resultError)
+		finishHandlerSpan(ctx, span, outcome, resultError)
 		duration := time.Since(startedAt)
 		settled := resultError == nil || errors.Is(resultError, ErrStaleLease)
 		// A release that fails, also its cancellation acknowledgement, has no outcome. Its
@@ -4037,7 +4089,7 @@ func (worker *Worker) settleAfterShutdown(
 ) (handlerOutcome, error) {
 	settleContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), handlerUnwindPeriod)
 	defer cancel()
-	outcome := handlerOutcomeCanceled
+	outcome := handlerOutcomeUnknown
 	var err error
 	if handlerError == nil && encoded == nil {
 		encoded, err = worker.encodeResult(settleContext, executor, task, result)
@@ -4065,8 +4117,10 @@ func (worker *Worker) settleAfterShutdown(
 		worker.logShutdownSettlementFailure(ctx, task, err)
 		// A write that failed settled nothing, so the attempt has no outcome, as in TypeScript. A
 		// stale answer already showed a lost lease, which needs no write, so that outcome stays.
-		if shutdownSettlementError(err) != nil && outcome != handlerOutcomeLeaseLost {
+		if shutdownSettlementError(err) != nil {
 			outcome = handlerOutcomeUnknown
+		} else {
+			outcome = handlerOutcomeLeaseLost
 		}
 	}
 	return outcome, err
@@ -4145,9 +4199,8 @@ func (worker *Worker) failAfterShutdown(
 	if err != nil {
 		worker.logShutdownSettlementFailure(ctx, task, err)
 		// A write that failed settled nothing, so the attempt has no outcome, as in TypeScript. A
-		// stale answer lost the lease, and a lost lease that failAttempt already found stays, as in
-		// settleAfterShutdown.
-		if shutdownSettlementError(err) != nil && outcome != handlerOutcomeLeaseLost {
+		// stale answer lost the lease, as in settleAfterShutdown.
+		if shutdownSettlementError(err) != nil {
 			return handlerOutcomeUnknown, err
 		}
 		return handlerOutcomeLeaseLost, err
@@ -4156,8 +4209,10 @@ func (worker *Worker) failAfterShutdown(
 }
 
 // releaseOwned hands an owned task back through release_owned_v1 without charging its attempt.
-// It reports the handler outcome the release status implies before it settles that status. A stale
-// status is reconciled first, so the outcome names the cause that settled the attempt.
+// It reports the handler outcome of the release status after it settles that status, and sets the
+// status as the handler span outcome, as in TypeScript. A stale status is reconciled first, so the
+// outcome names the cause that settled the attempt. A refused acknowledgement of a cancel_requested
+// status is a lost lease.
 func (worker *Worker) releaseOwned(
 	ctx context.Context,
 	executor Executor,
@@ -4181,6 +4236,7 @@ func (worker *Worker) releaseOwned(
 	if !ok {
 		return errors.New(invalidReleaseResultMessage)
 	}
+	setHandlerSpanOutcome(ctx, status)
 	outcome := handlerOutcomeLeaseLost
 	var settleError error
 	switch status {
@@ -4205,7 +4261,6 @@ func (worker *Worker) releaseOwned(
 	default:
 		return fmt.Errorf(rejectedReleaseStatusFormat, status)
 	}
-	settled(outcome)
 	logWorkerEvent(
 		ctx,
 		worker.logger,
@@ -4217,8 +4272,9 @@ func (worker *Worker) releaseOwned(
 		},
 	)
 	if status == workerFailureCancelRequested {
-		return worker.acknowledgeCancellation(ctx, executor, task)
+		outcome, settleError = worker.acknowledgeRequestedCancellation(ctx, executor, task)
 	}
+	settled(outcome)
 	return settleError
 }
 
@@ -4360,13 +4416,16 @@ func (worker *Worker) failAttempt(
 	if err != nil {
 		return handlerOutcomeUnknown, err
 	}
+	// As in TypeScript, the handler span outcome is the state that fail_v1 returns, such as ready or
+	// scheduled for a retry, unless a refused acknowledgement or a reconciliation replaces it.
+	setHandlerSpanOutcome(ctx, state)
 	switch state {
 	case workerFailureReady, workerFailureScheduled:
 		return handlerOutcomeRetry, nil
 	case workerFailureFailed:
 		return handlerOutcomeFailed, nil
 	case workerFailureCancelRequested:
-		return handlerOutcomeCanceled, worker.acknowledgeCancellation(ctx, executor, task)
+		return worker.acknowledgeRequestedCancellation(ctx, executor, task)
 	case workerFailureDeadline:
 		return handlerOutcomeDeadlineExceeded, nil
 	case workerFailureTimeout:

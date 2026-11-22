@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -370,11 +371,47 @@ const (
 	handlerOutcomeUnknown          handlerOutcome = telemetryUnknownValue
 )
 
+// handlerSpanOutcomeKey marks the context of a handler span. Its value holds the handler span
+// outcome that a settlement set, as TypeScript sets it with span.setAttribute.
+type handlerSpanOutcomeKey struct{}
+
+// setHandlerSpanOutcome sets the workhorse.handler.outcome of the handler span on ctx. A fail_v1
+// or release_owned_v1 answer sets the status that PostgreSQL returned, such as ready or released,
+// and a reconciliation sets the cause that it settled.
+func setHandlerSpanOutcome(ctx context.Context, outcome string) {
+	if holder, ok := ctx.Value(handlerSpanOutcomeKey{}).(*atomic.Pointer[string]); ok {
+		holder.Store(&outcome)
+	}
+}
+
+// handlerSpanOutcome is the workhorse.handler.outcome of the handler span on ctx: the value a
+// settlement set, or else the span name of outcome. As in TypeScript, a lost lease is stale and an
+// attempt timeout is timeout_exceeded on the span.
+func handlerSpanOutcome(ctx context.Context, outcome handlerOutcome) string {
+	if holder, ok := ctx.Value(handlerSpanOutcomeKey{}).(*atomic.Pointer[string]); ok {
+		if set := holder.Load(); set != nil {
+			return *set
+		}
+	}
+	switch outcome {
+	case handlerOutcomeLeaseLost:
+		return workerFailureStale
+	case handlerOutcomeTimeout:
+		return workerFailureTimeout
+	default:
+		return string(outcome)
+	}
+}
+
 func startHandlerSpan(ctx context.Context, task ClaimedTask) (context.Context, trace.Span) {
 	if otel.GetTracerProvider() == initialTracerProvider {
 		return ctx, trace.SpanFromContext(ctx)
 	}
-	parent := extractTraceContext(ctx, task.TraceContext)
+	parent := context.WithValue(
+		extractTraceContext(ctx, task.TraceContext),
+		handlerSpanOutcomeKey{},
+		new(atomic.Pointer[string]),
+	)
 	return startWorkerSpan(
 		parent,
 		handlerSpanName,
@@ -448,8 +485,8 @@ func extractWithPropagator(ctx context.Context, carrier propagation.MapCarrier) 
 	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 
-func finishHandlerSpan(span trace.Span, outcome handlerOutcome, err error) {
-	span.SetAttributes(attribute.String(handlerOutcomeAttribute, string(outcome)))
+func finishHandlerSpan(ctx context.Context, span trace.Span, outcome handlerOutcome, err error) {
+	span.SetAttributes(attribute.String(handlerOutcomeAttribute, handlerSpanOutcome(ctx, outcome)))
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

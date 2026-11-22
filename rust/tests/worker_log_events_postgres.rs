@@ -999,6 +999,68 @@ async fn a_failed_settlement_after_shutdown_logs_its_event() {
     );
 }
 
+/// A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` refuses it. The attempt settled
+/// nothing, so it has no outcome, and the worker writes no execution record, as TypeScript, Python,
+/// Ruby, the JVM, and .NET do. Before, the Rust worker wrote the outcome `lease_lost`.
+#[tokio::test]
+async fn a_refused_cancellation_acknowledgement_logs_no_execution_record() {
+    let Some(database) = scratch_database("refused_cancel_ack_log").await else { return };
+    let (client, connection) = tokio_postgres::connect(database.url(), NoTls).await.unwrap();
+    tokio::spawn(connection);
+    client
+        .batch_execute(
+            r"
+            CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint)
+              RETURNS boolean LANGUAGE sql AS $body$ SELECT false $body$;
+            ",
+        )
+        .await
+        .unwrap();
+    let queue_name = "rust-log-refused-cancel";
+    let queue = Arc::new(Queue::connect(database.url(), queue_name).await.unwrap());
+    let task_id =
+        queue.enqueue("cancellable", &json!({}), EnqueueOptions::default()).await.unwrap().task_id;
+    let worker = Worker::new(pool_on(database.url()), {
+        let mut options = WorkerOptions::default();
+        options.queues = vec![queue_name.into()];
+        options.worker_id = Some(queue_name.into());
+        options.polling_only = true;
+        options.disable_registry = true;
+        options.maintenance_interval = Duration::from_secs(3600);
+        options.lease_duration = Duration::from_secs(3);
+        options.heartbeat_interval = Some(Duration::from_millis(100));
+        options
+    })
+    .unwrap();
+    worker.handle("cancellable", {
+        let queue = Arc::clone(&queue);
+        move |_: Value, context: HandlerContext| {
+            let queue = Arc::clone(&queue);
+            async move {
+                queue.cancel(context.task().id, None, None).await.unwrap();
+                context.cancellation().cancelled().await;
+                Err::<Value, _>(HandlerError::new("the cancellation stopped the handler"))
+            }
+        }
+    });
+    let events = Events::default();
+    let _subscriber = events.install();
+    let worked = tokio::time::timeout(Duration::from_secs(30), worker.run_once()).await;
+    assert!(worked.unwrap().unwrap(), "the worker claimed no task");
+
+    events.one("workhorse.task.cancellation_acknowledged").expect(
+        Level::INFO,
+        &[("workhorse.task.id", text(task_id)), ("workhorse.cancel.accepted", text(false))],
+    );
+    let executions = events.named("workhorse.task.execution_finished");
+    assert!(executions.is_empty(), "{executions:?}");
+    events.one("workhorse.handler.finished").expect(
+        Level::DEBUG,
+        &[("workhorse.task.id", text(task_id)), ("workhorse.queue.name", text(queue_name))],
+    );
+}
+
 /// The records of one attempt carry the task identity themselves, as TypeScript writes them. The
 /// handler span also carries it, but an exporter of log records does not copy span fields.
 #[tokio::test]

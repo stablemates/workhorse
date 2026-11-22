@@ -263,7 +263,10 @@ impl Inner {
         if outcome != "succeeded" && outcome != "unknown" {
             span.record("otel.status_code", "error");
         }
-        self.log_handler_finished(&task, &span, settled.as_ref().ok().copied(), elapsed);
+        // An attempt that settled nothing, such as a refused acknowledgement of a delivered
+        // cancellation, has no execution record.
+        let known = settled.as_ref().ok().copied().filter(|outcome| *outcome != "unknown");
+        self.log_handler_finished(&task, &span, known, elapsed);
         settled.map(drop)
     }
 
@@ -375,7 +378,9 @@ impl Inner {
             None => (rejected, false),
         };
         match status {
-            Some(OwnershipStatus::CancelRequested) => return self.acknowledge(task).await,
+            Some(OwnershipStatus::CancelRequested) => {
+                return self.acknowledge_delivered(task).await
+            }
             Some(OwnershipStatus::DeadlineExceeded) if already_expired => {
                 return Ok("deadline_exceeded")
             }
@@ -391,7 +396,7 @@ impl Inner {
             Some(OwnershipStatus::Accepted) | None => {}
         }
         match (reason, &result) {
-            (Some(CancelReason::Requested), _) => return self.acknowledge(task).await,
+            (Some(CancelReason::Requested), _) => return self.acknowledge_delivered(task).await,
             (Some(CancelReason::DeadlineExceeded | CancelReason::ExecutionTimeout), _) => {
                 return self.settle_expiration(task).await
             }
@@ -519,9 +524,12 @@ impl Inner {
         );
     }
 
+    /// Settles a deadline or an attempt timeout that a heartbeat or the handler cancellation
+    /// reported, and returns the cause that PostgreSQL settled. A cancellation that won the fence
+    /// before the expiry request is that cause.
     async fn settle_expiration(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
         match self.expire_ownership(task).await? {
-            OwnershipStatus::CancelRequested => self.acknowledge(task).await,
+            OwnershipStatus::CancelRequested => self.acknowledge_delivered(task).await,
             OwnershipStatus::DeadlineExceeded => Ok("deadline_exceeded"),
             OwnershipStatus::TimeoutExceeded => Ok("timeout"),
             OwnershipStatus::NotDue => {
@@ -557,6 +565,18 @@ impl Inner {
         Ok(accepted)
     }
 
+    /// Settles a cancellation that a heartbeat or an expiry request outside a reconciliation
+    /// delivered while the handler ran. If PostgreSQL refuses the acknowledgement, the attempt
+    /// settled nothing, so it has no outcome and the worker continues, as TypeScript, Python, Ruby,
+    /// the JVM, and .NET do.
+    async fn acknowledge_delivered(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
+        Ok(if self.acknowledge_cancel(task).await? { "canceled" } else { "unknown" })
+    }
+
+    /// Settles the cancellation that `fail_v1` or `release_owned_v1` answered with, or that
+    /// `expire_owned_v1` answered with during the reconciliation of a refused settlement. If
+    /// PostgreSQL refuses it, the attempt reports a lost lease, as in TypeScript. An expiry request
+    /// outside a reconciliation uses `acknowledge_delivered`.
     async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
         if self.acknowledge_cancel(task).await? {
             Ok("canceled")

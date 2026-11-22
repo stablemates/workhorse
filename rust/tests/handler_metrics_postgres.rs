@@ -3,12 +3,14 @@
 //!
 //! The TypeScript worker records the duration of an attempt without an outcome with the outcome
 //! `unknown`, and `workhorse.handler.executions` does not count it. It records the metrics of a
-//! release with the outcome `released`. This file is its own test binary with one test, so no
-//! other test changes the global meter provider while it runs.
+//! release with the outcome `released`. A cancellation that a heartbeat delivers and that
+//! PostgreSQL refuses to acknowledge has no outcome. This file is its own test binary with one
+//! test, so no other test changes the global meter provider while it runs.
 #![cfg(feature = "opentelemetry")]
 
 mod support;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use opentelemetry::KeyValue;
@@ -17,7 +19,7 @@ use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMete
 use serde_json::{json, Value};
 use support::scratch_database;
 use tokio_postgres::NoTls;
-use workhorse::{EnqueueOptions, Queue, Worker, WorkerOptions};
+use workhorse::{EnqueueOptions, HandlerContext, HandlerError, Queue, Worker, WorkerOptions};
 
 #[tokio::test]
 async fn the_handler_metrics_of_a_failed_settlement_and_of_a_release() {
@@ -59,7 +61,42 @@ async fn the_handler_metrics_of_a_failed_settlement_and_of_a_release() {
     releasing.handle("other", |_: Value, _| async { Ok(json!("done")) });
     tokio::time::timeout(Duration::from_secs(30), releasing.run_once()).await.unwrap().unwrap();
 
+    // A heartbeat delivers a cancellation, and acknowledge_cancel_v1 refuses it. The attempt
+    // settled nothing, so it has no outcome, and the pass ends without an error, as in TypeScript.
+    client
+        .batch_execute(
+            r"
+            CREATE OR REPLACE FUNCTION workhorse.acknowledge_cancel_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint)
+              RETURNS boolean LANGUAGE sql AS $body$ SELECT false $body$;
+            ",
+        )
+        .await
+        .unwrap();
+    let refused_queue = "rust-refused-cancel-metrics";
+    let refused = Arc::new(Queue::connect(database.url(), refused_queue).await.unwrap());
+    refused.enqueue("cancellable", &json!({}), EnqueueOptions::default()).await.unwrap();
+    let canceling = heartbeating_worker_on(database.url(), refused_queue);
+    canceling.handle("cancellable", {
+        let refused = Arc::clone(&refused);
+        move |_: Value, context: HandlerContext| {
+            let refused = Arc::clone(&refused);
+            async move {
+                refused.cancel(context.task().id, None, None).await.unwrap();
+                context.cancellation().cancelled().await;
+                Err::<Value, _>(HandlerError::new("the cancellation stopped the handler"))
+            }
+        }
+    });
+    let worked = tokio::time::timeout(Duration::from_secs(30), canceling.run_once()).await.unwrap();
+    assert!(worked.unwrap(), "the worker claimed no task");
+
     meter_provider.force_flush().unwrap();
+    assert_eq!(
+        outcomes(&metrics, "workhorse.handler.executions", refused_queue),
+        Vec::<String>::new()
+    );
+    assert_eq!(outcomes(&metrics, "workhorse.handler.duration", refused_queue), vec!["unknown"]);
     assert_eq!(
         outcomes(&metrics, "workhorse.handler.executions", queue_name),
         Vec::<String>::new()
@@ -80,6 +117,25 @@ fn worker_on(url: &str, queue: &str) -> Worker {
         options.polling_only = true;
         options.disable_registry = true;
         options.maintenance_interval = Duration::from_secs(3600);
+        options
+    })
+    .unwrap()
+}
+
+/// A worker of `queue` as [`worker_on`] builds it, with a heartbeat every 100 ms, so a
+/// cancellation reaches the handler soon.
+fn heartbeating_worker_on(url: &str, queue: &str) -> Worker {
+    let manager = deadpool_postgres::Manager::new(url.parse().unwrap(), NoTls);
+    let pool = deadpool_postgres::Pool::builder(manager).max_size(4).build().unwrap();
+    Worker::new(pool, {
+        let mut options = WorkerOptions::default();
+        options.queues = vec![queue.into()];
+        options.worker_id = Some(queue.into());
+        options.polling_only = true;
+        options.disable_registry = true;
+        options.maintenance_interval = Duration::from_secs(3600);
+        options.lease_duration = Duration::from_secs(3);
+        options.heartbeat_interval = Some(Duration::from_millis(100));
         options
     })
     .unwrap()

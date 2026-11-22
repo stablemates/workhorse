@@ -18,37 +18,42 @@ import (
 )
 
 // refusedSettlementCase is one change that makes PostgreSQL refuse a settlement write, and the
-// handler outcome that the worker reports after it settles the cause.
+// handler outcome that the worker reports after it settles the cause: the metric outcome, and the
+// handler span outcome of TypeScript.
 type refusedSettlementCase struct {
 	cause   string
 	outcome string
+	span    string
 }
 
 // refusedCompletionCases are the causes of the shared fixture a-refused-completion-settles-its-cause.
 var refusedCompletionCases = []refusedSettlementCase{
-	{cause: "deadline", outcome: "deadline_exceeded"},
-	{cause: "attempt-timeout", outcome: "timeout"},
-	{cause: "cancellation", outcome: "canceled"},
-	{cause: "moved-fence", outcome: "lease_lost"},
+	{cause: "deadline", outcome: "deadline_exceeded", span: "deadline_exceeded"},
+	{cause: "attempt-timeout", outcome: "timeout", span: "timeout_exceeded"},
+	{cause: "cancellation", outcome: "canceled", span: "canceled"},
+	{cause: "moved-fence", outcome: "lease_lost", span: "stale"},
 }
 
 // lapsedLeaseCases let the lease expire under an unchanged fence, so fail_v1 and release_owned_v1
 // answer stale. A due boundary still settles under that fence. A cancellation cannot be
-// acknowledged after the lease expires, so it stays with lease recovery.
+// acknowledged after the lease expires, so it stays with lease recovery. With no due boundary,
+// expire_owned_v1 answers not_due, and the attempt reports a lost lease, as in TypeScript.
 var lapsedLeaseCases = []refusedSettlementCase{
-	{cause: "lapsed-deadline", outcome: "deadline_exceeded"},
-	{cause: "lapsed-attempt-timeout", outcome: "timeout"},
-	{cause: "lapsed-lease", outcome: "lease_lost"},
+	{cause: "lapsed-deadline", outcome: "deadline_exceeded", span: "deadline_exceeded"},
+	{cause: "lapsed-attempt-timeout", outcome: "timeout", span: "timeout_exceeded"},
+	{cause: "lapsed-lease", outcome: "lease_lost", span: "stale"},
 }
 
 // A refused completion reports the cause that the worker settles as its handler outcome, on the
-// handler span and on the handler executions metric. Only a moved fence reports a lost lease.
+// handler span, on the handler executions metric, and on the execution record. Only a moved fence
+// reports a lost lease.
 func TestWorkerReportsTheSettledCauseOfARefusedCompletionAsTheHandlerOutcome(t *testing.T) {
 	testRefusedSettlementOutcomes(t, "worker-refused-complete", refusedCompletionCases, false, false)
 }
 
 // A handler that returns a value after the stop has its completion written by the shutdown
-// settlement. A refusal there reports the same outcomes as a refusal of a normal completion.
+// settlement. A refusal there reports the same outcomes as a refusal of a normal completion. The
+// write after the stop settled the attempt, so the handler span records no error for the stop.
 func TestWorkerReportsTheSettledCauseOfARefusedShutdownCompletionAsTheHandlerOutcome(t *testing.T) {
 	testRefusedSettlementOutcomes(t, "worker-refused-shutdown-complete", refusedCompletionCases, false, true)
 }
@@ -100,9 +105,10 @@ func testRefusedSettlementOutcomes(
 	t.Cleanup(control.Close)
 
 	taskIDs := make(map[string]string, len(cases))
+	var logs lockedBuffer
 	for _, testCase := range cases {
 		taskIDs[testCase.cause] = runRefusedSettlement(
-			t, ctx, pool, control, name, testCase.cause, handlerFails, afterStop,
+			t, ctx, pool, control, &logs, name, testCase.cause, handlerFails, afterStop,
 		)
 	}
 
@@ -119,6 +125,7 @@ func testRefusedSettlementOutcomes(
 		}
 	}
 	spanOutcomes := make(map[string]string)
+	spanErrors := make(map[string][]string)
 	for _, span := range exporter.GetSpans() {
 		if span.Name != "workhorse.handler" {
 			continue
@@ -127,11 +134,24 @@ func testRefusedSettlementOutcomes(
 		taskID, _ := attributes.Value("workhorse.task.id")
 		outcome, _ := attributes.Value("workhorse.handler.outcome")
 		spanOutcomes[taskID.AsString()] = outcome.AsString()
+		spanErrors[taskID.AsString()] = recordedExceptionMessages(tracetest.SpanStub{Events: span.Events})
 	}
+	output := logs.String()
 	for _, testCase := range cases {
 		t.Run(testCase.cause, func(t *testing.T) {
-			if outcome := spanOutcomes[taskIDs[testCase.cause]]; outcome != testCase.outcome {
-				t.Errorf("handler span outcome = %q, want %q", outcome, testCase.outcome)
+			taskID := taskIDs[testCase.cause]
+			if outcome := spanOutcomes[taskID]; outcome != testCase.span {
+				t.Errorf("handler span outcome = %q, want %q", outcome, testCase.span)
+			}
+			for _, message := range spanErrors[taskID] {
+				if message == context.Canceled.Error() {
+					t.Errorf("the handler span records the stop as an error: %v", spanErrors[taskID])
+				}
+			}
+			if records := matchingLogRecords(t, output, "workhorse.task.execution_finished", map[string]any{
+				"workhorse.task.id": taskID, "workhorse.handler.outcome": testCase.outcome,
+			}); len(records) != 1 {
+				t.Errorf("got %d execution records with outcome %q, want 1", len(records), testCase.outcome)
 			}
 			if !hasMetricPoint(
 				executions.DataPoints,
@@ -151,6 +171,7 @@ func runRefusedSettlement(
 	t *testing.T,
 	ctx context.Context,
 	pool, control *pgxpool.Pool,
+	logs *lockedBuffer,
 	name, cause string,
 	handlerFails, afterStop bool,
 ) string {
@@ -177,6 +198,7 @@ func runRefusedSettlement(
 		// With an interval of one hour, only the tick before the claim runs. A later tick could
 		// settle the changed boundary before the settlement write.
 		MaintenanceInterval: time.Hour,
+		Logger:              debugJSONLogger(logs),
 	})
 	if err != nil {
 		t.Fatalf("%s: %v", cause, err)
