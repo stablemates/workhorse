@@ -10,11 +10,11 @@ namespace Workhorse;
 /// <summary>The requests that the durable context of a worker sends through the queue code.</summary>
 public sealed partial class Queue
 {
-    /// <summary>A queue for the durable context of a worker, with the codec of that worker.</summary>
-    internal Queue(NpgsqlDataSource dataSource, JsonCodec codec)
+    /// <summary>A queue for the durable context of a worker, with the codec and the logger of that worker.</summary>
+    internal Queue(NpgsqlDataSource dataSource, JsonCodec codec, Microsoft.Extensions.Logging.ILogger logger)
     {
         _dataSource = DataSources.Require(dataSource, nameof(dataSource));
-        _shared = new Shared("default", codec);
+        _shared = new Shared("default", codec, logger);
     }
 
     /// <summary>
@@ -61,7 +61,7 @@ public sealed partial class Queue
                         [Parameters.Uuid(link.Group.Id), Parameters.Json(document), Parameters.Uuid(task.Id), Parameters.Text(workerId), Parameters.Bigint(task.FenceToken)],
                         cancellationToken),
                     cancellationToken).ConfigureAwait(false);
-                return EnqueueResults(rows, routed.Count);
+                return EnqueueResults(rows, routed);
             },
             cancellationToken).ConfigureAwait(false);
     }

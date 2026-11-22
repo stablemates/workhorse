@@ -99,19 +99,16 @@ class TelemetrySurfaceTest {
    */
   private static final List<String> FUSED_COMPLETION = List.of("workhorse.complete.batch_size");
 
-  /** The cancel, redrive, schedule sync, and enqueue outcome names, which SM-1609 owns. */
+  /**
+   * The cancel, redrive, schedule sync, and enqueue outcome metrics and spans, which SM-1609 owns.
+   * The queue and the admin write the attributes of their log records.
+   */
   private static final List<String> QUEUE_AND_ADMIN =
       List.of(
           "workhorse.cancellation.status",
-          "workhorse.operation.status",
-          "workhorse.redrive.dry_run",
           "workhorse.redrive.status",
-          "workhorse.redrive.target_task_id",
-          "workhorse.schedule.count",
           "workhorse.schedule.definition_count",
           "workhorse.schedule.synchronize",
-          "workhorse.task.count",
-          "workhorse.task.state",
           "workhorse.tasks.cancellation",
           "workhorse.tasks.enqueue.outcomes",
           "workhorse.tasks.enqueued",

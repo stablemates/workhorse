@@ -71,18 +71,13 @@ impl Inner {
     ) -> Result<(), Error> {
         let started = Instant::now();
         let span = telemetry::handler_span(&task);
-        tracing::debug!(
-            parent: &span,
-            event.name = "workhorse.handler.started",
-            workhorse.worker.id = %self.worker_id,
-            "Handler started"
-        );
+        self.log_handler_started(&task, &span);
         let task = Arc::new(task);
         // The first lease window runs from the claim. Only an accepted renewal moves it: a busy
         // round leaves it as it was.
         let lease = self.options.lease_duration;
         let mut membership =
-            self.register_heartbeat(task.id, task.fence_token, task.claim_sent_at + lease);
+            self.register_task_heartbeat(Arc::clone(&task), task.claim_sent_at + lease);
         let token = CancellationToken::default();
         let context = HandlerContext::new(
             Arc::clone(&task),
@@ -123,7 +118,8 @@ impl Inner {
                     rejected.get_or_insert(OwnershipStatus::Stale);
                     token.cancel(CancelReason::LeaseLost);
                     membership.leave();
-                    tracing::warn!(
+                    crate::telemetry::log_event!(
+                        warn,
                         parent: &span,
                         event.name = "workhorse.task.lease_expired",
                         workhorse.worker.id = %self.worker_id,
@@ -142,7 +138,8 @@ impl Inner {
                     // The handler still runs, so each failed request gets its record, also when
                     // a stale heartbeat that arrived during the request ends the attempt next.
                     if let Err(error) = &answer {
-                        tracing::warn!(
+                        crate::telemetry::log_event!(
+                            warn,
                             parent: &span,
                             event.name = "workhorse.worker.expiration_request_failed",
                             workhorse.task.id = %task.id,
@@ -151,7 +148,6 @@ impl Inner {
                             workhorse.queue.name = %task.queue,
                             workhorse.worker.id = %self.worker_id,
                             error.r#type = %error.type_name(),
-                            error = %error,
                             "Ownership expiration request failed; the worker asks again"
                         );
                     }
@@ -238,7 +234,8 @@ impl Inner {
             // still suspends, and the warning is the only record that the handler swallowed it
             // (SM-2016).
             if !matches!(&result, Err(error) if error.is_suspension()) {
-                tracing::warn!(
+                crate::telemetry::log_event!(
+                    warn,
                     parent: &span,
                     event.name = "workhorse.handler.signal_swallowed",
                     workhorse.task.id = %task.id,
@@ -247,7 +244,7 @@ impl Inner {
                     workhorse.queue.name = %task.queue,
                     workhorse.worker.id = %self.worker_id,
                     workhorse.handler.outcome = "suspended",
-                    "Task handler swallowed its suspension signal"
+                    "Task handler swallowed its abort signal"
                 );
             }
             Ok("suspended")
@@ -274,16 +271,80 @@ impl Inner {
         if outcome != "succeeded" && outcome != "unknown" {
             span.record("otel.status_code", "error");
         }
-        tracing::info!(
-            parent: &span,
-            event.name = "workhorse.task.execution_finished",
-            workhorse.worker.id = %self.worker_id,
-            workhorse.handler.outcome = outcome,
-            workhorse.handler.duration_ms = elapsed,
-            "Task execution finished"
-        );
-        tracing::debug!(parent: &span, event.name = "workhorse.handler.finished", "Handler finished");
+        self.log_handler_finished(&task, &span, settled.as_ref().ok().copied(), elapsed);
         settled.map(drop)
+    }
+
+    /// Returns a claimed task that has no handler to its queue without an attempt. The worker
+    /// writes the records of an execution around the release, as the TypeScript worker does.
+    pub(super) async fn release_missing(&self, task: &ClaimedTask) -> Result<(), Error> {
+        let started = Instant::now();
+        let span = telemetry::handler_span(task);
+        self.log_handler_started(task, &span);
+        let released = self.release(task, true).instrument(span.clone()).await;
+        // A lost lease is a known outcome. The caller still gets the error, as before.
+        let outcome = match &released {
+            Ok(outcome) => Some(*outcome),
+            Err(Error::LeaseLost { .. }) => Some("lease_lost"),
+            Err(_) => None,
+        };
+        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        self.log_handler_finished(task, &span, outcome, elapsed);
+        released.map(drop)
+    }
+
+    /// Writes `workhorse.handler.started`. Each record carries the task identity itself: an
+    /// exporter of log records does not copy the fields of the handler span.
+    fn log_handler_started(&self, task: &ClaimedTask, span: &tracing::Span) {
+        crate::telemetry::log_event!(
+            debug,
+            parent: span,
+            event.name = "workhorse.handler.started",
+            workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.queue.name = %task.queue,
+            workhorse.worker.id = %self.worker_id,
+            "Task handler started"
+        );
+    }
+
+    /// Writes `workhorse.task.execution_finished` for a known `outcome`, then
+    /// `workhorse.handler.finished`. A settlement that failed has no outcome, so the worker writes
+    /// no execution record for it, as the TypeScript worker does.
+    fn log_handler_finished(
+        &self,
+        task: &ClaimedTask,
+        span: &tracing::Span,
+        outcome: Option<Outcome>,
+        elapsed: f64,
+    ) {
+        if let Some(outcome) = outcome {
+            crate::telemetry::log_event!(
+                info,
+                parent: span,
+                event.name = "workhorse.task.execution_finished",
+                workhorse.task.id = %task.id,
+                workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
+                workhorse.queue.name = %task.queue,
+                workhorse.worker.id = %self.worker_id,
+                workhorse.handler.outcome = outcome,
+                "Task execution finished"
+            );
+        }
+        crate::telemetry::log_event!(
+            debug,
+            parent: span,
+            event.name = "workhorse.handler.finished",
+            workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.queue.name = %task.queue,
+            workhorse.worker.id = %self.worker_id,
+            workhorse.handler.duration_ms = elapsed,
+            "Task handler finished"
+        );
     }
 
     async fn settle(
@@ -325,15 +386,45 @@ impl Inner {
             // A handler that stopped for shutdown returns the task to the queue without an attempt
             // (ADR 0117). A panic still fails the attempt.
             (Some(CancelReason::Shutdown), Err(error)) if !error.is_panic() => {
-                return self.release(task, false).await
+                let released = self.release(task, false).await;
+                return self.after_shutdown(task, released);
             }
             _ => {}
         }
         let after_shutdown = reason == Some(CancelReason::Shutdown);
         match result {
-            Ok(value) => self.complete(task, value, slot, after_shutdown).await,
+            Ok(value) => {
+                let completed = self.complete(task, value, slot, after_shutdown).await;
+                if after_shutdown {
+                    return self.after_shutdown(task, completed);
+                }
+                completed
+            }
             Err(error) => self.fail_with_state(task, error).await,
         }
+    }
+
+    /// Logs a completion or a release after the shutdown cancellation that failed. The error then
+    /// ends the run, and lease recovery settles the task.
+    fn after_shutdown(
+        &self,
+        task: &ClaimedTask,
+        settled: Result<Outcome, Error>,
+    ) -> Result<Outcome, Error> {
+        if let Err(error) = &settled {
+            crate::telemetry::log_event!(
+                warn,
+                event.name = "workhorse.worker.shutdown_settlement_failed",
+                workhorse.task.id = %task.id,
+                workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
+                workhorse.queue.name = %task.queue,
+                workhorse.worker.id = %self.worker_id,
+                error.r#type = %error.type_name(),
+                "Worker could not settle a task after the shutdown abort"
+            );
+        }
+        settled
     }
 
     /// Settles a result that the task cannot store. After the shutdown cancellation, the worker
@@ -364,7 +455,8 @@ impl Inner {
         let row = exactly_one(&rows, "expire_owned_telemetry_v1")?;
         let status =
             OwnershipStatus::parse(row.try_get::<_, Option<String>>("status")?.as_deref())?;
-        if let Some(retry_state) = row.try_get::<_, Option<String>>("retry_state")? {
+        let retry_state = row.try_get::<_, Option<String>>("retry_state")?;
+        if let Some(retry_state) = retry_state {
             let span = telemetry::retry_span(task);
             span.record("workhorse.retry.outcome", retry_state.as_str());
             self.metrics.add(
@@ -376,6 +468,16 @@ impl Inner {
                 ],
             );
         }
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.task.ownership_expired",
+            workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.expiration.status = status.as_str(),
+            workhorse.worker.id = %self.worker_id,
+            "Owned task lease expired"
+        );
         Ok(status)
     }
 
@@ -396,7 +498,8 @@ impl Inner {
     }
 
     fn warn_not_due(&self, task: &ClaimedTask) {
-        tracing::warn!(
+        crate::telemetry::log_event!(
+            warn,
             workhorse.task.id = %task.id,
             workhorse.worker.id = %self.worker_id,
             "PostgreSQL did not accept ownership expiration before the retry budget elapsed"
@@ -418,14 +521,31 @@ impl Inner {
         }
     }
 
-    async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
+    /// Asks PostgreSQL to settle a requested cancellation under the fence, and returns whether it
+    /// accepted.
+    async fn acknowledge_cancel(&self, task: &ClaimedTask) -> Result<bool, Error> {
         let rows = fenced_rows(
             &self.statements(),
             sql::ACKNOWLEDGE_CANCEL_V1,
             &[&task.id, &self.worker_id, &task.fence_token],
         )
         .await?;
-        if accepted(&rows, "acknowledge_cancel_v1")? {
+        let accepted = accepted(&rows, "acknowledge_cancel_v1")?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.task.cancellation_acknowledged",
+            workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.cancel.accepted = accepted,
+            workhorse.worker.id = %self.worker_id,
+            "Task cancellation acknowledged"
+        );
+        Ok(accepted)
+    }
+
+    async fn acknowledge(&self, task: &ClaimedTask) -> Result<Outcome, Error> {
+        if self.acknowledge_cancel(task).await? {
             Ok("canceled")
         } else {
             Err(Error::LeaseLost { task_id: task.id, operation: Operation::Heartbeat })
@@ -434,13 +554,7 @@ impl Inner {
 
     /// Explains a rejected settlement: a cancellation or expiration that won, or a lost lease.
     async fn reconcile(&self, task: &ClaimedTask, operation: Operation) -> Result<Outcome, Error> {
-        let rows = fenced_rows(
-            &self.statements(),
-            sql::ACKNOWLEDGE_CANCEL_V1,
-            &[&task.id, &self.worker_id, &task.fence_token],
-        )
-        .await?;
-        if accepted(&rows, "acknowledge_cancel_v1")? {
+        if self.acknowledge_cancel(task).await? {
             return Ok("canceled");
         }
         match self.expire_ownership(task).await? {
@@ -487,6 +601,16 @@ impl Inner {
             self.complete_full(task, &result).await?
         };
         if !accepted {
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.task.completion_rejected",
+                workhorse.task.id = %task.id,
+                workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
+                workhorse.complete.accepted = false,
+                workhorse.worker.id = %self.worker_id,
+                "Stale task completion rejected"
+            );
             return self.reconcile(task, Operation::Complete).await;
         }
         self.metrics.add(
@@ -497,9 +621,13 @@ impl Inner {
                 ("workhorse.task.type", Attribute::Text(&task.task_type)),
             ],
         );
-        tracing::info!(
+        crate::telemetry::log_event!(
+            info,
             event.name = "workhorse.task.completed",
             workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.complete.accepted = true,
             workhorse.worker.id = %self.worker_id,
             "Task completed"
         );
@@ -609,10 +737,13 @@ impl Inner {
         missing: bool,
     ) -> Result<Outcome, Error> {
         if missing {
-            tracing::warn!(
+            crate::telemetry::log_event!(
+                warn,
                 event.name = "workhorse.handler.missing",
                 workhorse.task.id = %task.id,
                 workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
+                workhorse.queue.name = %task.queue,
                 workhorse.worker.id = %self.worker_id,
                 "No handler registered for the claimed task type"
             );
@@ -638,9 +769,12 @@ impl Inner {
                 })
             }
         };
-        tracing::info!(
+        crate::telemetry::log_event!(
+            info,
             event.name = "workhorse.task.release_processed",
             workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
             workhorse.worker.id = %self.worker_id,
             workhorse.release.status = outcome,
             "Owned task release processed"
@@ -708,6 +842,17 @@ impl Inner {
         let state: Option<String> = exactly_one(&rows, "fail_v2")?.try_get("state")?;
         let state = state.unwrap_or_default();
         tracing::Span::current().record("workhorse.retry.outcome", state.as_str());
+        // TypeScript writes this record for each answer, also for cancel_requested and stale.
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.task.failure_processed",
+            workhorse.task.id = %task.id,
+            workhorse.task.type = %task.task_type,
+            workhorse.task.attempt = task.attempt,
+            workhorse.attempt.outcome = %state,
+            workhorse.worker.id = %self.worker_id,
+            "Task attempt failure processed"
+        );
         if !matches!(
             state.as_str(),
             "ready" | "scheduled" | "failed" | "deadline_exceeded" | "timeout_exceeded"
@@ -726,13 +871,6 @@ impl Inner {
         if matches!(state.as_str(), "ready" | "scheduled") {
             self.metrics.add(Counter::Retried, 1.0, &dimensions);
         }
-        tracing::info!(
-            event.name = "workhorse.task.failure_processed",
-            workhorse.task.id = %task.id,
-            workhorse.worker.id = %self.worker_id,
-            workhorse.task.state = %state,
-            "Task failure processed"
-        );
         Ok(state)
     }
 }

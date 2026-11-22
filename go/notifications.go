@@ -2,6 +2,7 @@ package workhorse
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -81,7 +82,7 @@ func subscribeToTaskNotifications(
 	wake chan<- struct{},
 ) *taskNotificationSubscription {
 	if pollingOnly {
-		logger.WarnContext(ctx, pollingOnlyListenerLogMessage)
+		// Run writes workhorse.worker.polling_only for this choice.
 		return nil
 	}
 	taskNotificationHubs.mu.Lock()
@@ -181,7 +182,8 @@ func (hub *taskNotificationHub) report(err error) {
 	}
 	taskNotificationHubs.mu.Unlock()
 	for _, logger := range loggers {
-		logger.Warn(notificationListenerLogMessage, notificationListenerErrorKey, err)
+		// The record holds the error type, never the error text.
+		logger.Warn(notificationListenerLogMessage, slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)))
 	}
 }
 

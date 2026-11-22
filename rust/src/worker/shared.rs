@@ -194,7 +194,8 @@ impl Subscription {
     pub(super) async fn release(mut self, deadline: Option<Instant>) {
         if let Some(cleanup) = self.detach().hand_over() {
             if !until(deadline, cleanup).await {
-                tracing::warn!(
+                crate::telemetry::log_event!(
+                    warn,
                     "the close of the shared connections outlived the shutdown cleanup window"
                 );
             }
@@ -847,17 +848,18 @@ async fn keep(state: Arc<HeartbeatState>, pool: deadpool_postgres::WeakPool) {
                 failures = 0;
                 continue;
             }
-            Ok(Err(error)) => error.to_string(),
-            Err(_) => format!("no pooled connection within {bound:?}"),
+            // A record keeps only the error type, never the error text.
+            Ok(Err(error)) => Error::from(error).type_name(),
+            Err(_) => "timeout".to_owned(),
         };
         failures = failures.saturating_add(1);
         #[cfg(test)]
         state.failed.fetch_add(1, Ordering::SeqCst);
         // One warning for each loss; the retries that follow it log at debug level.
         if failures == 1 {
-            tracing::warn!(error = %error, "heartbeat connection unavailable; claims pause until it returns");
+            crate::telemetry::log_event!(warn, error.r#type = %error, "heartbeat connection unavailable; claims pause until it returns");
         } else {
-            tracing::debug!(error = %error, "heartbeat connection still unavailable");
+            crate::telemetry::log_event!(debug, error.r#type = %error, "heartbeat connection still unavailable");
         }
     }
 }
@@ -948,6 +950,33 @@ mod tests {
 
     use super::*;
     use crate::worker::scratch;
+    use crate::worker::tests::{silent_pool_on, CapturedLog};
+
+    /// A diagnostic record holds the error type, never the error text (docs/architecture/
+    /// telemetry.md, "Log content limits"). The pool error text names the host and the port.
+    #[tokio::test]
+    async fn a_lost_heartbeat_connection_logs_its_error_type_and_no_error_text() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let pool = silent_pool_on(port);
+        let log = CapturedLog::default();
+        let _subscriber = log.install();
+        let heartbeat = HeartbeatConnection::open(
+            &pool,
+            Duration::from_secs(1),
+            Instant::now() + Duration::from_secs(5),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !log.text().contains("heartbeat connection still unavailable") {
+            assert!(Instant::now() < deadline, "no heartbeat connection record: {}", log.text());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        heartbeat.close().await;
+        let text = log.text();
+        assert!(text.contains("error.type=Pool"), "{text}");
+        assert!(!text.contains(" error="), "{text}");
+    }
 
     fn pool() -> deadpool_postgres::Pool {
         let manager = deadpool_postgres::Manager::new(

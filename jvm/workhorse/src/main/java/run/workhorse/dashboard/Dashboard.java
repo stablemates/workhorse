@@ -108,6 +108,18 @@ public final class Dashboard implements Filter {
 
   private static final System.Logger LOG = System.getLogger(Dashboard.class.getName());
 
+  /**
+   * Writes one error to {@link #LOG}. A logger that throws never reaches the caller, because a log
+   * record must not change a reply, as in TypeScript.
+   */
+  private static void logError(String message, Throwable error) {
+    try {
+      LOG.log(System.Logger.Level.ERROR, message, error);
+    } catch (RuntimeException ignored) {
+      // The logger failed.
+    }
+  }
+
   private final ConnectionSource connections;
   private final String basePath;
   private final Set<String> allowedHosts;
@@ -270,10 +282,7 @@ public final class Dashboard implements Filter {
       return null;
     } catch (Exception error) {
       // A driver error can name the database host, user, or path, so it stays in the log.
-      LOG.log(
-          System.Logger.Level.ERROR,
-          "workhorse dashboard: schema compatibility check failed",
-          error);
+      logError("workhorse dashboard: schema compatibility check failed", error);
       return json(503, Map.of("error", UNVERIFIED_COMPATIBILITY));
     } finally {
       lock.unlock();
@@ -371,18 +380,12 @@ public final class Dashboard implements Filter {
       // A refused input keeps its message only when the host or Workhorse wrote it. A driver or a
       // library can put a stored value or an address in its message.
       if (calling && !raisedByWorkhorse(error)) {
-        LOG.log(
-            System.Logger.Level.ERROR,
-            "workhorse dashboard: procedure " + procedure + " failed",
-            error);
+        logError("workhorse dashboard: procedure " + procedure + " failed", error);
         return rpcError(500, "INTERNAL_SERVER_ERROR", "Internal server error", null);
       }
       return rpcError(400, "BAD_REQUEST", Objects.requireNonNullElse(error.getMessage(), ""), null);
     } catch (Exception error) {
-      LOG.log(
-          System.Logger.Level.ERROR,
-          "workhorse dashboard: procedure " + procedure + " failed",
-          error);
+      logError("workhorse dashboard: procedure " + procedure + " failed", error);
       return rpcError(500, "INTERNAL_SERVER_ERROR", "Internal server error", null);
     }
     // A result that the codec cannot encode is a server failure, not a refused request.
@@ -393,8 +396,7 @@ public final class Dashboard implements Filter {
               ? null
               : extended ? Json.write(Json.parse(codec.encode(value))) : Json.write(value);
     } catch (RuntimeException error) {
-      LOG.log(
-          System.Logger.Level.ERROR,
+      logError(
           "workhorse dashboard: procedure " + procedure + " returned a value that is not JSON",
           error);
       return rpcError(500, "INTERNAL_SERVER_ERROR", "Internal server error", null);

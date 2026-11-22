@@ -226,6 +226,18 @@ module Stablemates
         {"workhorse.queue.name" => task.queue, "workhorse.task.type" => task.type}
       end
 
+      # Whether +logger+ writes a record of +severity+. A caller checks this before it builds the
+      # attributes of a record, so a disabled logger costs no work. A logger without a level writes
+      # each record, and a logger whose level check raises writes none.
+      def log?(logger, severity)
+        return false if logger.nil?
+        return true unless logger.respond_to?(:level)
+
+        logger.level <= LEVELS.fetch(severity)
+      rescue
+        false
+      end
+
       # Logs one named event through the caller's Logger. +logger+ may be nil.
       #
       # A logger that raises never reaches the caller, because lifecycle code such as lease renewal
@@ -243,7 +255,7 @@ module Stablemates
 
       def report_log_failure(logger, event, error)
         first = @failed_loggers_lock.synchronize { @failed_loggers.key?(logger) ? false : (@failed_loggers[logger] = true) }
-        Kernel.warn("workhorse: logger raised #{error.class} while logging #{event}: #{error.message}") if first
+        Kernel.warn("workhorse: logger raised #{error.class} while logging #{event}") if first
       rescue
         nil
       end

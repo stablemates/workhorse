@@ -526,6 +526,18 @@ func TestGoWorkerContinuesTypeScriptTraceAndEmitsStructuredLogs(t *testing.T) {
 	if containsJSONLogValue(logOutput, "never log this") {
 		t.Fatalf("structured logs contain the task payload: %s", logOutput)
 	}
+	// TypeScript writes the handler duration on workhorse.handler.finished, and the outcome only on
+	// workhorse.task.execution_finished.
+	finished := jsonLogRecords(t, logOutput, "workhorse.handler.finished")
+	if len(finished) != 1 {
+		t.Fatalf("got %d handler.finished records, want 1: %s", len(finished), logOutput)
+	}
+	if _, ok := finished[0]["workhorse.handler.duration_ms"].(float64); !ok {
+		t.Fatalf("handler.finished has no duration_ms: %v", finished[0])
+	}
+	if _, ok := finished[0]["workhorse.handler.outcome"]; ok {
+		t.Fatalf("handler.finished holds the outcome: %v", finished[0])
+	}
 }
 
 type workerContextKey struct{}

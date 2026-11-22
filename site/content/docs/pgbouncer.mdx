@@ -184,20 +184,13 @@ checks the pool's shape, not its pooling mode, so it still reports the capabilit
 - A worker never polls because its pool is small. A worker on a pool below 3, or on a pool of
   unknown size, fails at construction. A JVM `DataSource` with no declared `poolMaxSize` and a .NET
   data source with `Pooling=false` are the exceptions: the startup check is their guard.
-- TypeScript: when `Worker.run()` starts with no subscription, it logs
-  `workhorse.worker.polling_only` at warn level once. Its record carries
-  `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`. A custom
-  `WorkerQueueApi` that returns no subscription causes this warning.
-- JVM: when the listener does not listen by the end of its startup wait, the worker logs
-  `workhorse.worker.polling_only` once, with `workhorse.worker.pool_max_size`.
-- .NET: in the same case, the worker logs `workhorse.worker.polling_only` with the worker ID only.
-- Python and Ruby log no polling warning.
-- Go: with `PollingOnly`, the worker logs "PostgreSQL notification listener disabled; worker is
-  using polling". When the listener fails, it logs "PostgreSQL notification listener unavailable;
-  worker is using polling".
-- Rust: the listener is outside the pool. Without a `listen_config`, the worker polls and logs
-  "PostgreSQL notification listener unavailable; worker is using polling" with
-  `workhorse.worker.id` only. With `polling_only`, it logs no listener warning.
+- Every language: when a continuous `run` starts with no notification subscription, the worker
+  logs `workhorse.worker.polling_only` at warn level once, after `workhorse.worker.started`. A
+  worker under the polling-only option of its SDK also logs it. A one-pass run logs nothing. The
+  record carries `workhorse.worker.pool_max_size`: the size that the worker found, or `unknown`.
+- TypeScript: a custom `WorkerQueueApi` that returns no subscription causes this warning.
+- Go also logs "PostgreSQL notification listener unavailable; worker is using polling" when its
+  listener fails after the start.
 
 **Fallback poll.** A `Worker.run()` with a live listener polls every 5,000 ms by default, with ±10%
 jitter. Before its `LISTEN` succeeds, and while it reconnects, the worker starts at 250 ms instead.

@@ -159,6 +159,16 @@ public final class OpenTelemetryTelemetry implements Telemetry {
   }
 
   @Override
+  public boolean logEnabled(Severity severity) {
+    try {
+      return bound().logger.isEnabled(severity(severity), Context.current());
+    } catch (RuntimeException ignored) {
+      // A logger that fails is a disabled logger.
+      return false;
+    }
+  }
+
+  @Override
   public void log(
       Severity severity,
       String event,
@@ -167,21 +177,28 @@ public final class OpenTelemetryTelemetry implements Telemetry {
     if (!Names.LOG_EVENTS.contains(event)) {
       return;
     }
-    bound()
-        .logger
-        .logRecordBuilder()
-        .setContext(Context.current())
-        .setSeverity(
-            switch (severity) {
-              case DEBUG -> io.opentelemetry.api.logs.Severity.DEBUG;
-              case INFO -> io.opentelemetry.api.logs.Severity.INFO;
-              case WARN -> io.opentelemetry.api.logs.Severity.WARN;
-            })
-        .setSeverityText(severity.name())
-        .setEventName(event)
-        .setBody(body)
-        .setAllAttributes(attributes(attributes))
-        .emit();
+    try {
+      bound()
+          .logger
+          .logRecordBuilder()
+          .setContext(Context.current())
+          .setSeverity(severity(severity))
+          .setSeverityText(severity.name())
+          .setEventName(event)
+          .setBody(body)
+          .setAllAttributes(attributes(attributes))
+          .emit();
+    } catch (RuntimeException ignored) {
+      // The logger failed, and the record is lost. The operation that it observes continues.
+    }
+  }
+
+  private static io.opentelemetry.api.logs.Severity severity(Severity severity) {
+    return switch (severity) {
+      case DEBUG -> io.opentelemetry.api.logs.Severity.DEBUG;
+      case INFO -> io.opentelemetry.api.logs.Severity.INFO;
+      case WARN -> io.opentelemetry.api.logs.Severity.WARN;
+    };
   }
 
   // The returned span owns the scope and closes it in `close`.

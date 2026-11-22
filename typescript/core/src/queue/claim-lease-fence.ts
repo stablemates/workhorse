@@ -325,6 +325,16 @@ function storableText<T>(text: T): T | string {
   return output ?? text;
 }
 
+/** Logs `workhorse.leases.recovered` for a recovery pass that changed rows. */
+export function logLeasesRecovered(recovery: RecoveryTelemetry): void {
+  if (recovery.rows_affected === 0) return;
+  logInfo("workhorse.leases.recovered", "Expired leases recovered", {
+    "workhorse.recovery.rows_affected": recovery.rows_affected,
+    "workhorse.recovery.expired_leases": recovery.expired_leases,
+    "workhorse.recovery.retried": recovery.retried,
+  });
+}
+
 export function recordRecoveryTelemetry(
   span: WorkhorseTelemetrySpan,
   recovery: RecoveryTelemetry,
@@ -906,13 +916,7 @@ export class ClaimLeaseFenceModule extends QueueModule {
       );
       const recovery = expectOneRow(result, "workhorse.recover_expired_telemetry_v1");
       recordRecoveryTelemetry(span, recovery);
-      if (recovery.rows_affected > 0) {
-        logInfo("workhorse.leases.recovered", "Expired leases recovered", {
-          "workhorse.recovery.rows_affected": recovery.rows_affected,
-          "workhorse.recovery.expired_leases": recovery.expired_leases,
-          "workhorse.recovery.retried": recovery.retried,
-        });
-      }
+      logLeasesRecovered(recovery);
       return recovery.rows_affected;
     });
   }

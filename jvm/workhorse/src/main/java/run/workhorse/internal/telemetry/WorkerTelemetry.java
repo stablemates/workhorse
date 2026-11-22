@@ -434,11 +434,12 @@ public final class WorkerTelemetry {
     /**
      * Ends the handler span with the attempt's outcome, named as the worker's {@code Outcome}
      * constant, or {@code null} when the attempt reported none. Records the handler duration,
-     * runtime, and execution.
+     * runtime, and execution. If {@code settled} is false, the attempt settled nothing, so the
+     * handler metrics record the outcome {@code unknown}. The span keeps {@code outcome}.
      */
-    public void finish(@Nullable String outcome) {
+    public void finish(@Nullable String outcome, boolean settled) {
       try {
-        String metricOutcome = metricOutcome(outcome);
+        String metricOutcome = settled ? metricOutcome(outcome) : "unknown";
         String spanValue = spanOutcome;
         if (spanValue == null) {
           spanValue =

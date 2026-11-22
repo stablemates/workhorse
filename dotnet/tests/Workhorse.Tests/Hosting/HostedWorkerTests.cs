@@ -71,6 +71,24 @@ public sealed class HostedWorkerTests(ScratchDatabase database) : IClassFixture<
         }
     }
 
+    /// <summary>
+    /// The queue and the admin client of the container log through the logger factory of the host,
+    /// as the hosted worker does.
+    /// </summary>
+    [Fact]
+    public async Task TheQueueAndTheAdminLogThroughTheHost()
+    {
+        var testing = new HostingTesting(database.DataSource, UniqueQueue("logs"));
+        using var host = testing.Build();
+
+        await host.Services.GetRequiredService<Queue>().EnqueueAsync("hosted.logged", new Order(1), Token);
+        await host.Services.GetRequiredService<Admin>().PauseQueueAsync(
+            testing.Queue, new AdminAudit { Actor = "dotnet-test", Reason = "host log", RequestId = Guid.NewGuid().ToString("N") }, Token);
+
+        Assert.Equal(1, testing.Log.Count("workhorse.task.enqueued"));
+        Assert.Equal(1, testing.Log.Count("workhorse.queue.paused"));
+    }
+
     [Fact]
     public async Task AHostRunsAServiceHandlerAndDrainsItOnStop()
     {
@@ -313,6 +331,116 @@ public sealed class HostedWorkerTests(ScratchDatabase database) : IClassFixture<
             await host.StopAsync(Token);
         }
         catch (CompatibilityException)
+        {
+            // The .NET 11 host throws the failure of a background service again from its stop.
+        }
+    }
+
+    /// <summary>
+    /// A logger of the application that throws must not change the startup of the host (ADR 0107).
+    /// The warnings of the startup check and of the short shutdown timeout come before the run.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AThrowingLoggerDoesNotStopTheStartupWarnings(bool atCreate)
+    {
+        var testing = new HostingTesting(database.DataSource, UniqueQueue("throwing-start"));
+        testing.ThrowFromHostingLoggers(atCreate);
+        testing.Services.AddSingleton(new Gate());
+        testing.Services.AddWorkhorseHandler<GatedHandler, Order>();
+        using var host = testing.Build();
+        await host.StartAsync(Token);
+        await host.StopAsync(Token);
+
+        var timeout = new HostingTesting(database.DataSource, UniqueQueue("throwing-timeout"));
+        timeout.ThrowFromHostingLoggers(atCreate);
+        timeout.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(5));
+        timeout.Services.AddWorkhorseWorker(_ => { });
+        using var timeoutHost = timeout.Build();
+        await timeoutHost.StartAsync(Token);
+        var state = timeoutHost.Services.GetRequiredService<WorkerState>();
+        // The phase is Running before ExecuteAsync starts the run. A stop before that cancels the
+        // run before it starts, so the phase never becomes Stopped. The first registration shows
+        // that the run is in progress.
+        await EventuallyAsync(() => timeout.Log.Count("workhorse.worker.registered") > 0, "the hosted worker registers");
+        await timeoutHost.StopAsync(Token);
+        // The short shutdown timeout can end StopAsync before the worker records its last phase.
+        await EventuallyAsync(() => state.Phase == WorkerPhase.Stopped, "the hosted worker stops");
+    }
+
+    /// <summary>
+    /// A logger that throws must not replace the failure of the run, and it must not stop the exit
+    /// code 1.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AThrowingLoggerKeepsTheFailureAndTheExitCode(bool atCreate)
+    {
+        using var exitCode = new ExitCodeGuard();
+        Environment.ExitCode = 0;
+        await using var noSchema = database.CreateDataSource(builder => builder.Database = "postgres");
+        var testing = new HostingTesting(noSchema, UniqueQueue("throwing-fault"));
+        testing.ThrowFromHostingLoggers(atCreate);
+        testing.Services.AddWorkhorseWorker(_ => { });
+        using var host = testing.Build();
+        var service = host.Services.GetServices<IHostedService>().OfType<WorkerService>().Single();
+        var stopping = host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping;
+        try
+        {
+            await host.StartAsync(Token);
+        }
+        catch (CompatibilityException)
+        {
+            // The run can fail before the host's start returns.
+        }
+
+        await EventuallyAsync(() => stopping.IsCancellationRequested, "the failed worker stops the host");
+        await EventuallyAsync(() => service.ExecuteTask?.IsCompleted == true, "the hosted worker records its outcome");
+        Assert.IsType<CompatibilityException>(service.ExecuteTask!.Exception?.InnerException);
+        Assert.Equal(1, Environment.ExitCode);
+        try
+        {
+            await host.StopAsync(Token);
+        }
+        catch (CompatibilityException)
+        {
+            // The .NET 11 host throws the failure of a background service again from its stop.
+        }
+    }
+
+    /// <summary>
+    /// A run that ends without a stop request sets the exit code 1, also when the logger throws.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AThrowingLoggerKeepsTheExitCodeOfAnEndedRun(bool atCreate)
+    {
+        using var exitCode = new ExitCodeGuard();
+        Environment.ExitCode = 0;
+        var testing = new HostingTesting(database.DataSource, UniqueQueue("throwing-ended"));
+        testing.ThrowFromHostingLoggers(atCreate);
+        testing.Services.AddWorkhorseWorker(_ => { });
+        using var host = testing.Build();
+        var service = host.Services.GetServices<IHostedService>().OfType<WorkerService>().Single();
+        await host.StartAsync(Token);
+
+        // The worker stops without the stopping token of the host. A stop before the run starts has
+        // no effect, so the test waits for the first registration.
+        await EventuallyAsync(() => testing.Log.Count("workhorse.worker.registered") > 0, "the worker registers");
+        host.Services.GetRequiredService<WorkerState>().Worker!.Stop();
+        await EventuallyAsync(() => service.ExecuteTask?.IsCompleted == true, "the hosted worker records its outcome");
+        Assert.IsType<InvalidOperationException>(service.ExecuteTask!.Exception?.InnerException);
+        Assert.Contains("without a stop request", service.ExecuteTask.Exception!.InnerException!.Message, StringComparison.Ordinal);
+        Assert.Equal(WorkerPhase.Failed, host.Services.GetRequiredService<WorkerState>().Phase);
+        Assert.Equal(1, Environment.ExitCode);
+        try
+        {
+            await host.StopAsync(Token);
+        }
+        catch (InvalidOperationException)
         {
             // The .NET 11 host throws the failure of a background service again from its stop.
         }

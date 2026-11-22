@@ -118,6 +118,10 @@ func TestWorkerLogsTheEventOfAFailedExpiryRequest(t *testing.T) {
 	if errorType, _ := record["error.type"].(string); errorType == "" {
 		t.Errorf("the record has no error.type: %v", record)
 	}
+	// docs/architecture/telemetry.md, "Log content limits": a record never holds the error message.
+	if _, ok := record["error"]; ok || strings.Contains(logs.String(), "injected expiry request failure") {
+		t.Errorf("the record holds the error message: %v", record)
+	}
 }
 
 // SM-2016: a handler can catch the suspension of a durable call and return. The task still
@@ -186,6 +190,7 @@ func TestWorkerWarnsWhenAHandlerSwallowsItsSuspension(t *testing.T) {
 			}
 			for key, want := range map[string]any{
 				"level":                     "WARN",
+				"msg":                       "Task handler swallowed its abort signal",
 				"workhorse.handler.outcome": "suspended",
 				"workhorse.task.id":         taskID,
 				"workhorse.queue.name":      queueName,

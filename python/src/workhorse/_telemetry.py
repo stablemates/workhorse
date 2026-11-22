@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Literal, Protocol, cast
 
 import psycopg
@@ -35,25 +35,42 @@ WorkhorseLogEvent = Literal[
     "workhorse.handler.signal_swallowed",
     "workhorse.handler.started",
     "workhorse.task.cancellation_acknowledged",
+    "workhorse.task.cancellation_processed",
     "workhorse.task.checkpoint_saved",
     "workhorse.task.child_processed",
     "workhorse.task.claimed",
     "workhorse.task.completed",
     "workhorse.task.completion_rejected",
+    "workhorse.task.debounce_rejected",
+    "workhorse.task.debounced",
+    "workhorse.task.enqueue_replayed",
+    "workhorse.task.enqueued",
     "workhorse.task.execution_finished",
     "workhorse.task.failure_processed",
     "workhorse.task.heartbeat_accepted",
     "workhorse.task.heartbeat_rejected",
+    "workhorse.task.human_wait_processed",
     "workhorse.task.ownership_expired",
     "workhorse.task.progress_updated",
+    "workhorse.task.redrive_processed",
     "workhorse.task.release_processed",
+    "workhorse.task.signal_processed",
+    "workhorse.task.throttled",
     "workhorse.task.wait_processed",
+    "workhorse.tasks.redrive_processed",
     "workhorse.leases.recovered",
     "workhorse.maintenance.completed",
+    "workhorse.queue.paused",
+    "workhorse.queue.purged",
+    "workhorse.queue.resumed",
+    "workhorse.queue.tier_set",
     "workhorse.schedule.fire_replayed",
     "workhorse.schedule.fired",
+    "workhorse.schedules.synchronized",
+    "workhorse.worker.deregistered",
     "workhorse.worker.expiration_request_failed",
     "workhorse.worker.paused",
+    "workhorse.worker.polling_only",
     "workhorse.worker.registered",
     "workhorse.worker.registration_failed",
     "workhorse.worker.reporter_failed",
@@ -304,13 +321,34 @@ def emit_log(
 ) -> None:
     if not _OTEL_AVAILABLE:
         return
-    _LOGGER.emit(
-        severity_number=_SEVERITY_NUMBERS[severity],
-        severity_text=severity,
-        event_name=event_name,
-        body=body,
-        attributes=attributes,
-    )
+    # A log record observes an operation. If the logger raises, the operation result must not
+    # change, so the failure stops here and the record is lost.
+    with suppress(Exception):
+        _LOGGER.emit(
+            severity_number=_SEVERITY_NUMBERS[severity],
+            severity_text=severity,
+            event_name=event_name,
+            body=body,
+            attributes=attributes,
+        )
+
+
+def log_enabled(severity: Literal["DEBUG", "INFO", "WARN"]) -> bool:
+    """Whether a record of ``severity`` can reach a logger.
+
+    A caller checks this before it builds the attributes of a record, so a disabled logger costs
+    no work.
+    """
+    if not _OTEL_AVAILABLE:
+        return False
+    try:
+        return bool(_LOGGER.enabled(severity_number=_SEVERITY_NUMBERS[severity]))
+    except AttributeError:
+        # An OpenTelemetry API without Logger.enabled. The record goes to emit.
+        return True
+    except Exception:
+        # A logger that fails is a disabled logger.
+        return False
 
 
 def record_claim(queue: str, duration_ms: float, tasks: Sequence[TaskRecord]) -> None:

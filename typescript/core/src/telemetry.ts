@@ -205,7 +205,13 @@ function emitLog(
   body: string,
   attributes: TelemetryAttributes,
 ): void {
-  telemetryProvider.emitLog({ severity, eventName, body, attributes });
+  // A log record observes an operation. If the provider throws, the operation result must not
+  // change, so the failure stops here.
+  try {
+    telemetryProvider.emitLog({ severity, eventName, body, attributes });
+  } catch {
+    // The provider failed. The record is lost.
+  }
 }
 
 export function logDebug(

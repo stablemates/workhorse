@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -262,6 +263,9 @@ func (handler *HandlerContext) createChild(
 		return nil, err
 	}
 	status, _ := row[rowStatusField].(string)
+	if status == childCreatedValue || status == childCompletedValue {
+		handler.logChildEvent(childProcessedLogMessage, status, slog.String(childNameAttribute, name))
+	}
 	switch status {
 	case childCreatedValue:
 		handler.suspended.Store(true)
@@ -279,6 +283,22 @@ func (handler *HandlerContext) createChild(
 	default:
 		return nil, fmt.Errorf(unknownChildStatusFormat, status)
 	}
+}
+
+// logChildEvent writes workhorse.task.child_processed for the parent task, as TypeScript does: the
+// parent ID, the child status, the worker, and the child name or the child count.
+func (handler *HandlerContext) logChildEvent(message, status string, attribute slog.Attr) {
+	if handler.logger == nil {
+		return
+	}
+	logWorkerEvent(handler.context, handler.logger, slog.LevelInfo, childProcessedEvent, message, func() []any {
+		return []any{
+			slog.String(taskIDAttribute, handler.Task.ID),
+			attribute,
+			slog.String(childStatusAttribute, status),
+			slog.String(workerIDAttribute, handler.workerID),
+		}
+	})
 }
 
 // RunChildren creates one bounded child set or joins its results after parent replay.
@@ -402,6 +422,13 @@ func (handler *HandlerContext) createChildren(
 	}
 	rows := []map[string]any{row}
 	status, _ := rows[0][rowStatusField].(string)
+	if status == childCreatedValue || status == childCompletedValue {
+		count := 0
+		if children, err := decodeChildSetRows(rows[0][rowChildrenField]); err == nil {
+			count = len(children)
+		}
+		handler.logChildEvent(childSetProcessedLogMessage, status, slog.Int(childCountAttribute, count))
+	}
 	switch status {
 	case childCreatedValue:
 		handler.suspended.Store(true)

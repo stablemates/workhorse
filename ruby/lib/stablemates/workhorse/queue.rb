@@ -7,12 +7,24 @@ module Stablemates
     # Every call runs on the connection the executor yields. When that connection holds the
     # caller's transaction, the call commits and rolls back with it: the SDK never opens, commits,
     # or rolls back a transaction of its own.
+    #
+    # With a +logger+, the queue writes the worker log events of its operations, such as
+    # +workhorse.task.enqueued+, through Telemetry.log, as the worker does. Without one, it logs
+    # nothing.
     class Queue
       DEFAULT_MAX_ATTEMPTS = 25
       DEFAULT_IDEMPOTENCY_TTL_MS = 86_400_000
       MAX_TASK_DEPENDENCIES = 100
       MAX_EXTERNAL_VALUE_BYTES = 65_536
       OUTCOMES = %w[accepted replayed replaced non_replaceable coalesced].freeze
+      # The debug event and body of each enqueue outcome.
+      OUTCOME_EVENTS = {
+        "accepted" => ["workhorse.task.enqueued", "Task enqueued"],
+        "replayed" => ["workhorse.task.enqueue_replayed", "Idempotent enqueue replayed"],
+        "replaced" => ["workhorse.task.debounced", "Pending task replaced"],
+        "non_replaceable" => ["workhorse.task.debounce_rejected", "Debounced task not replaceable"],
+        "coalesced" => ["workhorse.task.throttled", "Throttled enqueue coalesced"]
+      }.freeze
       NON_REPLACEABLE_REASONS = %w[incompatible_key_mode not_pending window_elapsed_pending].freeze
       DEPENDENCY_POLICIES = %i[release cancel fail].freeze
       DEBOUNCE_SCHEDULES = %i[reset preserve].freeze
@@ -36,7 +48,7 @@ module Stablemates
         "decorrelated-jitter" => %w[baseDelayMs maxDelayMs]
       }.freeze
       private_constant :DEFAULT_MAX_ATTEMPTS, :DEFAULT_IDEMPOTENCY_TTL_MS, :MAX_TASK_DEPENDENCIES,
-        :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
+        :MAX_EXTERNAL_VALUE_BYTES, :OUTCOMES, :OUTCOME_EVENTS, :NON_REPLACEABLE_REASONS, :DEPENDENCY_POLICIES,
         :DEBOUNCE_SCHEDULES, :CATCHUP_POLICIES, :CANCEL_STATUSES, :TASK_STATES,
         :SIGNAL_STATUSES, :HUMAN_WAIT_STATUSES, :MAX_DURATION_MS,
         :MAX_RATE_INTERVAL_MS, :MAX_POLICY_VALUE, :MAX_POLICY_DEFINITIONS, :MAX_NAME_BYTES,
@@ -44,12 +56,13 @@ module Stablemates
 
       attr_reader :default_queue
 
-      def initialize(executor, default_queue: "default")
+      def initialize(executor, default_queue: "default", logger: nil)
         raise ArgumentError, "default queue must be a non-empty String" unless
           default_queue.is_a?(String) && !default_queue.empty?
 
         @executor = Executor.for(executor)
         @default_queue = default_queue
+        @logger = logger
         @lock = Mutex.new
         @compatibility = nil
         @contracts_enabled = false
@@ -79,7 +92,7 @@ module Stablemates
           requests.length > SqlCatalogue::MAX_ENQUEUE_BATCH_SIZE
 
         rows = submit_requests(requests) { |document| @executor.rows(SqlCatalogue::ENQUEUE_MANY_V1, [document]) }
-        enqueue_results(rows, requests.length)
+        enqueue_results(rows, requests)
       end
 
       # Creates an open task group (ADR 0095) and returns its TaskGroup. Each callback is an
@@ -177,10 +190,16 @@ module Stablemates
         optional_string(reason, "reason")
         assert_compatible
         row = exactly_one(@executor.rows(SqlCatalogue::CANCEL_V1, [task_id, requested_by, reason]), "cancel_v1")
+        result_status = status(:cancel, row.fetch("status"), CANCEL_STATUSES)
+        state = row.fetch("state") && status(:cancel, row.fetch("state"), TASK_STATES)
+        log(:info, "workhorse.task.cancellation_processed", "Task cancellation processed") do
+          {"workhorse.task.id" => task_id, "workhorse.task.state" => (state || :not_found).to_s,
+           "workhorse.operation.status" => result_status.to_s}
+        end
         CancelResult.new(
-          status: status(:cancel, row.fetch("status"), CANCEL_STATUSES),
+          status: result_status,
           task_id: task_id,
-          state: row.fetch("state") && status(:cancel, row.fetch("state"), TASK_STATES),
+          state: state,
           current_attempt: Values.parse_integer(row.fetch("current_attempt")),
           requested_at: Values.parse_time(row.fetch("requested_at")),
           requested_by: row.fetch("requested_by"),
@@ -197,8 +216,12 @@ module Stablemates
           requested_by)
         raise SignalIdempotencyConflictError.new(task_id, name) if row.fetch("status") == "conflict"
 
+        delivery = status(:send_signal, row.fetch("status"), SIGNAL_STATUSES)
+        log(:info, "workhorse.task.signal_processed", "Task signal processed") do
+          {"workhorse.task.id" => task_id, "workhorse.signal.name" => name, "workhorse.signal.status" => delivery.to_s}
+        end
         SignalDeliveryResult.new(
-          status: status(:send_signal, row.fetch("status"), SIGNAL_STATUSES),
+          status: delivery,
           task_id: task_id,
           name: name,
           payload: Values.parse_json(row.fetch("payload")),
@@ -216,8 +239,13 @@ module Stablemates
           idempotency_key, requested_by)
         raise HumanWaitIdempotencyConflictError.new(task_id, name) if row.fetch("status") == "conflict"
 
+        completion = status(:complete_human_wait, row.fetch("status"), HUMAN_WAIT_STATUSES)
+        log(:info, "workhorse.task.human_wait_processed", "Human wait completion processed") do
+          {"workhorse.task.id" => task_id, "workhorse.human_wait.name" => name,
+           "workhorse.human_wait.status" => completion.to_s}
+        end
         HumanWaitCompletionResult.new(
-          status: status(:complete_human_wait, row.fetch("status"), HUMAN_WAIT_STATUSES),
+          status: completion,
           task_id: task_id,
           name: name,
           payload: Values.parse_json(row.fetch("result")),
@@ -261,6 +289,9 @@ module Stablemates
           stamp_contract(input, task, contract)
         end
         @executor.rows(SqlCatalogue::SYNC_SCHEDULE_DEFINITIONS_V2, [namespace, Values.json(document), prune])
+        log(:info, "workhorse.schedules.synchronized", "Recurring schedules synchronized") do
+          {"workhorse.schedule.namespace" => namespace, "workhorse.schedule.count" => schedules.length}
+        end
         nil
       end
 
@@ -449,7 +480,7 @@ module Stablemates
 
         group = get_task_group(group_id) or raise Error, "Task group #{group_id} disappeared after its creation"
         TaskGroupBlockResult.new(group: group, tasks: enqueue_results(rows.reject { |row| row["ordinal"].nil? },
-          requests.length))
+          requests))
       end
 
       # The callback document of create_task_group_v1. A callback is enqueued later, so it carries
@@ -483,7 +514,7 @@ module Stablemates
         rows = submit_requests(requests) do |document|
           @executor.rows(SqlCatalogue::ADD_TASK_GROUP_MEMBERS_V1, [group_id, document, *member])
         end
-        enqueue_results(rows, requests.length)
+        enqueue_results(rows, requests)
       end
 
       def serialize_request(request, now)
@@ -664,17 +695,36 @@ module Stablemates
         task_types
       end
 
-      def enqueue_results(rows, count)
+      # The EnqueueResult of each request, in request order. After every row is valid, it writes
+      # the debug event of each outcome in row order, as the TypeScript queue does.
+      def enqueue_results(rows, requests)
+        count = requests.length
         raise invalid_result unless rows.length == count
 
         results = Array.new(count)
-        rows.each do |row|
+        indexes = rows.map do |row|
           index = Integer(row.fetch("ordinal"), 10) - 1
           raise invalid_result unless index.between?(0, count - 1) && results[index].nil?
 
           results[index] = enqueue_result(row)
+          index
         end
+        indexes.each { |index| log_enqueue(requests[index], results[index]) } if Telemetry.log?(@logger, :debug)
         results
+      end
+
+      def log_enqueue(request, result)
+        event, body = OUTCOME_EVENTS.fetch(result.outcome.to_s)
+        log(:debug, event, body) do
+          {"workhorse.task.id" => result.task_id, "workhorse.task.type" => request.task_type,
+           "workhorse.queue.name" => (request.queue.nil? || request.queue == "") ? @default_queue : request.queue}
+        end
+      end
+
+      # Logs one event. The block gives the attributes, and it runs only when the logger writes the
+      # record, so a disabled logger costs no work.
+      def log(severity, event, body)
+        Telemetry.log(@logger, severity, event, body, yield) if Telemetry.log?(@logger, severity)
       end
 
       def enqueue_result(row)

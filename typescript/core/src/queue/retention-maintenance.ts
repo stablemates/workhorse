@@ -18,7 +18,7 @@ import type {
   RetentionPolicyImpact,
   RetentionPolicySetting,
 } from "../types.js";
-import { recordRecoveryTelemetry } from "./claim-lease-fence.js";
+import { logLeasesRecovered, recordRecoveryTelemetry } from "./claim-lease-fence.js";
 import { QueueModule } from "./module-context.js";
 import { encodeStoredJson } from "./stored-json.js";
 import { DATABASE_NOW, RUN_MAINTENANCE_SQL } from "./maintenance-contract.js";
@@ -266,6 +266,8 @@ export class RetentionMaintenanceModule extends QueueModule {
           span.setAttribute("workhorse.recovery.skipped", recovery.skipped_lock);
           if (!recovery.skipped_lock && recovery.error === null) {
             recordRecoveryTelemetry(span, recovery);
+            // Every worker logs the recovery of its tick, as the other SDKs do.
+            logLeasesRecovered(recovery);
           }
         }
         return result.rows.map(maintenancePhaseResult);

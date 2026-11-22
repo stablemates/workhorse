@@ -527,7 +527,7 @@ fn body_error(error: Box<dyn std::error::Error + Send + Sync>) -> RpcError {
     if error.downcast_ref::<http_body_util::LengthLimitError>().is_some() {
         return RpcError::bad_request(error.to_string());
     }
-    tracing::warn!(error = %error, "dashboard request body could not be read");
+    crate::telemetry::log_event!(warn, error = %error, "dashboard request body could not be read");
     RpcError::bad_request(MALFORMED_REQUEST)
 }
 
@@ -886,7 +886,7 @@ fn compatibility_failure(error: &Error) -> Response {
     if matches!(error, Error::Compatibility { .. }) {
         return json_response(503, &json!({ "error": error.to_string() }));
     }
-    tracing::error!(error = %error, "dashboard schema compatibility check failed");
+    crate::telemetry::log_event!(error, error = %error, "dashboard schema compatibility check failed");
     json_response(503, &json!({ "error": UNVERIFIED_COMPATIBILITY }))
 }
 

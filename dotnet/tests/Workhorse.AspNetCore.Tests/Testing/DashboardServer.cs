@@ -45,7 +45,7 @@ internal sealed class DashboardServer : IAsyncDisposable
 
     /// <summary>Starts a server whose dashboard <paramref name="map"/> maps, under <paramref name="pathBase"/>, with extra <paramref name="services"/>.</summary>
     internal static async Task<DashboardServer> StartAsync(
-        Action<WebApplication> map, string? pathBase = null, Action<IServiceCollection>? services = null)
+        Action<WebApplication> map, string? pathBase = null, Action<IServiceCollection>? services = null, bool throwingLogger = false)
     {
         var builder = WebApplication.CreateSlimBuilder();
         services?.Invoke(builder.Services);
@@ -53,6 +53,11 @@ internal sealed class DashboardServer : IAsyncDisposable
         var logs = new LogCapture();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(logs);
+        if (throwingLogger)
+        {
+            builder.Logging.AddProvider(new ThrowingLogs());
+        }
+
         var app = builder.Build();
         if (pathBase is not null)
         {
@@ -118,6 +123,28 @@ internal sealed class DashboardServer : IAsyncDisposable
     {
         _client.Dispose();
         await _app.DisposeAsync().ConfigureAwait(false);
+    }
+}
+
+/// <summary>A logger provider whose dashboard logger throws on each record.</summary>
+internal sealed class ThrowingLogs : ILoggerProvider
+{
+    public ILogger CreateLogger(string categoryName) =>
+        categoryName == "Workhorse.AspNetCore.Dashboard" ? new Logger() : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Logger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("logger failure");
     }
 }
 

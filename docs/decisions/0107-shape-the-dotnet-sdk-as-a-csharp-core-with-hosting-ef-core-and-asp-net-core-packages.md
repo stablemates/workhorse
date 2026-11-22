@@ -1644,3 +1644,11 @@ The rule is now explicit:
 
 The `Json` properties stay public for code. The change narrows a 0.x surface before 1.0.0, so ADR
 0054 permits it.
+
+## Amendment: the queue and `Admin` take a logger factory (2026-11-21)
+
+`QueueOptions` and `AdminOptions` get the code-only property `LoggerFactory`, so the .NET queue and
+`Admin` write the worker log events of the TypeScript queue and `Admin`. A null factory logs
+nothing. `AddWorkhorse` gives both the logger factory of the container, as it does for the worker.
+The queue options are read at registration, so `AddWorkhorse` refuses a
+`Workhorse:Queue:LoggerFactory` section at once, and not at the first read as for the worker.

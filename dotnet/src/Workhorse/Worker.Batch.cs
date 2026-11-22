@@ -40,6 +40,7 @@ public sealed partial class Worker
             (members, token) => handler([.. members.Select(member => new BatchHandlerItem<TPayload>((TPayload)member.Payload!, member.Context))], token));
         // Each member decodes its own payload, so a payload that does not decode fails only its task.
         Register(taskType, (context, payload) => coordinator.RunAsync(context, () => Decode<TPayload>(payload)), coordinator);
+        BatchRegistrationLog.Registered(_logger, taskType, options.MaxSize, (long)options.Linger.TotalMilliseconds, WorkerId);
     }
 
     /// <summary>Registers <paramref name="handler"/> for its <see cref="IBatchHandler{TPayload}.TaskType"/>.</summary>
@@ -100,7 +101,7 @@ public sealed partial class Worker
         public void BatchDispatched(string taskType, IReadOnlyList<ClaimedTask> tasks, bool full, long lingerMs)
         {
             WorkerTelemetry.Batch(taskType, tasks, full, lingerMs);
-            WorkerLog.BatchDispatched(worker._logger, tasks.Count, taskType, tasks[0].Queue, full, lingerMs);
+            WorkerLog.BatchDispatched(worker._logger, tasks.Count, taskType, tasks[0].Queue, worker.WorkerId, full, lingerMs);
         }
 
         public async Task RecordEvidenceAsync(bool failure, Guid batchId, string taskType, IReadOnlyList<ClaimedTask> tasks, bool full)
@@ -132,7 +133,9 @@ public sealed partial class Worker
             catch (Exception error) when (error is WorkhorseException or NpgsqlException or TimeoutException or OperationCanceledException)
             {
                 // The evidence must not decide the members' outcomes.
-                WorkerLog.BatchEvidenceFailed(worker._logger, tasks.Count, taskType, failure ? "failure" : "dispatch", error);
+                WorkerLog.BatchEvidenceFailed(
+                    worker._logger, tasks.Count, taskType, tasks[0].Queue, worker.WorkerId, failure ? "failure" : "dispatch", full,
+                    error.GetType().FullName ?? error.GetType().Name);
             }
         }
     }

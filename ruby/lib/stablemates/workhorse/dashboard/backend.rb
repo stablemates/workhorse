@@ -26,10 +26,11 @@ module Stablemates
           :SET_STATEMENT_TIMEOUT
 
         def initialize(executor, environment:, configured_workers:, maintenance_loops:, read_only:,
-          statement_timeout_ms:, redact_error_stacks: false)
+          statement_timeout_ms:, redact_error_stacks: false, logger: nil)
           @executor = executor
           @statement_timeout_ms = statement_timeout_ms.to_s
-          @admin = Admin.new(executor)
+          @logger = logger
+          @admin = Admin.new(executor, logger: logger)
           @environment = environment
           @configured_workers = configured_workers.dup.freeze
           @maintenance_loops = maintenance_loops.dup.freeze
@@ -217,7 +218,12 @@ module Stablemates
         end
 
         def cancel_task(input, actor)
-          row = operation(SqlCatalogue::CANCEL_V1, [input.fetch("id"), actor, input.fetch("audit")["reason"]])
+          row = operation(SqlCatalogue::CANCEL_V1, [input.fetch("id"), actor, input.fetch("audit")["reason"]]) do |answer|
+            # The queue writes this event, so a dashboard action writes it too.
+            log_processed("workhorse.task.cancellation_processed", "Task cancellation processed",
+              "workhorse.task.id" => input.fetch("id"), "workhorse.task.state" => answer.fetch("state") || "not_found",
+              "workhorse.operation.status" => answer.fetch("status"))
+          end
           {
             "status" => row.fetch("status"), "taskId" => input.fetch("id"), "state" => row.fetch("state"),
             "currentAttempt" => Values.parse_integer(row.fetch("current_attempt")),
@@ -230,7 +236,13 @@ module Stablemates
           row = operation(SqlCatalogue::SEND_SIGNAL_V2, [
             input.fetch("id"), input.fetch("name"), Values.json(input.fetch("payload"), "payload"),
             input.fetch("idempotencyKey"), actor
-          ])
+          ]) do |answer|
+            next if answer.fetch("status") == "conflict"
+
+            log_processed("workhorse.task.signal_processed", "Task signal processed",
+              "workhorse.task.id" => input.fetch("id"), "workhorse.signal.name" => input.fetch("name"),
+              "workhorse.signal.status" => answer.fetch("status"))
+          end
           {
             "status" => row.fetch("status"), "taskId" => input.fetch("id"), "name" => input.fetch("name"),
             "payload" => Values.parse_json(row.fetch("payload")), "deliveredAt" => iso(row.fetch("delivered_at")),
@@ -242,7 +254,13 @@ module Stablemates
           row = operation(SqlCatalogue::COMPLETE_HUMAN_WAIT_V1, [
             input.fetch("id"), input.fetch("name"), Values.json(input.fetch("result"), "result"),
             input.fetch("idempotencyKey"), actor
-          ])
+          ]) do |answer|
+            next if answer.fetch("status") == "conflict"
+
+            log_processed("workhorse.task.human_wait_processed", "Human wait completion processed",
+              "workhorse.task.id" => input.fetch("id"), "workhorse.human_wait.name" => input.fetch("name"),
+              "workhorse.human_wait.status" => answer.fetch("status"))
+          end
           {
             "status" => row.fetch("status"), "taskId" => input.fetch("id"), "name" => input.fetch("name"),
             "result" => Values.parse_json(row.fetch("result")), "completedAt" => iso(row.fetch("completed_at")),
@@ -357,12 +375,17 @@ module Stablemates
           end
         end
 
+        # Runs one task operation and gives its row to the block, which logs it, before a missing task
+        # raises.
         def operation(sql, params)
           row = one(@executor.rows(sql, params), sql[/workhorse\.(\w+)/, 1])
+          yield row if block_given?
           raise RpcError.not_found("Task not found") if row.fetch("status") == "not_found"
 
           row
         end
+
+        def log_processed(event, body, attributes) = Telemetry.log(@logger, :info, event, body, attributes)
 
         def revert(sql, input, actor)
           settings = input.fetch("settings").map { |name| snake(name) }

@@ -8,6 +8,78 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### The worker records follow the TypeScript triggers
+
+A worker log record must come in the same cases in each SDK, so that one alert reads the workers
+of all seven SDKs.
+
+- A claim without a handler now writes `workhorse.handler.started`, `workhorse.handler.finished`,
+  and `workhorse.task.execution_finished` under a handler span, as in TypeScript.
+- A settlement that fails writes no `workhorse.task.execution_finished`. Before, the record had
+  the outcome `unknown` or the outcome of the settlement that failed.
+- A new run, and a deregistration, clear the saved registration state. Thus the first
+  registration of a second run writes `workhorse.worker.registered` also when its state is the
+  same.
+- The notification listener and the heartbeat round diagnostics now carry `error.type`, not the
+  error text.
+- `Run` now writes `workhorse.worker.started` first, before the readiness check and the first
+  registration, as in TypeScript. Thus a run that the compatibility check refuses also writes
+  the record.
+
+### The worker log records match the TypeScript records
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. An audit compared each Go record with the TypeScript record.
+
+- `workhorse.handler.batch_dispatched` is now info, with the body `Task batch dispatched`.
+- `workhorse.handler.finished` now carries `workhorse.handler.duration_ms`. The outcome stays on
+  `workhorse.task.execution_finished`.
+- `workhorse.worker.registration_failed` now carries `error.type`.
+- `workhorse.worker.expiration_request_failed` and `workhorse.worker.shutdown_settlement_failed` no
+  longer carry the error message in `error`. The body of the shutdown record is now
+  `Worker could not settle a task after the shutdown abort`.
+- The body of `workhorse.handler.signal_swallowed` is now `Task handler swallowed its abort signal`.
+- The dashboard now writes `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, and `workhorse.task.human_wait_processed` to `slog.Default()`
+  for its actions, as its host error records do.
+
+### The Go SDK writes the worker log events of TypeScript
+
+An alert or a dashboard that reads a worker log event must find the same record from each SDK.
+The Go SDK did not write 37 events of the TypeScript `WorkhorseLogEvent` union. It now writes
+them with the TypeScript name, severity, body, attributes, and condition:
+
+- `Queue` writes the enqueue outcomes `workhorse.task.enqueued`, `enqueue_replayed`, `debounced`,
+  `debounce_rejected`, and `throttled` at debug. It writes `workhorse.task.cancellation_processed`,
+  `signal_processed`, `human_wait_processed`, and `workhorse.schedules.synchronized` at info.
+- `Admin` writes `workhorse.queue.paused`, `resumed`, `purged`, and `tier_set`,
+  `workhorse.task.redrive_processed`, `workhorse.tasks.redrive_processed`, and
+  `workhorse.worker.paused` and `resumed` at info.
+- `HandlerContext` writes `workhorse.task.checkpoint_saved` and `progress_updated` at debug, and
+  `wait_processed` and `child_processed` at info.
+- The worker writes the life-cycle events `workhorse.worker.started`, `stop_requested`, `stopped`,
+  `registration_failed`, `paused`, and `resumed` at info, and `polling_only` at warn. It writes
+  `workhorse.handler.registered`, `workhorse.task.heartbeat_accepted`,
+  `workhorse.worker.deregistered`, and `workhorse.schedule.fire_replayed` at debug. It writes
+  `workhorse.task.ownership_expired`, `cancellation_acknowledged`, `completion_rejected`,
+  `workhorse.schedule.fired`, and `workhorse.maintenance.completed` at info, and
+  `workhorse.handler.batch_evidence_failed` at warn.
+
+The worker writes `workhorse.worker.registered` after the first registration, and again only when
+the active slots, the draining state, or the pause state changes. `workhorse.task.completed` now
+also carries `workhorse.complete.accepted`. The `polling_only` record replaces the earlier warning
+text of a worker with `PollingOnly`.
+
+The new methods `Queue.WithLogger` and `Admin.WithLogger` give a copy that writes to a
+`*slog.Logger`. Without a logger, `Queue` and `Admin` write no record, as in the other SDKs, so an
+application that only adds tasks gets no new lines on standard error. A worker without
+`WorkerOptions.Logger` still writes to `slog.Default()`. No record holds a payload, a result, an error message, a cancellation
+reason, an idempotency key, or a stored value. The Go SDK has no `Promote` and no
+`PruneWorkerRegistry` operation, so it writes no `workhorse.tasks.promoted` and no
+`workhorse.worker_registry.pruned`.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

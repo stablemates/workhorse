@@ -130,7 +130,19 @@ impl HandlerContext {
                         .call(sql::CREATE_CHILD_V2, "create_child_v2", &[&name, &accepted])
                         .await?;
                 }
-                match status(&row)?.as_str() {
+                let status = status(&row)?;
+                if status == "completed" || status == "created" {
+                    crate::telemetry::log_event!(
+                        info,
+                        event.name = "workhorse.task.child_processed",
+                        workhorse.task.id = %self.task().id,
+                        workhorse.child.name = name,
+                        workhorse.child.status = status.as_str(),
+                        workhorse.worker.id = %self.worker_id(),
+                        "Child task processed"
+                    );
+                }
+                match status.as_str() {
                     "completed" => {
                         Ok(row.try_get::<_, Option<Value>>("result")?.unwrap_or_default())
                     }
@@ -215,7 +227,19 @@ impl HandlerContext {
                         .call(sql::CREATE_CHILDREN_V2, "create_children_v2", &[&accepted, &mode])
                         .await?;
                 }
-                match status(&row)?.as_str() {
+                let status = status(&row)?;
+                if status == "completed" || status == "created" {
+                    crate::telemetry::log_event!(
+                        info,
+                        event.name = "workhorse.task.child_processed",
+                        workhorse.task.id = %self.task().id,
+                        workhorse.child.count = children.len(),
+                        workhorse.child.status = status.as_str(),
+                        workhorse.worker.id = %self.worker_id(),
+                        "Child set processed"
+                    );
+                }
+                match status.as_str() {
                     "completed" => {
                         Ok(row.try_get::<_, Option<Value>>("results")?.unwrap_or_default())
                     }

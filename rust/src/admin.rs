@@ -762,7 +762,17 @@ impl<E: Executor> Admin<E> {
         let rows = self
             .query(sql::REDRIVE, &[&source_task_id, &audit.actor, &audit.reason, &audit.request_id])
             .await?;
-        redrive_result(exactly_one(&rows, "redrive_v1")?)
+        let result = redrive_result(exactly_one(&rows, "redrive_v1")?)?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.task.redrive_processed",
+            workhorse.task.id = %source_task_id,
+            workhorse.redrive.target_task_id =
+                %result.target_task_id.map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            workhorse.operation.status = result.status.as_str(),
+            "Dead-letter task redrive processed"
+        );
+        Ok(result)
     }
 
     pub async fn redrive_many(
@@ -801,7 +811,14 @@ impl<E: Executor> Admin<E> {
             }
             _ => None,
         };
-        let results = rows.iter().map(redrive_result).collect::<Result<_, _>>()?;
+        let results: Vec<_> = rows.iter().map(redrive_result).collect::<Result<_, _>>()?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.tasks.redrive_processed",
+            workhorse.task.count = results.len(),
+            workhorse.redrive.dry_run = options.dry_run,
+            "Dead-letter task redrive batch processed"
+        );
         Ok(BulkRedrivePage { results, next_cursor })
     }
 
@@ -936,7 +953,24 @@ impl<E: Executor> Admin<E> {
                 &[&worker_id, &paused, &audit.actor, &audit.reason, &audit.request_id],
             )
             .await?;
-        rows.first().map(worker_pause).transpose()
+        let Some(row) = rows.first() else { return Ok(None) };
+        let result = worker_pause(row)?;
+        if paused {
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.worker.paused",
+                workhorse.worker.id = worker_id,
+                "Worker paused"
+            );
+        } else {
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.worker.resumed",
+                workhorse.worker.id = worker_id,
+                "Worker resumed"
+            );
+        }
+        Ok(Some(result))
     }
 
     /// Stops workers from claiming the queue's tasks until it is resumed.
@@ -960,6 +994,21 @@ impl<E: Executor> Admin<E> {
             &[&queue, &paused, &audit.actor, &audit.reason, &audit.request_id],
         )
         .await?;
+        if paused {
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.queue.paused",
+                workhorse.queue.name = queue,
+                "Queue paused"
+            );
+        } else {
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.queue.resumed",
+                workhorse.queue.name = queue,
+                "Queue resumed"
+            );
+        }
         Ok(())
     }
 
@@ -977,7 +1026,15 @@ impl<E: Executor> Admin<E> {
             .query(sql::PURGE_QUEUE, &[&queue, &audit.actor, &audit.reason, &audit.request_id])
             .await?;
         let deleted: i32 = exactly_one(&rows, "purge_queue_v1")?.try_get("deleted_count")?;
-        u64::try_from(deleted).map_err(|_| invalid_column("deleted_count"))
+        let count = u64::try_from(deleted).map_err(|_| invalid_column("deleted_count"))?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.queue.purged",
+            workhorse.queue.name = queue,
+            workhorse.task.count = count,
+            "Queue purged"
+        );
+        Ok(count)
     }
 
     /// Moves a queue between tiers. PostgreSQL refuses with [`Error::FastTierUnsupported`] while
@@ -993,7 +1050,15 @@ impl<E: Executor> Admin<E> {
             .query(sql::SET_QUEUE_TIER, &[&queue, &tier.as_str(), &audit.actor, &audit.reason])
             .await?;
         let tier: String = exactly_one(&rows, "set_queue_tier_v1")?.try_get("tier")?;
-        QueueTier::parse(&tier).ok_or_else(|| invalid_column("tier"))
+        let tier = QueueTier::parse(&tier).ok_or_else(|| invalid_column("tier"))?;
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.queue.tier_set",
+            workhorse.queue.name = queue,
+            workhorse.queue.tier = tier.as_str(),
+            "Queue tier set"
+        );
+        Ok(tier)
     }
 
     /// Changes which history a fast-tier queue records; `None` keeps a setting as it is.

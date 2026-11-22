@@ -65,9 +65,18 @@ public static class WorkhorseServiceCollectionExtensions
             .Configure(options => WorkerConfiguration.Bind(section.GetSection("Worker"), options))
             .PostConfigure<IServiceProvider>((options, provider) => options.LoggerFactory ??= provider.GetService<ILoggerFactory>());
         services.AddSingleton(provider => WorkhorseDataSource.Resolve(provider, section["DataSourceKey"]));
+        // The queue and the admin client log through the logger factory of the container, as the
+        // worker does. A queue options object that names its own factory keeps it.
         services.TryAddSingleton(provider =>
-            new Queue(provider.GetRequiredService<WorkhorseDataSource>().Value, provider.GetRequiredService<IOptions<QueueOptions>>().Value));
-        services.TryAddSingleton(provider => new Admin(provider.GetRequiredService<WorkhorseDataSource>().Value));
+        {
+            var options = provider.GetRequiredService<IOptions<QueueOptions>>().Value;
+            return new Queue(
+                provider.GetRequiredService<WorkhorseDataSource>().Value,
+                options.LoggerFactory is null ? options with { LoggerFactory = provider.GetService<ILoggerFactory>() } : options);
+        });
+        services.TryAddSingleton(provider => new Admin(
+            provider.GetRequiredService<WorkhorseDataSource>().Value,
+            new AdminOptions { LoggerFactory = provider.GetService<ILoggerFactory>() }));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, StartupCheck>());
         return services;
     }

@@ -24,7 +24,7 @@ use uuid::Uuid;
 use super::{random_fraction, shared, Inner, OwnershipStatus};
 use crate::sql_catalogue_generated as sql;
 use crate::telemetry::{Attribute, Counter};
-use crate::Error;
+use crate::{ClaimedTask, Error};
 
 /// What one round reports to the supervising execution. A busy lease gets no beat.
 pub(super) enum Beat {
@@ -140,7 +140,10 @@ pub(super) struct Heartbeats {
 
 /// One registered lease.
 struct Member {
-    fence: i64,
+    /// The claimed task. Its fence goes on each round, and its type and attempt go on each
+    /// heartbeat record, as TypeScript writes them. The member shares the task of the execution,
+    /// so a registration allocates nothing for this identity.
+    task: Arc<ClaimedTask>,
     /// Unique for each registration of the worker, so a result reaches only the membership that the
     /// round sent.
     registration: u64,
@@ -170,7 +173,7 @@ impl State {
             .iter()
             .map(|(task, member)| Sent {
                 task: *task,
-                fence: member.fence,
+                fence: member.task.fence_token,
                 registration: member.registration,
             })
             .collect()
@@ -525,17 +528,28 @@ pub(super) fn heartbeat_round_bound_for(interval: Duration) -> Duration {
 impl Inner {
     /// Adds `task` to the rounds until the returned membership leaves or is dropped. Its local
     /// lease window ends at `lease_ends_at` until a renewal moves it.
+    #[cfg(test)]
     pub(super) fn register_heartbeat(
         self: &Arc<Self>,
         task: Uuid,
         fence: i64,
         lease_ends_at: Instant,
     ) -> Membership {
+        self.register_task_heartbeat(Arc::new(tests::claimed(task, fence)), lease_ends_at)
+    }
+
+    /// Adds one claimed task to the rounds. The task type and the attempt go on its records.
+    pub(super) fn register_task_heartbeat(
+        self: &Arc<Self>,
+        claimed: Arc<ClaimedTask>,
+        lease_ends_at: Instant,
+    ) -> Membership {
+        let task = claimed.id;
         let (sender, beats) = mpsc::channel(4);
         let mut state = self.heartbeats.state();
         state.registrations += 1;
         let registration = state.registrations;
-        state.members.insert(task, Member { fence, registration, sender, lease_ends_at });
+        state.members.insert(task, Member { task: claimed, registration, sender, lease_ends_at });
         if !state.running {
             state.running = true;
             state.task = Some(tokio::spawn(Arc::clone(self).run_heartbeats()));
@@ -628,7 +642,7 @@ impl Inner {
                         1.0,
                         &[("workhorse.heartbeat.failure_reason", Attribute::Text(reason.as_str()))],
                     );
-                    tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "heartbeat round failed; retrying");
+                    crate::telemetry::log_event!(warn, error.type = %error.type_name(), workhorse.worker.id = %self.worker_id, "heartbeat round failed; retrying");
                     None
                 }
             };
@@ -765,6 +779,15 @@ impl Inner {
                 .unwrap_or(LeaseStatus::Owner(OwnershipStatus::Stale));
             let beat = match status {
                 LeaseStatus::Owner(OwnershipStatus::Accepted) => {
+                    crate::telemetry::log_event!(
+                        debug,
+                        event.name = "workhorse.task.heartbeat_accepted",
+                        workhorse.task.id = %sent.task,
+                        workhorse.task.type = %member.task.task_type,
+                        workhorse.task.attempt = member.task.attempt,
+                        workhorse.worker.id = %self.worker_id,
+                        "Task heartbeat accepted"
+                    );
                     // A late answer never reopens a window that has ended. The watchdog owns it.
                     if now < member.lease_ends_at
                         && member.sender.try_send(Beat::Renewed(sent_at)).is_ok()
@@ -784,9 +807,12 @@ impl Inner {
                 1.0,
                 &[("workhorse.heartbeat.status", Attribute::Text(status.as_str()))],
             );
-            tracing::info!(
+            crate::telemetry::log_event!(
+                info,
                 event.name = "workhorse.task.heartbeat_rejected",
                 workhorse.task.id = %sent.task,
+                workhorse.task.type = %member.task.task_type,
+                workhorse.task.attempt = member.task.attempt,
                 workhorse.worker.id = %self.worker_id,
                 workhorse.heartbeat.status = status.as_str(),
                 "Task heartbeat rejected"
@@ -809,7 +835,50 @@ mod tests {
 
     use super::*;
     use crate::worker::scratch;
-    use crate::{CancelReason, ClaimedTask, HandlerContext, Worker, WorkerOptions};
+    use crate::{CancelReason, HandlerContext, Worker, WorkerOptions};
+
+    /// A claimed task of the type `test` with `id` and `fence`.
+    pub(super) fn claimed(id: Uuid, fence: i64) -> ClaimedTask {
+        ClaimedTask {
+            id,
+            task_type: "test".into(),
+            queue: "unused".into(),
+            priority: 0,
+            payload: Value::Null,
+            contract_version: None,
+            result_max_bytes: None,
+            redact_error_details: false,
+            trace_context: None,
+            attempt: 1,
+            max_attempts: 1,
+            retry_policy: Value::Null,
+            deadline_at: None,
+            execution_timeout: None,
+            attempt_timeout_at: None,
+            fence_token: fence,
+            lease_expires_at: chrono::Utc::now(),
+            claim_sent_at: Instant::now(),
+            fast_tier: false,
+        }
+    }
+
+    /// The heartbeat identity of a member is the claimed task of its execution. Before, each
+    /// registration copied the task type into a new `Arc<str>`, also when logging was off.
+    #[tokio::test]
+    async fn a_heartbeat_member_shares_the_claimed_task() {
+        let worker = worker();
+        let task = Arc::new(claimed(Uuid::new_v4(), 3));
+        let membership = worker
+            .0
+            .register_task_heartbeat(Arc::clone(&task), Instant::now() + Duration::from_secs(30));
+        {
+            let state = worker.0.heartbeats.state();
+            let member = state.member(task.id, membership.registration).expect("registered");
+            assert!(Arc::ptr_eq(&member.task, &task));
+        }
+        assert_eq!(sent(&worker, &membership).fence, 3);
+        drop(membership);
+    }
 
     /// Answers a round in place of PostgreSQL: the memberships it sent and its deadline.
     pub(in crate::worker) type FakeRound = Arc<
@@ -856,7 +925,11 @@ mod tests {
     fn sent(worker: &Worker, membership: &Membership) -> Sent {
         let state = worker.0.heartbeats.state();
         let member = state.member(membership.task, membership.registration).expect("registered");
-        Sent { task: membership.task, fence: member.fence, registration: member.registration }
+        Sent {
+            task: membership.task,
+            fence: member.task.fence_token,
+            registration: member.registration,
+        }
     }
 
     /// One round that the fake answered.

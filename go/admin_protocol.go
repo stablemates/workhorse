@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -24,10 +25,31 @@ type AdminAudit struct {
 }
 
 // Admin exposes operator reads and controls through a caller-owned executor.
-type Admin struct{ executor Executor }
+type Admin struct {
+	executor Executor
+	// logger receives the log records of the operator controls. Nil writes no record.
+	logger *slog.Logger
+}
 
 // NewAdmin constructs an operator client without taking ownership of the executor.
 func NewAdmin(executor Executor) *Admin { return &Admin{executor: executor} }
+
+// WithLogger returns a copy of the operator client that writes its log records to logger. A client
+// without WithLogger, or with a nil logger, writes no record. If the handler of logger panics, the
+// client drops that record. A log record never changes the result of an operation.
+func (admin *Admin) WithLogger(logger *slog.Logger) *Admin {
+	copied := *admin
+	copied.logger = nil
+	if logger != nil {
+		copied.logger = newRecoveringLogger(logger)
+	}
+	return &copied
+}
+
+// logEvent writes one info record of an operator control.
+func (admin *Admin) logEvent(ctx context.Context, event, message string, attributes func() []any) {
+	logWorkerEvent(ctx, sdkLogger(admin.logger), slog.LevelInfo, event, message, attributes)
+}
 
 // Health reads PostgreSQL's database-authoritative queue health snapshot.
 func (admin *Admin) Health(ctx context.Context) (QueueHealth, error) {
@@ -477,7 +499,19 @@ func (admin *Admin) Redrive(ctx context.Context, sourceTaskID string, audit Admi
 	if len(rows) != 1 {
 		return RedriveResult{}, fmt.Errorf("redrive returned %d rows", len(rows))
 	}
-	return mapRedrive(rows[0]), nil
+	result := mapRedrive(rows[0])
+	admin.logEvent(ctx, taskRedriveProcessedEvent, taskRedriveProcessedLogMessage, func() []any {
+		target := noRedriveTargetValue
+		if result.TargetTaskID != nil {
+			target = *result.TargetTaskID
+		}
+		return []any{
+			slog.String(taskIDAttribute, sourceTaskID),
+			slog.String(redriveTargetAttribute, target),
+			slog.String(operationStatusAttribute, result.Status),
+		}
+	})
+	return result, nil
 }
 
 func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, audit AdminAudit, options BulkRedriveOptions) (BulkRedrivePage, error) {
@@ -504,6 +538,12 @@ func (admin *Admin) RedriveMany(ctx context.Context, filter DeadLetterFilter, au
 	for _, row := range rows {
 		page.Results = append(page.Results, mapRedrive(row))
 	}
+	admin.logEvent(ctx, tasksRedriveProcessedEvent, tasksRedriveProcessedLogMessage, func() []any {
+		return []any{
+			slog.Int(taskCountAttribute, len(rows)),
+			slog.Bool(redriveDryRunAttribute, options.DryRun),
+		}
+	})
 	if len(rows) > 0 && boolValue(rows[len(rows)-1]["has_more"]) {
 		row := rows[len(rows)-1]
 		page.NextCursor = &AdminCursor{OccurredAt: timeValue(row["source_finished_at_cursor"]), TaskID: stringValue(row["source_task_id"])}
@@ -618,6 +658,11 @@ func (admin *Admin) queuePause(ctx context.Context, queue string, paused bool, a
 	if len(rows) != 1 {
 		return fmt.Errorf("set_queue_paused_v1 returned %d rows", len(rows))
 	}
+	event, message := queueResumedEvent, queueResumedLogMessage
+	if paused {
+		event, message = queuePausedEvent, queuePausedLogMessage
+	}
+	admin.logEvent(ctx, event, message, func() []any { return []any{slog.String(queueNameAttribute, queue)} })
 	return nil
 }
 
@@ -640,7 +685,11 @@ func (admin *Admin) PurgeQueue(ctx context.Context, queue string, audit AdminAud
 	if len(rows) != 1 {
 		return 0, fmt.Errorf("purge_queue_v1 returned %d rows", len(rows))
 	}
-	return intValue(rows[0]["deleted_count"]), nil
+	count := intValue(rows[0]["deleted_count"])
+	admin.logEvent(ctx, queuePurgedEvent, queuePurgedLogMessage, func() []any {
+		return []any{slog.String(queueNameAttribute, queue), slog.Int(taskCountAttribute, count)}
+	})
+	return count, nil
 }
 
 // SetQueueTier moves a queue between the fast and full tiers. PostgreSQL refuses the change with a
@@ -662,7 +711,11 @@ func (admin *Admin) SetQueueTier(ctx context.Context, queue string, tier QueueTi
 	if len(rows) != 1 {
 		return "", fmt.Errorf("set_queue_tier_v1 returned %d rows", len(rows))
 	}
-	return QueueTier(stringValue(rows[0]["tier"])), nil
+	changed := QueueTier(stringValue(rows[0]["tier"]))
+	admin.logEvent(ctx, queueTierSetEvent, queueTierSetLogMessage, func() []any {
+		return []any{slog.String(queueNameAttribute, queue), slog.String(queueTierAttribute, string(changed))}
+	})
+	return changed, nil
 }
 
 // SetQueueHistory opts a queue in to or out of attempt and claim history. A nil value leaves that
@@ -700,6 +753,11 @@ func (admin *Admin) SetWorkerPaused(ctx context.Context, workerID string, paused
 	if len(rows) == 0 {
 		return nil, nil
 	}
+	event, message := workerResumedEvent, workerResumedLogMessage
+	if paused {
+		event, message = workerPausedEvent, workerPausedLogMessage
+	}
+	admin.logEvent(ctx, event, message, func() []any { return []any{slog.String(workerIDAttribute, workerID)} })
 	row := rows[0]
 	return &WorkerPauseResult{WorkerID: stringValue(row["worker_id"]), Paused: boolValue(row["paused"]), RequestedAt: timeValue(row["paused_at"]), RequestedBy: stringValue(row["paused_by"]), Reason: stringValue(row["paused_reason"])}, nil
 }

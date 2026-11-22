@@ -47,7 +47,7 @@ use crate::fenced_write::fenced_rows;
 use crate::queue::Rows as _;
 use crate::queue::{exactly_one, BoundedPool};
 use crate::sql_catalogue_generated as sql;
-use crate::telemetry::{Attribute, Counter, Histogram, Metrics};
+use crate::telemetry::{contain, Attribute, Counter, Histogram, Metrics};
 use crate::HandlerContext;
 use crate::{Error, Operation};
 use database_now::DatabaseNow;
@@ -411,6 +411,9 @@ pub(crate) struct Inner {
     late: Mutex<Vec<JoinHandle<()>>>,
     /// When the worker last logged a panic of `on_registration_error`.
     registration_reporter: Mutex<ReporterFailures>,
+    /// The active slots, the draining state, and the pause state of the last
+    /// `workhorse.worker.registered` event of this run. `None` before the first registration.
+    logged_registration: Mutex<Option<(usize, bool, bool)>>,
     /// The empty wait of the dispatch loop: its deadline, and whether a notification can end it.
     empty_wait: Mutex<Option<(Instant, bool)>>,
     /// Reads the claims in flight of the dispatch loop. `None` before the first run.
@@ -470,28 +473,19 @@ fn call_reporter(
     let Some(suppressed) = suppressed else {
         return;
     };
-    contain(|| {
-        let detail = if suppressed > 0 {
-            format!(" after {suppressed} unreported failures")
-        } else {
-            String::new()
-        };
-        tracing::error!(
-            event.name = "workhorse.worker.reporter_failed",
-            workhorse.worker.id = %worker_id,
-            workhorse.worker.reporter = value,
-            error.r#type = "panic",
-            "Workhorse worker {name} reporter failed{detail}"
-        );
-    });
-}
-
-/// Runs `step` and discards a panic from it. The payload of that panic can also panic when it
-/// drops, so the worker leaks it instead.
-fn contain(step: impl FnOnce()) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
-        std::mem::forget(payload);
-    }
+    let detail = if suppressed > 0 {
+        format!(" after {suppressed} unreported failures")
+    } else {
+        String::new()
+    };
+    crate::telemetry::log_event!(
+        error,
+        event.name = "workhorse.worker.reporter_failed",
+        workhorse.worker.id = %worker_id,
+        workhorse.worker.reporter = value,
+        error.r#type = "panic",
+        "Workhorse worker {name} reporter failed{detail}"
+    );
 }
 
 /// The claim gate of one run. It holds the shared heartbeat connection of that run, and it closes
@@ -639,7 +633,7 @@ impl RunScope {
             // The startup can still be in its first registration, which teardown cannot stop.
             if let Some(mut starting) = starting {
                 if !until(cleanup, &mut starting).await {
-                    tracing::warn!(workhorse.worker.id = %inner.worker_id, "the first registration outlived the shutdown cleanup window");
+                    crate::telemetry::log_event!(warn, workhorse.worker.id = %inner.worker_id, "the first registration outlived the shutdown cleanup window");
                     inner.own_late(tokio::spawn(async move {
                         let _ = starting.await;
                     }));
@@ -647,7 +641,7 @@ impl RunScope {
             }
             for mut statement in [registry, refresh].into_iter().flatten() {
                 if !until(cleanup, &mut statement).await {
-                    tracing::warn!(workhorse.worker.id = %inner.worker_id, "a registry refresh outlived the shutdown cleanup window");
+                    crate::telemetry::log_event!(warn, workhorse.worker.id = %inner.worker_id, "a registry refresh outlived the shutdown cleanup window");
                     inner.own_late(statement);
                 }
             }
@@ -744,6 +738,7 @@ impl Worker {
             run_gate: Mutex::default(),
             late: Mutex::default(),
             registration_reporter: Mutex::default(),
+            logged_registration: Mutex::default(),
             empty_wait: Mutex::default(),
             claims_in_flight: Mutex::default(),
         })))
@@ -812,6 +807,13 @@ impl Worker {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(task_type.into(), erased);
+        crate::telemetry::log_event!(
+            debug,
+            event.name = "workhorse.handler.registered",
+            workhorse.task.type = task_type,
+            workhorse.worker.id = %self.0.worker_id,
+            "Task handler registered"
+        );
         self
     }
 
@@ -842,19 +844,36 @@ impl Worker {
         tokio::pin!(shutdown);
         let permit = tokio::select! {
             permit = Arc::clone(&inner.run_permit).acquire_owned() => permit.map_err(|_| Error::invalid("worker is closed"))?,
-            () = &mut shutdown => return Ok(()),
+            () = &mut shutdown => {
+                inner.log_stop_requested();
+                return Ok(());
+            }
         };
         let mut scope = RunScope::new(inner, permit);
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.worker.started",
+            workhorse.worker.id = %inner.worker_id,
+            workhorse.worker.queues = %inner.queues_text(),
+            workhorse.worker.concurrency = inner.options.concurrency,
+            "Worker started"
+        );
         let wake = Arc::new(Notify::new());
         // Startup observes the shutdown signal: teardown stops its waits.
         let started = tokio::select! {
             started = scope.start(Some(Arc::clone(&wake))) => started,
-            () = &mut shutdown => Ok(false),
+            () = &mut shutdown => {
+                inner.log_stop_requested();
+                Ok(false)
+            }
         };
         if !matches!(started, Ok(true)) {
             // One cleanup window covers the whole teardown, the release of the shared connections
             // included.
             scope.close(Some(Instant::now() + CLEANUP_WINDOW)).await;
+            if started.is_ok() {
+                inner.log_stopped();
+            }
             return started.map(drop);
         }
 
@@ -887,7 +906,7 @@ impl Worker {
         });
         let stop = async {
             tokio::select! {
-                () = shutdown.as_mut() => {}
+                () = shutdown.as_mut() => inner.log_stop_requested(),
                 () = maintenance_failure.failed.cancelled() => {}
             }
         };
@@ -912,7 +931,7 @@ impl Worker {
         if timeout_at(deadline, refresh).await.is_ok() {
             scope.refresh = None;
         } else {
-            tracing::warn!(workhorse.worker.id = %inner.worker_id, "draining registration refresh outlived the shutdown grace period");
+            crate::telemetry::log_event!(warn, workhorse.worker.id = %inner.worker_id, "draining registration refresh outlived the shutdown grace period");
             if let Some(refresh) = scope.refresh.take() {
                 inner.own_late(refresh);
             }
@@ -938,12 +957,13 @@ impl Worker {
         let maintenance_error = lock(&maintenance_failure.error).take();
         if abandoned > 0 {
             if let Some(error) = maintenance_error {
-                tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "maintenance failed");
+                crate::telemetry::log_event!(error, error.type = %error.type_name(), workhorse.worker.id = %inner.worker_id, "maintenance failed");
             }
             if let Some(error) = first_error {
-                tracing::error!(error = %error, workhorse.worker.id = %inner.worker_id, "task execution failed");
+                crate::telemetry::log_event!(error, error.type = %error.type_name(), workhorse.worker.id = %inner.worker_id, "task execution failed");
             }
-            tracing::warn!(
+            crate::telemetry::log_event!(
+                warn,
                 workhorse.worker.id = %inner.worker_id,
                 workhorse.worker.abandoned = abandoned,
                 "Shutdown grace elapsed; abandoned tasks will be recovered after their leases expire"
@@ -954,11 +974,15 @@ impl Worker {
         // execution error, as in the JVM and .NET workers.
         if let Some(error) = maintenance_error {
             if let Some(execution) = first_error {
-                tracing::error!(error = %execution, workhorse.worker.id = %inner.worker_id, "task execution failed");
+                crate::telemetry::log_event!(error, error.type = %execution.type_name(), workhorse.worker.id = %inner.worker_id, "task execution failed");
             }
             return Err(error);
         }
-        first_error.map_or(Ok(()), Err)
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        inner.log_stopped();
+        Ok(())
     }
 
     /// Runs one maintenance pass and at most one task, returning whether a handler ran.
@@ -988,7 +1012,7 @@ impl Worker {
                 Some(handler) => {
                     inner.execute(task, handler, StopToken::new(), None).await.map(|()| true)
                 }
-                None => inner.release(&task, true).await.map(|_| false),
+                None => inner.release_missing(&task).await.map(|()| false),
             }
         }
         .await;
@@ -1066,7 +1090,7 @@ impl dispatch::Dispatch for WorkerDispatch {
         async move {
             let (tasks, error) = inner.claim(limit, fast_limit).await;
             if let Some(error) = error {
-                tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "task claim failed");
+                crate::telemetry::log_event!(warn, error.type = %error.type_name(), workhorse.worker.id = %inner.worker_id, "task claim failed");
             }
             tasks
         }
@@ -1097,7 +1121,7 @@ fn record(
         }
         Err(_) => return,
     };
-    tracing::warn!(error = %error, "task execution failed");
+    crate::telemetry::log_event!(warn, error.type = %error.type_name(), "task execution failed");
     first_error.get_or_insert(error);
 }
 
@@ -1158,7 +1182,7 @@ impl Inner {
             let inner = Arc::clone(&slot.inner);
             let result = match handler {
                 Some(handler) => inner.execute(task, handler, shutdown, Some(&slot)).await,
-                None => inner.release(&task, true).await.map(drop),
+                None => inner.release_missing(&task).await,
             };
             drop(slot);
             result
@@ -1200,6 +1224,7 @@ impl Inner {
         }
         *lock(&self.instance) = Uuid::new_v4();
         self.registered.store(false, Ordering::SeqCst);
+        *lock(&self.logged_registration) = None;
         self.draining.store(false, Ordering::SeqCst);
         self.paused.store(false, Ordering::SeqCst);
         self.refresh_registration().await;
@@ -1324,15 +1349,32 @@ impl Inner {
                     return;
                 }
                 let statements = inner.statements();
-                if let Err(error) =
-                    statements.rows(sql::DEREGISTER_WORKER_V2, &[&inner.worker_id, &instance]).await
+                match statements
+                    .rows(sql::DEREGISTER_WORKER_V2, &[&inner.worker_id, &instance])
+                    .await
                 {
-                    tracing::warn!(error = %error, workhorse.worker.id = %inner.worker_id, "worker deregistration failed");
+                    Ok(rows) => {
+                        let deregistered = rows
+                            .first()
+                            .and_then(|row| row.try_get::<_, Option<bool>>("deregistered").ok())
+                            .flatten()
+                            .unwrap_or(false);
+                        crate::telemetry::log_event!(
+                            debug,
+                            event.name = "workhorse.worker.deregistered",
+                            workhorse.worker.id = %inner.worker_id,
+                            workhorse.worker.deregistered = deregistered,
+                            "Worker deregistered"
+                        );
+                    }
+                    Err(error) => {
+                        crate::telemetry::log_event!(warn, error.type = %error.type_name(), workhorse.worker.id = %inner.worker_id, "worker deregistration failed");
+                    }
                 }
             }
         });
         if !until(deadline, &mut deregister).await {
-            tracing::warn!(workhorse.worker.id = %self.worker_id, "worker deregistration outlived the shutdown cleanup window");
+            crate::telemetry::log_event!(warn, workhorse.worker.id = %self.worker_id, "worker deregistration outlived the shutdown cleanup window");
             self.own_late(deregister);
         }
         self.release_subscription(deadline).await;
@@ -1361,8 +1403,17 @@ impl Inner {
     /// Whether the shared listener of the pool identity is connected.
     fn listening(&self) -> Arc<AtomicBool> {
         let listening = lock(&self.subscription).as_ref().and_then(shared::Subscription::listening);
-        if listening.is_none() && !self.options.polling_only && !self.listener_expected {
-            tracing::warn!(workhorse.worker.id = %self.worker_id, "PostgreSQL notification listener unavailable; worker is using polling");
+        // TypeScript warns each time a run starts without a subscription, also when the options
+        // ask for polling or the listener gave no subscription.
+        if listening.is_none() {
+            crate::telemetry::log_event!(
+                warn,
+                event.name = "workhorse.worker.polling_only",
+                workhorse.worker.id = %self.worker_id,
+                workhorse.worker.queues = %self.queues_text(),
+                workhorse.worker.pool_max_size = self.pool.status().max_size,
+                "Worker has no notification listener and dispatches by polling"
+            );
         }
         listening.unwrap_or_default()
     }
@@ -1442,23 +1493,110 @@ impl Inner {
         }
         match self.register().await {
             Ok(paused) => {
+                self.log_registration(paused);
                 self.registered.store(true, Ordering::SeqCst);
-                self.paused.store(paused, Ordering::SeqCst);
+                let was_paused = self.paused.swap(paused, Ordering::SeqCst);
+                if was_paused != paused {
+                    if paused {
+                        crate::telemetry::log_event!(
+                            info,
+                            event.name = "workhorse.worker.paused",
+                            workhorse.worker.id = %self.worker_id,
+                            workhorse.worker.queues = %self.queues_text(),
+                            "Worker paused remotely"
+                        );
+                    } else {
+                        crate::telemetry::log_event!(
+                            info,
+                            event.name = "workhorse.worker.resumed",
+                            workhorse.worker.id = %self.worker_id,
+                            workhorse.worker.queues = %self.queues_text(),
+                            "Worker resumed remotely"
+                        );
+                    }
+                }
             }
-            Err(error) => match &self.options.on_registration_error {
-                Some(hook) => {
-                    call_reporter(
-                        "on_registration_error",
-                        "registration_error",
-                        &self.worker_id,
-                        &self.registration_reporter,
-                        || hook(&error),
-                    );
-                }
-                None => {
-                    tracing::warn!(error = %error, workhorse.worker.id = %self.worker_id, "worker registration failed")
-                }
-            },
+            Err(error) => {
+                // The worker keeps its last pause state, and the event never carries the error.
+                // A subscriber that panics must not reach the worker on this path (SM-1696).
+                crate::telemetry::log_event!(
+                    info,
+                    event.name = "workhorse.worker.registration_failed",
+                    workhorse.worker.id = %self.worker_id,
+                    workhorse.worker.queues = %self.queues_text(),
+                    error.r#type = %error.type_name(),
+                    "Worker registration failed"
+                );
+                self.report_registration_error(&error);
+            }
+        }
+    }
+
+    /// Writes `workhorse.worker.registered` after the first registration of the run, and when the
+    /// active slots, the draining state, or the pause state changed since the last event. An
+    /// unchanged refresh writes nothing (`Worker.refreshRegistration` in TypeScript).
+    fn log_registration(&self, paused: bool) {
+        let state =
+            (self.active.load(Ordering::SeqCst), self.draining.load(Ordering::SeqCst), paused);
+        if lock(&self.logged_registration).replace(state) == Some(state) {
+            return;
+        }
+        let (active, draining, paused) = state;
+        crate::telemetry::log_event!(
+            debug,
+            event.name = "workhorse.worker.registered",
+            workhorse.worker.id = %self.worker_id,
+            workhorse.worker.queues = %self.queues_text(),
+            workhorse.worker.concurrency = self.options.concurrency,
+            workhorse.worker.active_slots = active,
+            workhorse.worker.draining = draining,
+            workhorse.worker.paused = paused,
+            "Worker registration changed"
+        );
+    }
+
+    /// The configured queues as the text of a JSON array. A `tracing` field holds no list value, so
+    /// this text is the stable form of the TypeScript `workhorse.worker.queues` array.
+    fn queues_text(&self) -> String {
+        serde_json::to_string(&self.options.queues).unwrap_or_default()
+    }
+
+    fn log_stop_requested(&self) {
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.worker.stop_requested",
+            workhorse.worker.id = %self.worker_id,
+            workhorse.worker.queues = %self.queues_text(),
+            workhorse.worker.active_slots = self.active.load(Ordering::SeqCst),
+            "Worker stop requested"
+        );
+    }
+
+    fn log_stopped(&self) {
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.worker.stopped",
+            workhorse.worker.id = %self.worker_id,
+            workhorse.worker.queues = %self.queues_text(),
+            workhorse.worker.active_slots = self.active.load(Ordering::SeqCst),
+            "Worker stopped"
+        );
+    }
+
+    fn report_registration_error(&self, error: &Error) {
+        match &self.options.on_registration_error {
+            Some(hook) => {
+                call_reporter(
+                    "on_registration_error",
+                    "registration_error",
+                    &self.worker_id,
+                    &self.registration_reporter,
+                    || hook(error),
+                );
+            }
+            None => {
+                crate::telemetry::log_event!(warn, error.type = %error.type_name(), workhorse.worker.id = %self.worker_id, "worker registration failed")
+            }
         }
     }
 
@@ -1521,7 +1659,7 @@ impl Inner {
             tokio::select! {
                 () = stop.cancelled() => return,
                 result = self.run_maintenance() => if let Err(error) = result {
-                    tracing::error!(error = %error, workhorse.worker.id = %self.worker_id, "maintenance failed; the worker stops");
+                    crate::telemetry::log_event!(error, error.type = %error.type_name(), workhorse.worker.id = %self.worker_id, "maintenance failed; the worker stops");
                     *lock(&failure.error) = Some(error);
                     failure.failed.cancel();
                     return;
@@ -1549,7 +1687,8 @@ impl Inner {
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         // A subscriber that panics must not fail the statement.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tracing::warn!(
+            crate::telemetry::log_event!(
+                warn,
                 event.name = "workhorse.worker.statement_slow",
                 workhorse.worker.id = %self.worker_id,
                 workhorse.worker.statement = kind,
@@ -1572,13 +1711,13 @@ impl Inner {
             return Err(Error::invalid("PostgreSQL returned an invalid maintenance result"));
         }
         for row in &rows {
+            self.log_maintenance("tick", row)?;
             if row.try_get::<_, Option<bool>>("skipped_lock")?.unwrap_or(false) {
                 continue;
             }
+            // `log_maintenance` records a failed phase as `workhorse.maintenance.completed`, without
+            // the error text, which a log record must never carry.
             let phase: String = row.try_get::<_, Option<String>>("phase")?.unwrap_or_default();
-            if let Some(error) = row.try_get::<_, Option<Value>>("error")? {
-                tracing::warn!(workhorse.worker.id = %self.worker_id, "maintenance phase {phase} failed: {error}");
-            }
             if phase != "recover" {
                 continue;
             }
@@ -1601,10 +1740,12 @@ impl Inner {
             }
             let recovered = row.try_get::<_, Option<i32>>("rows_affected")?.unwrap_or(0);
             if recovered > 0 {
-                tracing::info!(
+                crate::telemetry::log_event!(
+                    info,
                     event.name = "workhorse.leases.recovered",
-                    workhorse.worker.id = %self.worker_id,
-                    workhorse.leases.recovered = recovered,
+                    workhorse.recovery.rows_affected = recovered,
+                    workhorse.recovery.expired_leases = expired,
+                    workhorse.recovery.retried = retried,
                     "Expired leases recovered"
                 );
             }
@@ -1613,7 +1754,8 @@ impl Inner {
             let catchup = self.options.schedule_catchup_limit;
             let interval =
                 i64::try_from(self.options.maintenance_interval.as_millis()).unwrap_or(i64::MAX);
-            self.statements()
+            let fired = self
+                .statements()
                 .rows(
                     sql::FIRE_DUE_SCHEDULES_V2,
                     &[
@@ -1624,6 +1766,28 @@ impl Inner {
                     ],
                 )
                 .await?;
+            for row in &fired {
+                let namespace: Option<String> = row.try_get("namespace")?;
+                let name: Option<String> = row.try_get("schedule_name")?;
+                let (namespace, name) = (namespace.unwrap_or_default(), name.unwrap_or_default());
+                match row.try_get::<_, Option<Uuid>>("task_id")? {
+                    Some(task_id) => crate::telemetry::log_event!(
+                        info,
+                        event.name = "workhorse.schedule.fired",
+                        workhorse.schedule.namespace = %namespace,
+                        workhorse.schedule.name = %name,
+                        workhorse.task.id = %task_id,
+                        "Recurring schedule fired"
+                    ),
+                    None => crate::telemetry::log_event!(
+                        debug,
+                        event.name = "workhorse.schedule.fire_replayed",
+                        workhorse.schedule.namespace = %namespace,
+                        workhorse.schedule.name = %name,
+                        "Recurring schedule occurrence replayed"
+                    ),
+                }
+            }
         }
         let due = {
             let mut last = lock(&self.last_routine);
@@ -1636,8 +1800,37 @@ impl Inner {
             due
         };
         if due {
-            self.statements().rows(sql::RUN_MAINTENANCE_V1, &[&DatabaseNow]).await?;
+            let rows = self.statements().rows(sql::RUN_MAINTENANCE_V1, &[&DatabaseNow]).await?;
+            for row in &rows {
+                self.log_maintenance("background_routines", row)?;
+            }
         }
+        Ok(())
+    }
+
+    /// Writes `workhorse.maintenance.completed` for a maintenance phase that changed rows or
+    /// returned an error. A no-op and a skipped lock without an error write nothing.
+    fn log_maintenance(
+        &self,
+        operation: &'static str,
+        row: &tokio_postgres::Row,
+    ) -> Result<(), Error> {
+        let rows_affected = row.try_get::<_, Option<i32>>("rows_affected")?.unwrap_or(0);
+        let failed = row.try_get::<_, Option<Value>>("error")?.is_some();
+        if rows_affected == 0 && !failed {
+            return Ok(());
+        }
+        let phase = row.try_get::<_, Option<String>>("phase")?.unwrap_or_default();
+        let skipped_lock = row.try_get::<_, Option<bool>>("skipped_lock")?.unwrap_or(false);
+        crate::telemetry::log_event!(
+            info,
+            event.name = "workhorse.maintenance.completed",
+            workhorse.maintenance.operation = operation,
+            workhorse.maintenance.phase = %phase,
+            workhorse.maintenance.rows_affected = rows_affected,
+            workhorse.maintenance.skipped_lock = skipped_lock,
+            "Maintenance phase completed"
+        );
         Ok(())
     }
 
@@ -1701,10 +1894,12 @@ impl Inner {
         for row in rows {
             let mut task = claimed_task(row, queue, sent_at)?;
             task.fast_tier = fast_tier;
-            tracing::debug!(
+            crate::telemetry::log_event!(
+                debug,
                 event.name = "workhorse.task.claimed",
                 workhorse.task.id = %task.id,
                 workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
                 workhorse.queue.name = %queue,
                 workhorse.worker.id = %self.worker_id,
                 "Task claimed"
@@ -1951,7 +2146,7 @@ mod tests {
     }
 
     /// A pool whose server accepts connections and never answers, so every borrow waits.
-    fn silent_pool_on(port: u16) -> deadpool_postgres::Pool {
+    pub(in crate::worker) fn silent_pool_on(port: u16) -> deadpool_postgres::Pool {
         let mut config = deadpool_postgres::Config::new();
         config.host = Some("127.0.0.1".into());
         config.port = Some(port);
@@ -1970,7 +2165,7 @@ mod tests {
 
     /// A tracing writer that keeps every line in memory.
     #[derive(Clone, Default)]
-    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+    pub(in crate::worker) struct CapturedLog(Arc<Mutex<Vec<u8>>>);
 
     impl std::io::Write for CapturedLog {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -1984,8 +2179,20 @@ mod tests {
     }
 
     impl CapturedLog {
-        fn text(&self) -> String {
+        pub(in crate::worker) fn text(&self) -> String {
             String::from_utf8_lossy(&lock(&self.0)).into_owned()
+        }
+
+        /// Writes every record of this thread, at each level, into this buffer while the guard
+        /// lives.
+        pub(in crate::worker) fn install(&self) -> tracing::subscriber::DefaultGuard {
+            let log = self.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_ansi(false)
+                .with_writer(move || log.clone())
+                .finish();
+            tracing::subscriber::set_default(subscriber)
         }
     }
 

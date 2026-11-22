@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 // column holds cell, the shape a driver hands back for the text the statement selects.
 type deliveryExecutor struct {
 	status    string
+	state     any
 	cell      any
 	statement string
 }
@@ -23,6 +25,7 @@ func (executor *deliveryExecutor) Query(_ context.Context, statement string, _ .
 	executor.statement = statement
 	return []workhorse.Row{{
 		"status":       executor.status,
+		"state":        executor.state,
 		"payload":      executor.cell,
 		"result":       executor.cell,
 		"delivered_at": time.Date(2026, 9, 30, 13, 0, 0, 0, time.UTC),
@@ -91,5 +94,57 @@ func TestDeliveryWithoutRetainedJSONReturnsNull(t *testing.T) {
 	}
 	if payload := response.(map[string]any)["payload"]; payload != nil {
 		t.Fatalf("payload = %#v, want nil", payload)
+	}
+}
+
+// The TypeScript dashboard calls the queue, which writes one record for each cancel, signal, and
+// human wait. The Go dashboard runs the statement itself, so it writes the same records.
+func TestDashboardDeliveriesWriteTheQueueRecords(t *testing.T) {
+	var logs strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	ctx := context.Background()
+	cancel := &backend{executor: &deliveryExecutor{status: "canceled", state: "canceled"}}
+	if _, err := cancel.cancelTask(ctx, map[string]any{"id": "task-1", "audit": map[string]any{}}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	signal := &backend{executor: &deliveryExecutor{status: "delivered", cell: `{"secret":"never-log-this"}`}}
+	if _, err := signal.signalTask(ctx, map[string]any{"id": "task-1", "name": "approval"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signal.completeHumanWait(ctx, map[string]any{"id": "task-1", "name": "review"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []map[string]any{
+		{"event.name": "workhorse.task.cancellation_processed", "msg": "Task cancellation processed",
+			"workhorse.task.id": "task-1", "workhorse.task.state": "canceled", "workhorse.operation.status": "canceled"},
+		{"event.name": "workhorse.task.signal_processed", "msg": "Task signal processed",
+			"workhorse.task.id": "task-1", "workhorse.signal.name": "approval", "workhorse.signal.status": "delivered"},
+		{"event.name": "workhorse.task.human_wait_processed", "msg": "Human wait completion processed",
+			"workhorse.task.id": "task-1", "workhorse.human_wait.name": "review", "workhorse.human_wait.status": "delivered"},
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("got %d records, want %d: %s", len(lines), len(want), logs.String())
+	}
+	for index, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["level"] != "INFO" {
+			t.Errorf("record %d level is %v, want INFO", index, record["level"])
+		}
+		for key, value := range want[index] {
+			if record[key] != value {
+				t.Errorf("record %d: %s is %v, want %v: %v", index, key, record[key], value, record)
+			}
+		}
+	}
+	if strings.Contains(logs.String(), "never-log-this") {
+		t.Fatalf("a record holds the delivered value: %s", logs.String())
 	}
 }

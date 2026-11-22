@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Workhorse.Internal;
 using Workhorse.Internal.Database;
 using Workhorse.Internal.Json;
 using Workhorse.Internal.Runtime;
+using Workhorse.Internal.Telemetry;
 
 namespace Workhorse;
 
@@ -46,7 +46,6 @@ public sealed partial class Worker : IAsyncDisposable
     private readonly ReporterFailures _registrationReporter = new();
     private readonly ReporterFailures _notificationReporter = new();
     private readonly string[] _queues;
-    private readonly string _queueText;
     private readonly int _refillBatch;
     private readonly int _leaseMs;
     private readonly long _heartbeatMs;
@@ -87,7 +86,6 @@ public sealed partial class Worker : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(options);
         _dataSource = DataSources.Require(dataSource, nameof(dataSource));
         _queues = UniqueNames(options.Queues, nameof(options.Queues), allowEmpty: false);
-        _queueText = string.Join(',', _queues);
         WorkerId = options.WorkerId ?? $"{Environment.MachineName}-{Environment.ProcessId}-{Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()[..4])}";
         if (WorkerId.Length == 0)
         {
@@ -134,7 +132,7 @@ public sealed partial class Worker : IAsyncDisposable
         _shutdownGraceNanos = Monotonic.Millis(Values.Milliseconds(options.ShutdownGrace, nameof(options.ShutdownGrace), 0, 86_400_000));
         _retryDelay = options.RetryDelay;
         _codec = new JsonCodec(options.Json);
-        _logger = (options.LoggerFactory ?? NullLoggerFactory.Instance).CreateLogger<Worker>();
+        _logger = ContainedLogger.Create<Worker>(options.LoggerFactory);
 
         // The data source reports its pool size, so rule 4 of the ADR 0071 amendment applies at
         // construction. Without pooling the size is unknown, and the readiness check is the check.
@@ -267,7 +265,7 @@ public sealed partial class Worker : IAsyncDisposable
     public void Pause()
     {
         _locallyPaused = true;
-        WorkerLog.Paused(_logger, "locally", _queueText);
+        WorkerLog.Paused(_logger, WorkerId, "locally", _queues);
         _wake.Bump();
     }
 
@@ -275,7 +273,7 @@ public sealed partial class Worker : IAsyncDisposable
     public void Resume()
     {
         _locallyPaused = false;
-        WorkerLog.Resumed(_logger, "locally", _queueText);
+        WorkerLog.Resumed(_logger, WorkerId, "locally", _queues);
         _wake.Bump();
     }
 
@@ -292,7 +290,7 @@ public sealed partial class Worker : IAsyncDisposable
     {
         Interlocked.CompareExchange(ref _stopDeadline, Monotonic.Now() + _shutdownGraceNanos, Never);
         Interlocked.Increment(ref _stopVersion);
-        WorkerLog.StopRequested(_logger, _queueText);
+        WorkerLog.StopRequested(_logger, WorkerId, _queues, _active.Count);
         _wake.Bump();
     }
 
@@ -349,6 +347,11 @@ public sealed partial class Worker : IAsyncDisposable
 
             _handlers[taskType] = new Registration(invoke, batch);
         }
+
+        if (batch is null)
+        {
+            WorkerLog.HandlerRegistered(_logger, taskType, WorkerId);
+        }
     }
 
     private TPayload Decode<TPayload>(string payload) => _codec.Deserialize<TPayload>(payload)!;
@@ -371,7 +374,8 @@ public sealed partial class Worker : IAsyncDisposable
 
     private void OnNotificationError(Exception error)
     {
-        WorkerLog.NotificationFailed(_logger, error);
+        // The record names the error type only, because the message can hold a host or a user name.
+        WorkerLog.NotificationFailed(_logger, error.GetType().FullName ?? error.GetType().Name);
         CallReporter(NotificationError, "notification_error", _notificationReporter, error);
     }
 

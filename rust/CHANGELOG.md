@@ -9,6 +9,88 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
+## Unreleased
+
+### A failing log subscriber no longer changes an operation
+
+A log record must never change the result of an operation. Before, a `tracing` subscriber that
+panicked unwound the queue, admin, dashboard, or worker operation that wrote the record.
+
+- Each log record of the crate now goes through one internal macro that stops a subscriber panic.
+  The operation keeps its result, and the handler runs.
+- `Queue::task_group`, `Queue::add_to_task_group`, and `HandlerContext::task_group().add` now write
+  the enqueue records, as `Queue::enqueue` does.
+- `workhorse.task.failure_processed` now comes for each `fail_v2` answer, also for
+  `cancel_requested` and `stale`, as in TypeScript.
+- `workhorse.worker.polling_only` now comes each time `Worker::run` starts without a notification
+  listener, also under `polling_only`, as in TypeScript.
+- A claim without a handler now writes `workhorse.handler.started`, `workhorse.handler.finished`,
+  and `workhorse.task.execution_finished` under a handler span, as in TypeScript.
+- A settlement that fails writes no `workhorse.task.execution_finished`. Before, the record had
+  the outcome `unknown`.
+- The notification listener, the heartbeat connection, the heartbeat round, and the run failure
+  diagnostics now carry `error.type`, not the error text.
+- A heartbeat registration no longer copies the task type into a new allocation.
+
+### The worker log records match the TypeScript records
+
+A worker log record must be the same in each SDK, so that one alert reads the workers of all seven
+SDKs. An exporter of log records does not copy the fields of a span, so a record must carry the
+task identity itself.
+
+- `workhorse.handler.started`, `workhorse.handler.finished`, `workhorse.task.execution_finished`,
+  `workhorse.task.completed`, `workhorse.handler.missing`, `workhorse.task.release_processed`,
+  `workhorse.task.failure_processed`, `workhorse.task.heartbeat_accepted`, and
+  `workhorse.task.heartbeat_rejected` now carry the task identity of the TypeScript record.
+- `workhorse.handler.finished` carries `workhorse.handler.duration_ms`, and
+  `workhorse.task.execution_finished` no longer carries it. `workhorse.task.failure_processed`
+  carries `workhorse.attempt.outcome` instead of `workhorse.task.state`.
+- `workhorse.leases.recovered` carries `workhorse.recovery.rows_affected`,
+  `workhorse.recovery.expired_leases`, and `workhorse.recovery.retried`.
+- `workhorse.handler.batch_dispatched` is now info. The bodies of the handler, failure, batch, and
+  swallowed-signal records are now the TypeScript bodies.
+- `workhorse.worker.queues` is now the JSON text of the queue list, such as `["mail","billing"]`.
+  `tracing` records no list value.
+- `workhorse.task.claimed` carries `workhorse.task.attempt`, as in TypeScript.
+- `workhorse.worker.registration_failed` carries `error.type`.
+  `workhorse.worker.expiration_request_failed` no longer carries the error message in `error`.
+- The worker diagnostic records for a failed claim, task execution, registration,
+  deregistration, or maintenance pass carry `error.type` instead of the error message. A failed
+  maintenance phase no longer writes a second warning with the PostgreSQL error text;
+  `workhorse.maintenance.completed` records it.
+- The dashboard now writes `workhorse.task.cancellation_processed`,
+  `workhorse.task.signal_processed`, and `workhorse.task.human_wait_processed` for its actions, as
+  the queue does.
+
+### The crate writes the worker log events of the TypeScript SDK
+
+The crate now writes 38 more events of the TypeScript union `WorkhorseLogEvent` through `tracing`.
+Each event has the same name, level, and attributes as in TypeScript, and the same condition. The
+`Queue` client writes the enqueue events (`workhorse.task.enqueued`,
+`workhorse.task.enqueue_replayed`, `workhorse.task.debounced`, `workhorse.task.debounce_rejected`,
+and `workhorse.task.throttled`), `workhorse.task.cancellation_processed`,
+`workhorse.task.signal_processed`, `workhorse.task.human_wait_processed`, and
+`workhorse.schedules.synchronized`. The `Admin` client writes the queue administration events
+(`workhorse.queue.paused`, `workhorse.queue.resumed`, `workhorse.queue.tier_set`, and
+`workhorse.queue.purged`), the redrive events, and `workhorse.worker.paused` and
+`workhorse.worker.resumed`. The worker writes its life-cycle events (`workhorse.worker.started`,
+`workhorse.worker.stop_requested`, `workhorse.worker.stopped`, and
+`workhorse.worker.deregistered`), the registration events, `workhorse.worker.polling_only`,
+`workhorse.handler.registered`, `workhorse.handler.batch_evidence_failed`,
+`workhorse.worker.shutdown_settlement_failed`, `workhorse.maintenance.completed`, and the schedule
+fire events. It also writes the settlement events (`workhorse.task.completion_rejected`,
+`workhorse.task.cancellation_acknowledged`, and `workhorse.task.ownership_expired`),
+`workhorse.task.heartbeat_accepted`, and the durable call events
+(`workhorse.task.checkpoint_saved`, `workhorse.task.progress_updated`,
+`workhorse.task.wait_processed`, and `workhorse.task.child_processed`).
+
+The worker writes `workhorse.worker.registered` after the first registration and when the active
+slots, the draining state, or the pause state changes. An unchanged refresh writes no event. The
+crate has no public method that promotes tasks or prunes the worker registry, so it does not write
+`workhorse.tasks.promoted` or `workhorse.worker_registry.pruned`. No event carries a payload, a
+result, an error message, a cancellation reason, an idempotency key, or a progress or checkpoint
+value.
+
 ## 0.16.0 — 2026-11-22
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET

@@ -23,6 +23,8 @@ import run.workhorse.internal.Row;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.Values;
+import run.workhorse.internal.telemetry.Names;
+import run.workhorse.internal.telemetry.Telemetry;
 
 /**
  * Inspects and controls tasks, dead letters, workers, queues, and task groups. The counterpart of
@@ -55,17 +57,30 @@ public final class Admin {
   private static final int DEFAULT_GROUP_LIMIT = 1000;
 
   private final ConnectionSource connections;
+  private final Telemetry telemetry;
   private final CompatibilityCache compatibility = new CompatibilityCache();
 
   /**
-   * An admin on {@code connections}.
+   * An admin on {@code connections} that writes its log records to {@code GlobalOpenTelemetry} when
+   * the OpenTelemetry API is on the class path, as a {@link Queue} with the default options does.
    *
    * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.12, or
    *     reports a version that the SDK cannot read
    */
   public Admin(ConnectionSource connections) {
+    this(connections, WorkhorseTelemetry.global());
+  }
+
+  /**
+   * An admin on {@code connections} that writes its log records to {@code telemetry}.
+   *
+   * @throws IllegalStateException if the PgJDBC driver on the class path is older than 42.7.12, or
+   *     reports a version that the SDK cannot read
+   */
+  public Admin(ConnectionSource connections, WorkhorseTelemetry telemetry) {
     PgjdbcVersion.require();
     this.connections = Objects.requireNonNull(connections, "connections");
+    this.telemetry = Objects.requireNonNull(telemetry, "telemetry").telemetry();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -255,7 +270,7 @@ public final class Admin {
   private RedriveResult redrive(Call call, UUID sourceTaskId, AdminAudit audit) {
     audit(audit);
     assertCompatible(call);
-    return redriveResult(
+    Row row =
         Rows.exactlyOne(
             Sql.rows(
                 call.connection,
@@ -264,7 +279,15 @@ public final class Admin {
                 audit.actor(),
                 audit.reason(),
                 audit.requestId()),
-            "redrive_v1"));
+            "redrive_v1");
+    RedriveResult result = redriveResult(row);
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put(Names.TASK_ID, sourceTaskId.toString());
+    UUID target = result.targetTaskId();
+    attributes.put(Names.REDRIVE_TARGET_TASK_ID, target == null ? "none" : target.toString());
+    attributes.put(Names.OPERATION_STATUS, row.text("status"));
+    log("workhorse.task.redrive_processed", "Dead-letter task redrive processed", attributes);
+    return result;
   }
 
   /**
@@ -313,7 +336,15 @@ public final class Admin {
           new DeadLetterCursor(
               last.requiredText("source_finished_at_cursor"), last.requiredUuid("source_task_id"));
     }
-    return new BulkRedrivePage(map(rows, Admin::redriveResult), next);
+    BulkRedrivePage page = new BulkRedrivePage(map(rows, Admin::redriveResult), next);
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put(Names.TASK_COUNT, (long) rows.size());
+    attributes.put(Names.REDRIVE_DRY_RUN, filter.dryRun());
+    log(
+        "workhorse.tasks.redrive_processed",
+        "Dead-letter task redrive batch processed",
+        attributes);
+    return page;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -526,24 +557,33 @@ public final class Admin {
     name(workerId, "worker ID");
     audit(audit);
     assertCompatible(call);
-    return first(
-            Sql.rows(
-                call.connection,
-                SqlCatalogue.SET_WORKER_PAUSED,
-                workerId,
-                Boolean.toString(paused),
-                audit.actor(),
-                audit.reason(),
-                audit.requestId()))
-        .map(
-            row ->
-                new WorkerPauseResult(
-                    row.requiredText("worker_id"),
-                    bool(row, "paused"),
-                    row.text("paused_by"),
-                    row.text("paused_reason"),
-                    row.instant("paused_at"),
-                    row.requiredInstant("last_heartbeat_at")));
+    Optional<WorkerPauseResult> result =
+        first(
+                Sql.rows(
+                    call.connection,
+                    SqlCatalogue.SET_WORKER_PAUSED,
+                    workerId,
+                    Boolean.toString(paused),
+                    audit.actor(),
+                    audit.reason(),
+                    audit.requestId()))
+            .map(
+                row ->
+                    new WorkerPauseResult(
+                        row.requiredText("worker_id"),
+                        bool(row, "paused"),
+                        row.text("paused_by"),
+                        row.text("paused_reason"),
+                        row.instant("paused_at"),
+                        row.requiredInstant("last_heartbeat_at")));
+    // As in TypeScript, a request that finds no worker writes no record.
+    if (result.isPresent()) {
+      log(
+          paused ? "workhorse.worker.paused" : "workhorse.worker.resumed",
+          paused ? "Worker paused" : "Worker resumed",
+          Map.of(Names.WORKER_ID, workerId));
+    }
+    return result;
   }
 
   /** Pauses the queue, so no worker claims a task from it. */
@@ -578,6 +618,10 @@ public final class Admin {
         audit.actor(),
         audit.reason(),
         audit.requestId());
+    log(
+        paused ? "workhorse.queue.paused" : "workhorse.queue.resumed",
+        paused ? "Queue paused" : "Queue resumed",
+        Map.of(Names.QUEUE_NAME, queue));
     return null;
   }
 
@@ -607,16 +651,22 @@ public final class Admin {
     name(queue, "queue");
     audit(audit);
     assertCompatible(call);
-    return Rows.exactlyOne(
-            Sql.rows(
-                call.connection,
-                SqlCatalogue.PURGE_QUEUE,
-                queue,
-                audit.actor(),
-                audit.reason(),
-                audit.requestId()),
-            "purge_queue_v1")
-        .requiredLong("deleted_count");
+    long count =
+        Rows.exactlyOne(
+                Sql.rows(
+                    call.connection,
+                    SqlCatalogue.PURGE_QUEUE,
+                    queue,
+                    audit.actor(),
+                    audit.reason(),
+                    audit.requestId()),
+                "purge_queue_v1")
+            .requiredLong("deleted_count");
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put(Names.QUEUE_NAME, queue);
+    attributes.put(Names.TASK_COUNT, count);
+    log("workhorse.queue.purged", "Queue purged", attributes);
+    return count;
   }
 
   /**
@@ -643,9 +693,7 @@ public final class Admin {
     Objects.requireNonNull(tier, "tier");
     audit(audit);
     assertCompatible(call);
-    return Rows.constant(
-        QueueTier.class,
-        "set_queue_tier",
+    String changed =
         Rows.exactlyOne(
                 Sql.rows(
                     call.connection,
@@ -655,7 +703,21 @@ public final class Admin {
                     audit.actor(),
                     audit.reason()),
                 "set_queue_tier_v1")
-            .text("tier"));
+            .text("tier");
+    QueueTier result = Rows.constant(QueueTier.class, "set_queue_tier", changed);
+    Map<String, @Nullable Object> attributes = new LinkedHashMap<>();
+    attributes.put(Names.QUEUE_NAME, queue);
+    attributes.put(Names.QUEUE_TIER, changed);
+    log("workhorse.queue.tier_set", "Queue tier set", attributes);
+    return result;
+  }
+
+  /**
+   * Emits the info log record of one control, as the TypeScript admin does. The admin writes it
+   * only to OpenTelemetry, as the queue writes its records. It never carries the audit fields.
+   */
+  private void log(String event, String body, Map<String, ? extends @Nullable Object> attributes) {
+    telemetry.log(Telemetry.Severity.INFO, event, body, attributes);
   }
 
   /**
@@ -1362,11 +1424,18 @@ public final class Admin {
     try {
       connections.release(connection, transactional);
     } catch (SQLException | RuntimeException error) {
-      LOGGER.log(
-          System.Logger.Level.WARNING,
-          "Connection release failed after a successful call {event.name="
-              + "workhorse.connection.release_failed}",
-          error);
+      // The record names the error type only, because a driver message can hold a host or a
+      // value. A logger that throws must not turn the committed call into a failure.
+      try {
+        LOGGER.log(
+            System.Logger.Level.WARNING,
+            "Connection release failed after a successful call {event.name="
+                + "workhorse.connection.release_failed, error.type="
+                + error.getClass().getName()
+                + "}");
+      } catch (RuntimeException ignored) {
+        // The logger failed.
+      }
     }
     return result;
   }

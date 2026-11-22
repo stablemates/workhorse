@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -165,6 +166,8 @@ type HandlerContext struct {
 	contracts     *contractCache
 	compatibility *CachedCompatibilityCheck
 	workerID      string
+	// logger receives the durable records of the activation. It is the logger of the worker.
+	logger        *slog.Logger
 	checkpoint    sync.Mutex
 	checkpoints   map[string]*checkpointCall
 	wait          sync.Mutex
@@ -190,6 +193,21 @@ type HandlerContext struct {
 	// returned holds the cancellation cause of the handler context when the handler returned. A
 	// batch member records it when the batch handler returns (ADR 0117).
 	returned atomic.Pointer[returnedCause]
+}
+
+// logDurableEvent writes one record of a durable operation of this activation, with the task and
+// worker identity plus attributes. It never writes the stored value.
+func (handler *HandlerContext) logDurableEvent(level slog.Level, event, message string, attributes ...slog.Attr) {
+	if handler.logger == nil {
+		return
+	}
+	logWorkerEvent(handler.context, handler.logger, level, event, message, func() []any {
+		values := taskLogAttributes(handler.Task, handler.workerID)
+		for _, attribute := range attributes {
+			values = append(values, attribute)
+		}
+		return values
+	})
 }
 
 // returnedCause is the cancellation cause of a handler context when its handler returned.
@@ -275,6 +293,8 @@ func (handler *HandlerContext) SetProgress(value any) (*TaskProgress, error) {
 	status, _ := rows[0][rowStatusField].(string)
 	switch status {
 	case progressUpdatedValue, progressUnchangedValue:
+		handler.logDurableEvent(slog.LevelDebug, progressUpdatedEvent, progressUpdatedLogMessage,
+			slog.String(progressStatusAttribute, status))
 		progress, err := progressRecord(handler.Task.ID, rows[0])
 		if err != nil {
 			return nil, err
@@ -476,6 +496,8 @@ func (handler *HandlerContext) runCheckpoint(
 	}
 	switch status, _ := rows[0][rowStatusField].(string); status {
 	case durableSavedValue, durableExistingValue:
+		handler.logDurableEvent(slog.LevelDebug, checkpointSavedEvent, checkpointSavedLogMessage,
+			slog.String(checkpointNameAttribute, name), slog.String(checkpointStatusAttribute, status))
 		return decodedJSON(rows[0][rowCheckpointValueField])
 	case durableStaleValue:
 		return nil, &CheckpointLeaseLostError{TaskID: handler.Task.ID, CheckpointName: name}
@@ -589,7 +611,12 @@ func (handler *HandlerContext) runWait(name string, request waitRequest) error {
 	if len(rows) != 1 {
 		return errors.New(invalidDurableWaitResultMessage)
 	}
-	switch status, _ := rows[0][rowStatusField].(string); status {
+	status, _ := rows[0][rowStatusField].(string)
+	if status == durableElapsedValue || status == durableScheduledValue {
+		handler.logDurableEvent(slog.LevelInfo, waitProcessedEvent, waitProcessedLogMessage,
+			slog.String(waitNameAttribute, name), slog.String(waitStatusAttribute, status))
+	}
+	switch status {
 	case durableElapsedValue:
 		return nil
 	case durableScheduledValue:

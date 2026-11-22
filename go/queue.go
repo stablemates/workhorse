@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -182,6 +183,8 @@ type Queue struct {
 	compatibility *CachedCompatibilityCheck
 	// contracts is shared with the worker when a handler adds tasks to its task group.
 	contracts *contractCache
+	// logger receives the log records of the queue. Nil writes no record.
+	logger *slog.Logger
 }
 
 // QueueHealth is PostgreSQL's versioned health document. Stable fields and reason codes are
@@ -241,6 +244,19 @@ func NewQueue(executor Executor, defaultQueue string) *Queue {
 	}
 }
 
+// WithLogger returns a copy of the queue that writes its log records to logger. The copy shares the
+// executor, the default queue, and the caches of the queue. A queue without WithLogger, or with a
+// nil logger, writes no record. If the handler of logger panics, the queue drops that record. A log
+// record never changes the result of an operation.
+func (queue *Queue) WithLogger(logger *slog.Logger) *Queue {
+	copied := *queue
+	copied.logger = nil
+	if logger != nil {
+		copied.logger = newRecoveringLogger(logger)
+	}
+	return &copied
+}
+
 // Health reads PostgreSQL's database-authoritative queue health snapshot.
 func (queue *Queue) Health(ctx context.Context) (QueueHealth, error) {
 	if err := AssertSchemaCompatible(ctx, queue.executor); err != nil {
@@ -282,7 +298,23 @@ func (queue *Queue) Cancel(
 	if len(rows) != 1 {
 		return CancelResult{}, fmt.Errorf(invalidCancelRowCountMessage, len(rows))
 	}
-	return cancelResult(rows[0], taskID)
+	result, err := cancelResult(rows[0], taskID)
+	if err != nil {
+		return CancelResult{}, err
+	}
+	logWorkerEvent(ctx, sdkLogger(queue.logger), slog.LevelInfo, cancellationProcessedEvent,
+		cancellationProcessedLogMessage, func() []any {
+			state := notFoundValue
+			if result.State != nil {
+				state = string(*result.State)
+			}
+			return []any{
+				slog.String(taskIDAttribute, taskID),
+				slog.String(taskStateAttribute, state),
+				slog.String(operationStatusAttribute, string(result.Status)),
+			}
+		})
+	return result, nil
 }
 
 func cancelResult(row Row, taskID string) (CancelResult, error) {
@@ -472,7 +504,12 @@ func (queue *Queue) submitEnqueueRequests(
 			return nil, err
 		}
 		if !mismatched {
-			return enqueueResults(rows, len(requests))
+			results, err := enqueueResults(rows, len(requests))
+			if err != nil {
+				return nil, err
+			}
+			queue.logEnqueueResults(ctx, requests, results)
+			return results, nil
 		}
 		if err := queue.refreshPayloadContracts(ctx, taskTypes); err != nil {
 			return nil, err
@@ -480,6 +517,42 @@ func (queue *Queue) submitEnqueueRequests(
 		if attempt > 0 {
 			return nil, ErrContractPolicyChanged
 		}
+	}
+}
+
+// enqueueOutcomeLogs holds the log event and body of each enqueue outcome.
+var enqueueOutcomeLogs = map[EnqueueOutcome][2]string{
+	EnqueueAccepted:       {enqueuedEvent, enqueuedLogMessage},
+	EnqueueReplayed:       {enqueueReplayedEvent, enqueueReplayedLogMessage},
+	EnqueueReplaced:       {debouncedEvent, debouncedLogMessage},
+	EnqueueNonReplaceable: {debounceRejectedEvent, debounceRejectedLogMessage},
+	EnqueueCoalesced:      {throttledEvent, throttledLogMessage},
+}
+
+// logEnqueueResults writes one debug record for each result, in request order. The record names
+// the task, its type, and its queue, and never the payload or the idempotency key.
+func (queue *Queue) logEnqueueResults(ctx context.Context, requests []EnqueueRequest, results []EnqueueResult) {
+	logger := sdkLogger(queue.logger)
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	for index, result := range results {
+		details, ok := enqueueOutcomeLogs[result.Outcome]
+		if !ok {
+			continue
+		}
+		request := requests[index]
+		queueName := request.Options.Queue
+		if queueName == emptyString {
+			queueName = queue.defaultQueue
+		}
+		logWorkerEvent(ctx, logger, slog.LevelDebug, details[0], details[1], func() []any {
+			return []any{
+				slog.String(taskIDAttribute, result.TaskID),
+				slog.String(taskTypeAttribute, request.Type),
+				slog.String(queueNameAttribute, queueName),
+			}
+		})
 	}
 }
 
@@ -770,14 +843,23 @@ func (queue *Queue) SyncSchedules(
 	if err != nil {
 		return err
 	}
-	_, err = queue.executor.Query(
+	if _, err := queue.executor.Query(
 		ctx,
 		internalStatementRegistry[syncScheduleDefinitionsStatementName],
 		namespace,
 		payload,
 		prune,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	logWorkerEvent(ctx, sdkLogger(queue.logger), slog.LevelInfo, schedulesSynchronizedEvent,
+		schedulesSynchronizedLogMessage, func() []any {
+			return []any{
+				slog.String(scheduleNamespaceAttribute, namespace),
+				slog.Int(scheduleCountAttribute, len(definitions)),
+			}
+		})
+	return nil
 }
 
 type scheduleInput struct {

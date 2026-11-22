@@ -22,6 +22,11 @@ from ..admin import (
     QueueTier,
     RedriveResult,
 )
+from ..client import (
+    _log_cancellation_processed,
+    _log_human_wait_processed,
+    _log_signal_processed,
+)
 from ..dashboard_v1 import _CANCEL_TASK_GROUP_SQL, _TASK_GROUP_DETAIL_SQL, _TASK_GROUPS_SQL
 from ..errors import FastTierUnsupportedError
 from ._errors import DashboardRPCError
@@ -537,6 +542,9 @@ class DashboardBackend:
             """,
             (value["id"], actor, audit.get("reason")),
         )[0]
+        # The queue writes these records, so the dashboard writes the same ones (TypeScript calls
+        # the queue).
+        _log_cancellation_processed(row, str(value["id"]))
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
@@ -565,6 +573,8 @@ class DashboardBackend:
                 actor,
             ),
         )[0]
+        if row["status"] != "conflict":
+            _log_signal_processed(str(value["id"]), str(value["name"]), str(row["status"]))
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {
@@ -592,6 +602,8 @@ class DashboardBackend:
                 actor,
             ),
         )[0]
+        if row["status"] != "conflict":
+            _log_human_wait_processed(str(value["id"]), str(value["name"]), str(row["status"]))
         if row["status"] == "not_found":
             raise DashboardRPCError(404, "NOT_FOUND", "Task not found")
         return {

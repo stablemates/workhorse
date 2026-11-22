@@ -418,38 +418,21 @@ A worker never polls because its pool is small. A worker on a pool below 3, or o
 unknown size, fails at construction. Two pools are the exceptions: a JVM `DataSource` with no
 declared `poolMaxSize`, and a .NET data source with `Pooling=false`. The startup check in rule 2 is
 their guard. Before 0.11.0, a worker under the heartbeat opt-out polled on
-such a pool (SM-1585). A worker still polls when the caller asks for it, or when its listener does
-not listen.
+such a pool (SM-1585). A worker still polls when the caller asks for it, or while its listener does
+not listen yet.
 
-In TypeScript and the JVM, the run then logs `workhorse.worker.polling_only` once, at warn
-severity, with the body "Worker has no notification listener and dispatches by polling". The record
-carries `workhorse.worker.id`, `workhorse.worker.queues`, and `workhorse.worker.pool_max_size`. That
-attribute is the size that the worker found, or `unknown`.
+A run without a notification subscription logs `workhorse.worker.polling_only` once, at warn severity, after
+`workhorse.worker.started`. The seven SDKs use one rule: a continuous run that starts with no
+notification subscription logs the event. A run under the polling-only option of the SDK also logs
+it. A one-pass run logs nothing. The body is "Worker has no notification listener and dispatches by
+polling". The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
+`workhorse.worker.pool_max_size`, the size that the worker found or `unknown`. The .NET record
+names these values `WorkerId`, `Queues`, and `PoolMaxSize` in its template.
 
-- TypeScript: `Worker.run()` logs the event when it starts with no subscription. With a Workhorse
-  `Queue`, the pool always has room for the listener, so the event comes from a custom
-  `WorkerQueueApi` that returns no subscription. It has no `subscribeToTaskNotifications`, or the
-  method returns `null` for every queue.
-- JVM: the worker logs the event when its listener does not listen by the end of its startup wait,
-  unless the caller requests a stop. A run under `pollingOnly(true)` logs nothing.
-
-The .NET worker logs the event `workhorse.worker.polling_only` in the same case as the JVM, once, at
-`LogLevel.Warning`. Its message is "Worker {WorkerId} has no notification listener and dispatches by
-polling". The record carries only the `WorkerId` property.
-
-Python and Ruby log no polling warning. 0.11.0 removed their `workhorse.worker.polling_only` event,
-because their pool always has a connection for the listener.
-
-Go and Rust log their own warnings. These warnings do not carry `workhorse.worker.pool_max_size`:
-
-- Go: if `PollingOnly` is set, `Worker.Run` logs "PostgreSQL notification listener disabled; worker
-  is using polling" at warn level. If the listener fails, the worker logs "PostgreSQL notification
-  listener unavailable; worker is using polling" with the error. 0.11.0 removed the Go warning for
-  a pool below 2.
-- Rust: the listener connection is outside the pool. If the worker expects no listener because it
-  has no `listen_config`, the run logs "PostgreSQL notification listener unavailable; worker is
-  using polling" at warn level. The event carries `workhorse.worker.id` only. If `polling_only` is
-  set, the Rust worker expects no listener and logs no listener warning.
+With a Workhorse `Queue`, the TypeScript pool always has room for the listener, so the TypeScript
+event comes from a custom `WorkerQueueApi` that returns no subscription. Go also logs "PostgreSQL
+notification listener unavailable; worker is using polling" when its listener fails after the
+start.
 
 The JVM worker trusts a declared `poolMaxSize`. If an operator makes the pool smaller than the
 declared size, the readiness check proves only the headroom at the start of the run.

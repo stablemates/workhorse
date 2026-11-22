@@ -732,6 +732,10 @@ class AsyncWorker:
 
         with suppress(FutureTimeoutError):
             asyncio.run_coroutine_threadsafe(subscribe(), loop).result(_CLEANUP_SECONDS)
+        # A run without a hub, or whose subscription did not finish in time, finds new tasks by
+        # polling. The worker runs on, but it says so once, as the TypeScript worker does.
+        if self._wants_listener and self._subscription is None:
+            self._inner._log_polling_only()
 
     def _registry(self) -> _PoolRegistry:
         return _ASYNC_PSYCOPG_HUBS if self._driver == "psycopg" else _ASYNCPG_HUBS

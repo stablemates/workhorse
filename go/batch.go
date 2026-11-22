@@ -146,6 +146,15 @@ func (worker *Worker) HandleBatch(
 		pending: make(map[string][]*batchMember),
 	}
 	worker.registerHandler(taskType, coordinator.handle)
+	logWorkerEvent(context.Background(), worker.logger, slog.LevelDebug, handlerRegisteredEvent,
+		batchHandlerRegisteredLogMessage, func() []any {
+			return []any{
+				slog.String(taskTypeAttribute, taskType),
+				slog.Int(batchMaxSizeAttribute, options.MaxSize),
+				slog.Int64(batchLingerAttribute, options.Linger.Milliseconds()),
+				slog.String(workerIDAttribute, worker.workerID),
+			}
+		})
 	return worker
 }
 
@@ -320,7 +329,7 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	logWorkerEvent(
 		batch[0].item.Context.Context,
 		coordinator.worker.logger,
-		slog.LevelDebug,
+		slog.LevelInfo,
 		batchDispatchedEvent,
 		batchDispatchedLogMessage,
 		func() []any {
@@ -336,7 +345,9 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	)
 	batchID, hasBatchID := newUUID()
 	if hasBatchID {
-		coordinator.record(batch[0].item.Context.Context, recordBatchDispatchStatementName, batchID, batch)
+		coordinator.record(
+			batch[0].item.Context.Context, recordBatchDispatchStatementName, batchEvidenceDispatchPhase, batchID, batch, full,
+		)
 	}
 	items := make([]BatchHandlerItem, len(batch))
 	for index, member := range batch {
@@ -363,7 +374,9 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	}
 	if err != nil {
 		if hasBatchID {
-			coordinator.record(batch[0].item.Context.Context, recordBatchFailureStatementName, batchID, batch)
+			coordinator.record(
+				batch[0].item.Context.Context, recordBatchFailureStatementName, batchEvidenceFailurePhase, batchID, batch, full,
+			)
 		}
 		for index, member := range batch {
 			member.result <- batchMemberResult{err: err}
@@ -377,11 +390,15 @@ func (coordinator *batchCoordinator) dispatch(batch []*batchMember) {
 	}
 }
 
+// record writes the dispatch or the failure evidence of a batch. A write that fails writes
+// workhorse.handler.batch_evidence_failed, and the batch callback still runs.
 func (coordinator *batchCoordinator) record(
 	ctx context.Context,
 	statement string,
+	phase string,
 	batchID string,
 	batch []*batchMember,
+	full bool,
 ) {
 	taskIDs := make([]string, len(batch))
 	attempts := make([]int, len(batch))
@@ -400,7 +417,22 @@ func (coordinator *batchCoordinator) record(
 		fences,
 		coordinator.worker.workerID,
 	)
-	if err != nil || len(rows) != 1 {
+	if err != nil {
+		logWorkerEvent(ctx, coordinator.worker.logger, slog.LevelWarn, batchEvidenceFailedEvent,
+			batchEvidenceFailedLogMessage, func() []any {
+				return []any{
+					slog.String(queueNameAttribute, batch[0].item.Context.Task.Queue),
+					slog.String(taskTypeAttribute, coordinator.taskType),
+					slog.Bool(batchFullAttribute, full),
+					slog.Int(batchSizeAttribute, len(batch)),
+					slog.String(batchEvidencePhaseAttribute, phase),
+					slog.String(workerIDAttribute, coordinator.worker.workerID),
+					slog.String(errorTypeAttribute, fmt.Sprintf(goTypeFormat, err)),
+				}
+			})
+		return
+	}
+	if len(rows) != 1 {
 		return
 	}
 	recorded, ok := integer(rows[0][rowRecordedField])

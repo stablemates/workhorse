@@ -8,7 +8,8 @@ namespace Workhorse.Hosting.Internal;
 
 /// <summary>
 /// The hosted worker (ADR 0107, "Hosting and dependency injection"). It runs
-/// <see cref="Worker.RunAsync"/> until the host stops, and the worker then drains.
+/// <see cref="Worker.RunAsync"/> until the host stops, and the worker then drains. A logger that
+/// throws does not change the startup, the failure that the service throws again, or the exit code.
 /// </summary>
 internal sealed class WorkerService(
     IServiceProvider services,
@@ -16,8 +17,10 @@ internal sealed class WorkerService(
     IOptions<WorkerOptions> options,
     WorkerHandlers handlers,
     WorkerState state,
-    ILogger<WorkerService> logger) : BackgroundService, IAsyncDisposable
+    ILoggerFactory? loggerFactory = null) : BackgroundService, IAsyncDisposable
 {
+    private readonly ILogger _logger = ContainedLogger.Create<WorkerService>(loggerFactory);
+
     /// <summary>The unwind window after the shutdown grace (ADR 0107, "Shutdown").</summary>
     internal static readonly TimeSpan UnwindWindow = TimeSpan.FromMilliseconds(250);
 
@@ -45,7 +48,7 @@ internal sealed class WorkerService(
 
         if (HostShutdownTimeout(services) is { } timeout && timeout < settings.ShutdownGrace + UnwindWindow)
         {
-            HostingLog.ShutdownTimeoutShort(logger, timeout, settings.ShutdownGrace, UnwindWindow);
+            HostingLog.ShutdownTimeoutShort(_logger, timeout, settings.ShutdownGrace, UnwindWindow);
         }
 
         _worker = worker;
@@ -80,7 +83,7 @@ internal sealed class WorkerService(
         if (failure is not null)
         {
             state.Faulted(failure.SourceException);
-            HostingLog.WorkerFailed(logger, failure.SourceException);
+            HostingLog.WorkerFailed(_logger, failure.SourceException);
             Environment.ExitCode = 1;
             failure.Throw();
         }
@@ -88,7 +91,7 @@ internal sealed class WorkerService(
         if (!stoppingToken.IsCancellationRequested)
         {
             state.Ended(stopRequested: false);
-            HostingLog.WorkerEnded(logger);
+            HostingLog.WorkerEnded(_logger);
             Environment.ExitCode = 1;
             throw new InvalidOperationException("The hosted Workhorse worker stopped without a stop request");
         }

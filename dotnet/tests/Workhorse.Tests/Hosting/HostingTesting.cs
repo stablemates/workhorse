@@ -45,6 +45,42 @@ internal sealed class HostingTesting
     internal CapturedLog Log { get; } = new();
 
     internal IHost Build() => Builder.Build();
+
+    /// <summary>
+    /// Adds a log provider that throws for each logger of the hosting package. With
+    /// <paramref name="atCreate"/>, the provider throws when the host creates the logger. Otherwise
+    /// it throws when the host writes a record.
+    /// </summary>
+    internal void ThrowFromHostingLoggers(bool atCreate) => Builder.Logging.AddProvider(new ThrowingHostingLog(atCreate));
+}
+
+/// <summary>A log provider that throws for each category of <c>Workhorse.Hosting</c>.</summary>
+internal sealed class ThrowingHostingLog(bool atCreate) : ILoggerProvider
+{
+    public ILogger CreateLogger(string categoryName)
+    {
+        if (!categoryName.StartsWith("Workhorse.Hosting", StringComparison.Ordinal))
+        {
+            return Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        }
+
+        return atCreate ? throw new InvalidOperationException("the logger factory failed") : new Logger();
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Logger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => throw new InvalidOperationException("the logger failed");
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("the logger failed");
+    }
 }
 
 /// <summary>A log provider that keeps each event, and copies it to the test output.</summary>

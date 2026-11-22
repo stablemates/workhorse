@@ -59,6 +59,7 @@ Workhorse.AdminAudit: public required string RequestId { get; init; }
 
 public sealed record Workhorse.AdminOptions
 Workhorse.AdminOptions: public AdminOptions()
+Workhorse.AdminOptions: public Microsoft.Extensions.Logging.ILoggerFactory? LoggerFactory { get; init; }
 
 public sealed class Workhorse.AlreadyWaitingException : Workhorse.NamedOperationException
 Workhorse.AlreadyWaitingException: public AlreadyWaitingException(string operation, string name)
@@ -537,6 +538,7 @@ Workhorse.QueueHistory: public required bool RecordAttempts { get; init; }
 Workhorse.QueueHistory: public required bool RecordClaims { get; init; }
 
 public sealed record Workhorse.QueueOptions
+Workhorse.QueueOptions: public Microsoft.Extensions.Logging.ILoggerFactory? LoggerFactory { get; init; }
 Workhorse.QueueOptions: public QueueOptions()
 Workhorse.QueueOptions: public System.Text.Json.JsonSerializerOptions? Json { get; init; }
 Workhorse.QueueOptions: public string DefaultQueue { get; init; }

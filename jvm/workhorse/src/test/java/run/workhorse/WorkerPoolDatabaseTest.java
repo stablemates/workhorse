@@ -580,8 +580,8 @@ class WorkerPoolDatabaseTest {
 
   /**
    * P2: the listener's {@code LISTEN} stalls on a pool of 3. The listener holds its connection, so
-   * the readiness check still finds one free connection in its own budget. The worker starts, logs
-   * one warning, and claims by polling.
+   * the readiness check still finds one free connection in its own budget. The worker starts and
+   * claims by polling. As in TypeScript, the run has a subscription, so it logs no polling warning.
    */
   @Test
   void startsAndPollsWhileItsListenerStalls() throws Exception {
@@ -603,9 +603,9 @@ class WorkerPoolDatabaseTest {
       try {
         waitUntil("the task succeeded by polling", () -> succeeded() == 1);
         assertEquals(
-            1,
+            0,
             warnings.count("event.name=workhorse.worker.polling_only"),
-            "the worker warned once that it polls");
+            "a run with a subscription gives no polling warning");
       } finally {
         listen.countDown();
         worker.close();

@@ -209,7 +209,9 @@ impl EnqueueClient {
             .await
             .map_err(Error::translate_enqueue_error)?;
             if !self.reload_mismatched(transport, &rows, &known).await? {
-                return enqueue_results(&rows, requests.len());
+                let results = enqueue_results(&rows, requests.len())?;
+                self.log_results(&requests, &results);
+                return Ok(results);
             }
         }
         Err(Error::ContractPolicyChanged)
@@ -584,6 +586,46 @@ pub(crate) fn validate_callback(request: &EnqueueRequest) -> Result<(), Error> {
     }
     validate_options(options)
         .map_err(|message| Error::invalid(format!("invalid enqueue options: {message}")))
+}
+
+impl EnqueueClient {
+    /// Writes the debug event of each enqueue result. Each path that enqueues tasks calls it: a
+    /// plain enqueue, and the creation of or an addition to a task group.
+    pub(crate) fn log_results(&self, requests: &[EnqueueRequest], results: &[EnqueueResult]) {
+        for (request, result) in requests.iter().zip(results) {
+            log_enqueue(request, result, &self.default_queue);
+        }
+    }
+}
+
+/// Writes the debug event of one enqueue result, named after its outcome as in TypeScript.
+fn log_enqueue(request: &EnqueueRequest, result: &EnqueueResult, default_queue: &str) {
+    let queue = request.options.queue.as_deref().unwrap_or(default_queue);
+    macro_rules! log {
+        ($name:literal, $body:literal) => {
+            crate::telemetry::log_event!(
+                debug,
+                event.name = $name,
+                workhorse.task.id = %result.task_id,
+                workhorse.task.type = %request.task_type,
+                workhorse.queue.name = queue,
+                $body
+            )
+        };
+    }
+    match result.outcome {
+        EnqueueOutcome::Accepted => log!("workhorse.task.enqueued", "Task enqueued"),
+        EnqueueOutcome::Replayed => {
+            log!("workhorse.task.enqueue_replayed", "Idempotent enqueue replayed")
+        }
+        EnqueueOutcome::Replaced => log!("workhorse.task.debounced", "Pending task replaced"),
+        EnqueueOutcome::NonReplaceable => {
+            log!("workhorse.task.debounce_rejected", "Debounced task not replaceable")
+        }
+        EnqueueOutcome::Coalesced => {
+            log!("workhorse.task.throttled", "Throttled enqueue coalesced")
+        }
+    }
 }
 
 pub(crate) fn enqueue_results(

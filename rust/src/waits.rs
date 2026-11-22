@@ -71,7 +71,22 @@ impl HandlerContext {
         let row = self
             .call(sql::SCHEDULE_WAIT_V2, "schedule_wait_v2", &[&name, &millis, &wake_at])
             .await?;
-        match status(&row)?.as_str() {
+        let status = status(&row)?;
+        if status == "elapsed" || status == "scheduled" {
+            let task = self.task();
+            crate::telemetry::log_event!(
+                info,
+                event.name = "workhorse.task.wait_processed",
+                workhorse.task.id = %task.id,
+                workhorse.task.type = %task.task_type,
+                workhorse.task.attempt = task.attempt,
+                workhorse.wait.name = name,
+                workhorse.wait.status = status.as_str(),
+                workhorse.worker.id = %self.worker_id(),
+                "Durable task wait processed"
+            );
+        }
+        match status.as_str() {
             "elapsed" => Ok(Value::Null),
             "scheduled" => Err(self.suspend()),
             other => Err(self.refusal(Operation::Sleep, name, other)),

@@ -4,6 +4,27 @@
 //! global meter provider and the span continues the trace stored with the task.
 use crate::worker::ClaimedTask;
 
+/// Writes one log record through `tracing` at `$level` (`trace`, `debug`, `info`, `warn`, or
+/// `error`). The other arguments are the arguments of that `tracing` macro.
+///
+/// A `tracing` subscriber can panic. This macro stops that panic, so a failing subscriber never
+/// changes the result of a queue, admin, dashboard, or worker operation, and never stops a handler.
+/// Each log record of the SDK goes through this macro.
+macro_rules! log_event {
+    ($level:ident, $($arguments:tt)+) => {
+        $crate::telemetry::contain(|| ::tracing::$level!($($arguments)+))
+    };
+}
+pub(crate) use log_event;
+
+/// Runs `step` and discards a panic from it. The payload of that panic can also panic when it
+/// drops, so the SDK leaks it instead.
+pub(crate) fn contain(step: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
+        std::mem::forget(payload);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Counter {
     Claimed,

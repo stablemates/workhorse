@@ -56,7 +56,9 @@ internal static class CodeOnlyOptions
                 continue;
             }
 
-            if (!BinderCanCreate(property.PropertyType) && (atRegistration || !child.GetChildren().Any()))
+            // Only the worker options kept a section that the binder cannot fill on 0.12. The queue
+            // options got such a property later, so their registration refuses its section at once.
+            if (!BinderCanCreate(property.PropertyType) && options != typeof(QueueOptions) && (atRegistration || !child.GetChildren().Any()))
             {
                 continue;
             }

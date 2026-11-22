@@ -2880,7 +2880,7 @@ func TestWorkerPollingOnlyFallbackLogsAndClaimsOnThePollInterval(t *testing.T) {
 	workerResult := make(chan error, 1)
 	go func() { workerResult <- worker.Run(runContext) }()
 
-	waitForWorkerLog(t, &logs, "notification listener disabled")
+	waitForWorkerLog(t, &logs, "workhorse.worker.polling_only")
 	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
 	if _, err := queue.Enqueue(ctx, "polled", map[string]any{"value": "fallback"}); err != nil {
 		t.Fatal(err)

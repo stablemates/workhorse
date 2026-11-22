@@ -2227,6 +2227,7 @@ export class Worker {
       logInfo("workhorse.worker.registration_failed", "Worker registration failed", {
         ...this.workerQueueAttributes,
         "workhorse.worker.id": this.workerId,
+        "error.type": error instanceof Error ? error.name : typeof error,
       });
       this.callReporter("onRegistrationError", this.options.onRegistrationError, error);
       return;

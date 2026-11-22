@@ -398,7 +398,12 @@ export class Admin {
         SQL_STATEMENTS["purge_queue"],
         [queueName, audit.actor, audit.reason, audit.requestId],
       );
-      return expectOneRow(result, "workhorse.purge_queue_v1").deleted_count;
+      const count = expectOneRow(result, "workhorse.purge_queue_v1").deleted_count;
+      logInfo("workhorse.queue.purged", "Queue purged", {
+        "workhorse.queue.name": queueName,
+        "workhorse.task.count": count,
+      });
+      return count;
     } catch (error) {
       const conflict = purgeConflict(error);
       if (conflict) throw conflict;

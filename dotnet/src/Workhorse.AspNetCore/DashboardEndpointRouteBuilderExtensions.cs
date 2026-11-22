@@ -32,8 +32,20 @@ public static class DashboardEndpointRouteBuilderExtensions
     public static IEndpointConventionBuilder MapWorkhorseDashboard(this IEndpointRouteBuilder endpoints, string pattern, DashboardOptions options)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
-        var logger = endpoints.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("Workhorse.AspNetCore.Dashboard")
-            ?? NullLogger.Instance;
+        ILogger logger = NullLogger.Instance;
+        try
+        {
+            var created = endpoints.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("Workhorse.AspNetCore.Dashboard");
+            if (created is not null)
+            {
+                logger = new ContainedLogger(created);
+            }
+        }
+        catch (Exception)
+        {
+            // A logger factory can throw. The dashboard then logs nothing.
+        }
+
         var host = new DashboardHost(pattern, options, logger);
         var group = endpoints.MapGroup(host.BasePath.Length == 0 ? "/" : host.BasePath);
         group.Map("{**path}", host.HandleAsync);
