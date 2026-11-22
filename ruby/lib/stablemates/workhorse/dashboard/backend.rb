@@ -219,7 +219,8 @@ module Stablemates
 
         def cancel_task(input, actor)
           row = operation(SqlCatalogue::CANCEL_V1, [input.fetch("id"), actor, input.fetch("audit")["reason"]]) do |answer|
-            # The queue writes this event, so a dashboard action writes it too.
+            # The queue counts and logs this result, so a dashboard action does too.
+            Telemetry.record_cancellation(answer.fetch("status"))
             log_processed("workhorse.task.cancellation_processed", "Task cancellation processed",
               "workhorse.task.id" => input.fetch("id"), "workhorse.task.state" => answer.fetch("state") || "not_found",
               "workhorse.operation.status" => answer.fetch("status"))

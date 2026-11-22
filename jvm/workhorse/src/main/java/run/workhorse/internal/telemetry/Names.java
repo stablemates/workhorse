@@ -38,6 +38,7 @@ public final class Names {
 
   public static final String ATTEMPT_OUTCOME = "workhorse.attempt.outcome";
   public static final String CANCEL_ACCEPTED = "workhorse.cancel.accepted";
+  public static final String CANCELLATION_STATUS = "workhorse.cancellation.status";
   public static final String CHECKPOINT_NAME = "workhorse.checkpoint.name";
   public static final String CHECKPOINT_STATUS = "workhorse.checkpoint.status";
   public static final String CHILD_COUNT = "workhorse.child.count";

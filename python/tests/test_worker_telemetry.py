@@ -7,6 +7,8 @@ import contextvars
 import io
 import json
 import subprocess
+import sys
+import textwrap
 import threading
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
@@ -173,10 +175,13 @@ def test_worker_telemetry_matches_the_typescript_contract(database_url: str) -> 
     record_heartbeat_round_failure(ConnectionResetError("reset"))
 
     expected_metrics = _typescript_worker_metric_catalog()
+    # The queue records workhorse.tasks.cancellation, not the worker, and other tests of this
+    # process can record it before this test reads the shared reader.
     exported_metrics = {
         metric.name: metric
         for metric in _metrics()
         if not metric.name.startswith(("workhorse.maintenance.", "workhorse.schedule."))
+        and metric.name != "workhorse.tasks.cancellation"
     }
     observed_catalog = {
         name: {
@@ -939,6 +944,121 @@ def test_dashboard_cancel_signal_and_human_wait_log_their_processing(database_ur
         },
     )
     assert "never-log-this" not in str(LOG_EXPORTER.get_finished_logs())
+
+
+def _cancellation_counts() -> dict[str, int]:
+    """The value of workhorse.tasks.cancellation for each workhorse.cancellation.status."""
+    counts: dict[str, int] = {}
+    # The reader returns no data before the first record of the process.
+    if METRIC_READER.get_metrics_data() is None:
+        return counts
+    for metric in _metrics():
+        if metric.name != "workhorse.tasks.cancellation":
+            continue
+        assert (metric.unit, metric.description) == _contract_instruments()[metric.name]
+        for point in metric.data.data_points:
+            status = str(point.attributes["workhorse.cancellation.status"])
+            assert set(point.attributes) == {"workhorse.cancellation.status"}
+            counts[status] = counts.get(status, 0) + int(point.value)
+    return counts
+
+
+def _counted_since(before: dict[str, int]) -> dict[str, int]:
+    after = _cancellation_counts()
+    return {
+        status: after[status] - before.get(status, 0)
+        for status in after
+        if after[status] != before.get(status, 0)
+    }
+
+
+def test_queue_cancel_counts_each_durable_result(database_url: str) -> None:
+    before = _cancellation_counts()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        queue = Queue(connection, _queue_name("cancel-metric"))
+        task_id = queue.enqueue("mail.send", {})
+        assert queue.cancel(task_id).status == "canceled"
+        assert queue.cancel(task_id).status == "canceled"
+        assert queue.cancel(str(uuid4())).status == "not_found"
+
+    assert _counted_since(before) == {"canceled": 2, "not_found": 1}
+
+
+@pytest.mark.asyncio
+async def test_async_queue_cancel_counts_each_durable_result(database_url: str) -> None:
+    before = _cancellation_counts()
+    async with await psycopg.AsyncConnection.connect(database_url, autocommit=True) as connection:
+        queue = AsyncQueue.from_psycopg(connection, _queue_name("cancel-metric"))
+        task_id = await queue.enqueue("mail.send", {})
+        assert (await queue.cancel(task_id)).status == "canceled"
+        assert (await queue.cancel(str(uuid4()))).status == "not_found"
+
+    assert _counted_since(before) == {"canceled": 1, "not_found": 1}
+
+
+def test_dashboard_cancel_counts_each_durable_result(database_url: str) -> None:
+    from workhorse.dashboard import DashboardHost, DashboardPrincipal
+
+    audit = {"actor": "operator", "reason": "test", "requestId": "request-1"}
+    before = _cancellation_counts()
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        task_id = Queue(connection, _queue_name("cancel-metric")).enqueue("mail.send", {})
+        host = DashboardHost(connection, authorize=lambda _: DashboardPrincipal("operator"))
+        assert _dashboard_post(host, "cancelTask", {"id": task_id, "audit": audit}) == 200
+        assert _dashboard_post(host, "cancelTask", {"id": str(uuid4()), "audit": audit}) == 404
+
+    assert _counted_since(before) == {"canceled": 1, "not_found": 1}
+
+
+def test_a_failed_cancellation_count_does_not_change_the_cancel_result(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingCounter:
+        def add(self, amount: int | float, attributes: Any = None) -> None:
+            raise RuntimeError("metric backend failed")
+
+    monkeypatch.setattr(workhorse._telemetry, "_cancellations", FailingCounter())
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        result = Queue(connection, _queue_name("cancel-metric")).cancel(str(uuid4()))
+
+    assert result.status == "not_found"
+
+
+def test_a_meter_that_rejects_the_cancellation_counter_does_not_stop_the_import() -> None:
+    """A meter can refuse to create the counter. The SDK creates it on its first count, inside the
+    guard, so the import of the SDK does not fail and the count is lost. A fresh interpreter is
+    necessary, because the import of this process already happened."""
+    script = textwrap.dedent(
+        """
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+
+        class RejectingProvider(MeterProvider):
+            def get_meter(self, *args, **kwargs):
+                meter = super().get_meter(*args, **kwargs)
+                create_counter = meter.create_counter
+
+                def rejecting(name, *counter_args, **counter_kwargs):
+                    if name == "workhorse.tasks.cancellation":
+                        raise RuntimeError("create_counter failed")
+                    return create_counter(name, *counter_args, **counter_kwargs)
+
+                meter.create_counter = rejecting
+                return meter
+
+        metrics.set_meter_provider(RejectingProvider())
+        import workhorse._telemetry as telemetry
+
+        telemetry.record_cancellation("canceled")
+        print("contained")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "contained"
 
 
 @pytest.mark.asyncio

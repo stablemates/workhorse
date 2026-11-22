@@ -32,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import run.workhorse.internal.Json;
 import run.workhorse.internal.telemetry.Names;
 import run.workhorse.internal.telemetry.Telemetry;
+import run.workhorse.testing.CancellationCounts;
 import run.workhorse.testing.RecordingOpenTelemetry;
 import run.workhorse.testing.ScratchDataSource;
 import run.workhorse.testing.ScratchDatabase;
@@ -215,6 +216,50 @@ class QueueTelemetryDatabaseTest {
             ConnectionSource.of(dataSource),
             QueueOptions.builder().telemetry(WorkhorseTelemetry.of(OpenTelemetry.noop())).build());
     assertNull(storedTraceContext(untraced.enqueue("email.send", Map.of(), options()).taskId()));
+  }
+
+  @Test
+  void countsEachCancelResultByItsDurableStatus() {
+    UUID taskId = queue.enqueue("email.send", Map.of(), options()).taskId();
+    queue.cancel(taskId, null, null);
+    queue.cancel(UUID.randomUUID(), null, null);
+
+    assertEquals(Map.of("canceled", 1L, "not_found", 1L), CancellationCounts.of(recording));
+    recording.assertGoverned(Telemetry.TRACE_ATTRIBUTE_COUNT_LIMIT);
+  }
+
+  /**
+   * cancel_v1 answers a status of a newer protocol. As TypeScript does, the queue counts the raw
+   * status before it rejects the result. Before, the JVM queue counted nothing.
+   */
+  @Test
+  void countsAStatusOfANewerProtocolBeforeItRejectsTheResult() throws SQLException {
+    String original;
+    try (Connection connection = ScratchDatabase.connect();
+        PreparedStatement statement =
+            connection.prepareStatement(
+                "SELECT pg_get_functiondef('workhorse.cancel_v1(uuid,text,text)'::regprocedure)");
+        ResultSet result = statement.executeQuery()) {
+      assertTrue(result.next());
+      original = result.getString(1);
+    }
+    try (Connection connection = ScratchDatabase.connect();
+        java.sql.Statement statement = connection.createStatement()) {
+      statement.execute(
+          "CREATE OR REPLACE FUNCTION workhorse.cancel_v1("
+              + " p_task_id uuid, p_requested_by text DEFAULT NULL, p_reason text DEFAULT NULL)"
+              + " RETURNS TABLE (status text, state text, current_attempt integer,"
+              + " requested_at timestamptz, requested_by text, reason text, finished_at timestamptz)"
+              + " LANGUAGE sql AS $body$ SELECT 'future_status'::text, NULL::text, NULL::integer,"
+              + " NULL::timestamptz, NULL::text, NULL::text, NULL::timestamptz $body$");
+      try {
+        assertThrows(RuntimeException.class, () -> queue.cancel(UUID.randomUUID(), null, null));
+      } finally {
+        statement.execute(original);
+      }
+    }
+
+    assertEquals(Map.of("future_status", 1L), CancellationCounts.of(recording));
   }
 
   @Test

@@ -19,6 +19,15 @@ worker gave the `workhorse.handler` span the outcome `unknown` also when Postgre
 acknowledgement. A refusal is a lost lease, so the span now gets `stale`, as in TypeScript. A failed
 acknowledgement keeps `unknown`. The handler metrics do not change.
 
+### The queue counts each cancellation request
+
+An operator charts `workhorse.tasks.cancellation` by `workhorse.cancellation.status` to see how many
+cancellation requests stop a task. TypeScript counts each `cancel_v1` result, and its dashboard
+calls the queue. The Java SDK counted none, so the chart showed only TypeScript requests.
+`Queue.cancel`, the Kotlin queue, and a cancel from the dashboard now count each result once, with the same name, unit, description, and status values as
+TypeScript. A task group cancel does not count its member tasks, as in TypeScript. If the meter
+fails, the count is lost and the cancel result does not change.
+
 ### An attempt without an outcome is not an execution
 
 An attempt whose settlement fails has no outcome. The TypeScript worker records its

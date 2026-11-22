@@ -50,7 +50,7 @@ Queue and worker operations emit these synchronous instruments:
 | `workhorse.tasks.completed`                | counter, `{task}`       | One accepted `complete_v1`, by queue and task type. A rejected stale completion emits nothing.                                                                                                                                                                            |
 | `workhorse.tasks.failed`                   | counter, `{task}`       | One `fail_v1` result, by queue, task type, and `workhorse.attempt.outcome`.                                                                                                                                                                                               |
 | `workhorse.tasks.retried`                  | counter, `{task}`       | Each attempt returned to live work by failure, owned expiry, or bounded recovery, by queue and task type. Recovery rows without dimensions use `unknown` for both.                                                                                                        |
-| `workhorse.tasks.cancellation`             | counter, `{request}`    | One `cancel_v1` result, by `workhorse.cancellation.status`.                                                                                                                                                                                                               |
+| `workhorse.tasks.cancellation`             | counter, `{request}`    | One `cancel_v1` result of `Queue.cancel` or of a dashboard cancel, by `workhorse.cancellation.status`. Every SDK records it. A task group cancel does not count its member tasks.                                                                                         |
 | `workhorse.tasks.redrive`                  | counter, `{request}`    | Every result from single or bulk redrive operations, by `workhorse.redrive.status`.                                                                                                                                                                                       |
 | `workhorse.handler.executions`             | counter, `{execution}`  | One worker handler activation, by queue, task type, and `workhorse.handler.outcome`. Outcomes are `succeeded`, `retry`, `failed`, `canceled`, `deadline_exceeded`, `timeout`, `lease_lost`, `released`, and `suspended`. An activation without an outcome is not counted. |
 | `workhorse.handler.duration`               | histogram, `ms`         | Wall-clock duration of the same activation, with the same attributes. An activation that ends without a recorded outcome reports `unknown`. Durable wait suspension closes an activation without closing its logical attempt.                                             |
@@ -157,6 +157,13 @@ The Go worker emits these instruments from the table:
 - all five `workhorse.handler.*` instruments
 - `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
+`Queue.Cancel` and the dashboard backend also record `workhorse.tasks.cancellation`, through
+`go/internal/cancellationmetric`. A worker binds its instruments when it is built, but a queue has no
+such moment that each caller passes after it registers a meter provider. Thus the package reads the
+global meter provider on each record. It records nothing while the global provider is still the
+delegate that OpenTelemetry installs at start. The package checks the type of that delegate, so a
+provider that another package registered before the Workhorse packages started also counts.
+
 It uses the same units and attribute keys as the TypeScript runtime. Recovery cannot recover the
 original queue and type from its aggregate SQL result. Thus its retry count uses `unknown` for both
 bounded dimensions. This matches the TypeScript fallback.
@@ -174,9 +181,12 @@ built. The Rust worker emits these 13 instruments from the table:
 - all five `workhorse.handler.*` instruments
 - `workhorse.worker.heartbeat.failure` and `workhorse.worker.heartbeat.round_failure`
 
+`Queue::cancel` and the dashboard backend also record `workhorse.tasks.cancellation`.
+`record_cancellation` in `rust/src/telemetry.rs` reads the global meter provider on each record,
+because a queue has no build step that each caller passes after it registers a provider.
+
 It uses the same units, descriptions, and attribute keys as the TypeScript runtime. The Rust worker
-does not record `workhorse.schedule.*`, `workhorse.maintenance.*`, enqueue, cancellation, or redrive
-instruments.
+does not record `workhorse.schedule.*`, `workhorse.maintenance.*`, enqueue, or redrive instruments.
 
 Recovery adds one to `workhorse.tasks.retried` for each entry in the `retry_dimensions` of its
 result. An entry without a queue or a task type uses `unknown` for that attribute. If the `retried`
@@ -186,7 +196,7 @@ count of the result is larger than the number of entries, recovery adds the diff
 ### Ruby worker metrics
 
 The Ruby worker records metrics only when the application loads `opentelemetry-metrics-api` and a
-global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these 19 instruments:
+global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these 20 instruments:
 
 - `workhorse.tasks.claimed`, `workhorse.tasks.completed`, `workhorse.tasks.failed`, and
   `workhorse.tasks.retried`
@@ -197,10 +207,11 @@ global meter provider exists. `Stablemates::Workhorse::Telemetry` declares these
 - `workhorse.schedule.fired` and `workhorse.schedule.lag`
 - `workhorse.maintenance.runs`, `workhorse.maintenance.rows`, `workhorse.maintenance.duration`, and
   `workhorse.maintenance.errors`
+- `workhorse.tasks.cancellation`, which `Queue#cancel` and the dashboard backend record
 
 It uses the same units, descriptions, and attribute keys as the Python worker. Recovery uses
 `unknown` for the queue and the task type of a retry that its result does not attribute. The Ruby
-worker does not record `workhorse.maintenance.drift`, enqueue, cancellation, or redrive instruments.
+worker does not record `workhorse.maintenance.drift`, enqueue, or redrive instruments.
 
 ### JVM worker metrics
 
@@ -210,12 +221,13 @@ By default, `run.workhorse.internal.telemetry.Telemetry` reads `GlobalOpenTeleme
 telemetry does nothing and loads no OpenTelemetry code. The Kotlin module and the Spring Boot
 starter run the same Java worker.
 
-The Java worker emits the 19 instruments of the Ruby worker and `workhorse.maintenance.drift`. The
+The Java SDK emits the 20 instruments of the Ruby SDK and `workhorse.maintenance.drift`. The
 `Instrument` enum declares them with the same units and descriptions, and `WorkerTelemetry` records
-the same attribute keys. Recovery uses `unknown` for the queue and the task type of a retry that its
+the same attribute keys. `Queue.cancel` and the dashboard backend record
+`workhorse.tasks.cancellation` through `Telemetry.countCancellation`. Recovery uses `unknown` for the queue and the task type of a retry that its
 result does not attribute. The worker records `workhorse.maintenance.drift` with the `tick` loop and
 the `background_routines` loop. The first pass of a loop records no drift. The Java worker does not
-record enqueue, cancellation, or redrive instruments.
+record enqueue or redrive instruments.
 
 ### .NET worker metrics
 
@@ -224,13 +236,14 @@ runtime supplies that type, so the core has no OpenTelemetry package dependency.
 an instrument records nothing. An application that uses OpenTelemetry adds the meter with
 `AddMeter("workhorse")`.
 
-The .NET worker emits the 20 instruments of the JVM worker.
+The .NET SDK emits the 21 instruments of the JVM SDK.
 `Workhorse.Internal.Telemetry.Instrumentation` declares them with the same units and descriptions,
-and `WorkerTelemetry` records the same attribute keys. Recovery uses `unknown` for the queue and the
+and `WorkerTelemetry` records the same attribute keys. `Queue.CancelAsync` records
+`workhorse.tasks.cancellation` through `QueueTelemetry.Cancellation`. The dashboard calls the queue,
+so a dashboard cancel counts once. Recovery uses `unknown` for the queue and the
 task type of a retry that its result does not attribute. The worker records
 `workhorse.maintenance.drift` with the `tick` loop and the `background_routines` loop. The first
-pass of a loop records no drift. The .NET worker does not record enqueue, cancellation, or redrive
-instruments.
+pass of a loop records no drift. The .NET worker does not record enqueue or redrive instruments.
 
 ### Metrics observer
 
@@ -1327,6 +1340,9 @@ Maintenance and schedule firing also record these instruments:
 - `workhorse.schedule.fired` and `workhorse.schedule.lag`
 - `workhorse.maintenance.runs`, `workhorse.maintenance.rows`, `workhorse.maintenance.duration`, and
   `workhorse.maintenance.errors`
+
+`Queue.cancel`, `AsyncQueue.cancel`, and the dashboard backend record
+`workhorse.tasks.cancellation`.
 
 Their attributes follow the same restrictions and bounded outcome vocabularies as the TypeScript
 instruments.

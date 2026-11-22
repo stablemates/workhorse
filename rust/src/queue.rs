@@ -340,6 +340,7 @@ impl<E: Executor> Queue<E> {
         let row = exactly_one(&rows, "cancel_v1")?;
         let status: &str = row.try_get("status")?;
         let state: Option<&str> = row.try_get("state")?;
+        crate::telemetry::record_cancellation(status);
         log_cancellation_processed(task_id, state, status);
         Ok(CancelResult {
             status: parse_status(Operation::Cancel, status)?,
@@ -795,8 +796,8 @@ pub(crate) fn trace_context() -> Option<Value> {
     None
 }
 
-/// Writes the record of one `cancel_v1` result. The dashboard backend runs the statement itself and
-/// writes the same record, as the TypeScript dashboard does through its queue.
+/// Counts and logs one `cancel_v1` result. The dashboard backend runs the statement itself and
+/// writes the same count and record, as the TypeScript dashboard does through its queue.
 pub(crate) fn log_cancellation_processed(task_id: Uuid, state: Option<&str>, status: &str) {
     crate::telemetry::log_event!(
         info,

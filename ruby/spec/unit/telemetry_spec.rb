@@ -65,6 +65,65 @@ RSpec.describe "The worker instruments" do
   end
 end
 
+# TypeScript counts each cancel_v1 result of Queue.cancel in workhorse.tasks.cancellation, and its
+# dashboard calls the queue. The Ruby dashboard runs cancel_v1 itself, so it counts the same result.
+RSpec.describe "The workhorse.tasks.cancellation counter" do
+  task = "0190a6f8-0000-7000-8000-000000000001"
+
+  let(:counts) { [] }
+  let(:cancel_row) do
+    {"current_attempt" => "1", "requested_at" => nil, "requested_by" => nil, "reason" => nil, "finished_at" => nil}
+  end
+
+  before do
+    allow(W::Telemetry).to receive(:add).and_call_original
+    allow(W::Telemetry).to receive(:add).with("workhorse.tasks.cancellation", any_args) do |_, amount, attributes|
+      counts << [amount, attributes]
+    end
+  end
+
+  def queue(row)
+    answer = cancel_row.merge(row)
+    W::Queue.new(FakeExecutor.new { [answer] })
+  end
+
+  it "counts each queue cancel result by its durable status" do
+    queue("status" => "canceled", "state" => "canceled").cancel(task, requested_by: nil)
+    queue("status" => "cancel_requested", "state" => "active").cancel(task, requested_by: nil)
+    queue("status" => "not_found", "state" => nil).cancel(task, requested_by: nil)
+
+    expect(counts).to eq(%w[canceled cancel_requested not_found].map { |status|
+      [1, {"workhorse.cancellation.status" => status}]
+    })
+  end
+
+  it "counts each dashboard cancel result by its durable status" do
+    backend = lambda do |row|
+      answer = cancel_row.merge(row)
+      W::Dashboard.const_get(:Backend).new(FakeExecutor.new { [answer] }, environment: "test",
+        configured_workers: [], maintenance_loops: {}, read_only: false, statement_timeout_ms: 1_000)
+    end
+    backend.call("status" => "canceled", "state" => "canceled").send(:cancel_task, {"id" => task, "audit" => {}}, "operator")
+    expect { backend.call("status" => "not_found", "state" => nil).send(:cancel_task, {"id" => task, "audit" => {}}, "operator") }
+      .to raise_error(W::Dashboard::RpcError)
+
+    expect(counts).to eq(%w[canceled not_found].map { |status| [1, {"workhorse.cancellation.status" => status}] })
+  end
+
+  it "counts a status of a newer protocol before it rejects the result, as TypeScript does" do
+    expect { queue("status" => "future_status", "state" => nil).cancel(task, requested_by: nil) }
+      .to raise_error(W::UnexpectedStatusError)
+
+    expect(counts).to eq([[1, {"workhorse.cancellation.status" => "future_status"}]])
+  end
+
+  it "keeps the cancel result when the meter fails" do
+    allow(W::Telemetry).to receive(:add).with("workhorse.tasks.cancellation", any_args).and_raise("meter failed")
+
+    expect(queue("status" => "canceled", "state" => "canceled").cancel(task, requested_by: nil).status).to eq(:canceled)
+  end
+end
+
 # A Logger that keeps each record that Telemetry.log writes as [severity, event, body, attributes].
 class RecordingLogger < Logger
   LEVELS = {Logger::DEBUG => :debug, Logger::INFO => :info, Logger::WARN => :warn, Logger::ERROR => :error}.freeze

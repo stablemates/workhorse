@@ -412,6 +412,8 @@ final class Backend {
         operation(
             answer -> {
               String state = answer.text("state");
+              // The queue counts and logs this result, so a dashboard action does too.
+              telemetry.countCancellation(answer.requiredText("status"));
               processed(
                   "workhorse.task.cancellation_processed",
                   "Task cancellation processed",

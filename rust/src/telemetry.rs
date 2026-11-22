@@ -91,6 +91,28 @@ impl Metrics {
     }
 }
 
+/// Counts one `cancel_v1` result in `workhorse.tasks.cancellation`, by its durable status.
+///
+/// A worker binds its instruments when it is built. A queue and the dashboard backend have no such
+/// moment that every caller passes after it registers a meter provider, so this reads the global
+/// meter provider on each call. A cancellation is an operator action, so the lookup costs little.
+/// If the provider panics, the count is lost and the cancel result does not change.
+#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
+pub(crate) fn record_cancellation(status: &str) {
+    #[cfg(feature = "opentelemetry")]
+    contain(|| {
+        opentelemetry::global::meter("workhorse")
+            .u64_counter("workhorse.tasks.cancellation")
+            .with_description("Task cancellation requests by durable result")
+            .with_unit("{request}")
+            .build()
+            .add(
+                1,
+                &[opentelemetry::KeyValue::new("workhorse.cancellation.status", status.to_owned())],
+            );
+    });
+}
+
 /// The `workhorse.handler` consumer span, parented on the task's stored W3C trace context.
 ///
 /// The `tracing` span keeps its contextual parent, so its log events still nest under the caller's

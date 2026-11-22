@@ -57,6 +57,9 @@ internal static class Instrumentation
     internal static readonly Counter<long> HeartbeatRoundFailure =
         Meter.CreateCounter<long>("workhorse.worker.heartbeat.round_failure", "{round}", "Worker heartbeat rounds that failed before PostgreSQL gave a verdict");
 
+    internal static readonly Counter<long> TasksCancellation =
+        Meter.CreateCounter<long>("workhorse.tasks.cancellation", "{request}", "Task cancellation requests by durable result");
+
     internal static readonly Counter<long> ScheduleFired =
         Meter.CreateCounter<long>("workhorse.schedule.fired", "{occurrence}", "Recurring schedule occurrences durably fired");
 

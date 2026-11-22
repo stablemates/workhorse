@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/stablemates/workhorse/go/internal/cancellationmetric"
 )
 
 // MaxTaskDependencies is PostgreSQL's prerequisite fan-in limit for one task.
@@ -297,6 +299,11 @@ func (queue *Queue) Cancel(
 	}
 	if len(rows) != 1 {
 		return CancelResult{}, fmt.Errorf(invalidCancelRowCountMessage, len(rows))
+	}
+	// As in TypeScript, the count takes the raw status before the result is checked, so a status
+	// of a newer protocol is also counted.
+	if status, ok := rows[0][rowStatusField].(string); ok {
+		cancellationmetric.Record(ctx, status)
 	}
 	result, err := cancelResult(rows[0], taskID)
 	if err != nil {

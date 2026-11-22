@@ -731,6 +731,12 @@ public final class Queue {
             Sql.rows(
                 call.connection, SqlCatalogue.CANCEL_V1, taskId.toString(), requestedBy, reason),
             "cancel_v1");
+    // As in TypeScript, the count takes the raw status before the result is checked, so a status of
+    // a newer protocol is also counted.
+    String rawStatus = row.text("status");
+    if (rawStatus != null) {
+      telemetry.countCancellation(rawStatus);
+    }
     String state = row.text("state");
     CancelStatus status = Rows.constant(CancelStatus.class, "cancel", row.requiredText("status"));
     if (telemetry.logEnabled(Telemetry.Severity.INFO)) {

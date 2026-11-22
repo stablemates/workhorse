@@ -10,6 +10,19 @@ adds.
 
 ## Unreleased
 
+### The queue counts each cancellation request
+
+An operator charts `workhorse.tasks.cancellation` by `workhorse.cancellation.status` to see how many
+cancellation requests stop a task. TypeScript counts each `cancel_v1` result, and its dashboard
+calls the queue. The Go SDK counted none, so the chart showed only TypeScript requests.
+`Queue.Cancel` and a cancel from the dashboard now count each result once, with the same name, unit, description, and status values as
+TypeScript. A task group cancel does not count its member tasks, as in TypeScript. If the meter
+fails, the count is lost and the cancel result does not change.
+
+A worker binds its instruments when it is built. A queue has no such step, so the queue and the
+dashboard read the global meter provider each time they count. They count nothing until the
+application registers a provider, as the worker does.
+
 ### An attempt without an outcome is not an execution
 
 An attempt whose settlement fails has no outcome. The TypeScript worker records its

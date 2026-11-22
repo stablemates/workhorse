@@ -134,6 +134,19 @@ public interface Telemetry {
   void add(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes);
 
+  /**
+   * Counts one {@code cancel_v1} result by its durable {@code status}. The queue and the dashboard
+   * backend call this after PostgreSQL made the cancellation durable, so a meter that throws never
+   * reaches the caller and the count is lost.
+   */
+  default void countCancellation(String status) {
+    try {
+      add(Instrument.TASKS_CANCELLATION, 1, Map.of(Names.CANCELLATION_STATUS, status));
+    } catch (RuntimeException ignored) {
+      // The meter failed. The cancel result does not change.
+    }
+  }
+
   /** Records {@code amount} in a histogram. */
   void record(
       Instrument instrument, double amount, Map<String, ? extends @Nullable Object> attributes);
