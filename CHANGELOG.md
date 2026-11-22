@@ -21,7 +21,21 @@ Workhorse is a public beta. While the line is `0.x`, any minor release may chang
 a major line a migration only adds. Breaking changes are always listed with
 upgrade steps.
 
-## Unreleased
+## 0.16.0 — 2026-11-22
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, Node.js **22** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema, then roll out the new processes.** Run `workhorse schema migrate`. Migration
+0107 moves the schema from version 105 to version **106**. It replaces one function body and changes
+no stored rows. The SDK compatibility floor stays at **99**, so a 0.15 process keeps working on
+version 106, and the upgrade is a rolling deployment.
+
+[The upgrade notes](docs/upgrading.md#upgrade-from-015x-to-0160) give each step.
 
 ### Each task filter loads its own list
 
@@ -46,6 +60,17 @@ call took 21 seconds, the 15-second read bound of the host ended it, and no filt
 Migration 0107 changes the function body. The schema moves to version 106, and the floor stays 99.
 Schema version 105 and earlier ignore `facet`, and the dashboard uses only the list that it asked
 for.
+
+### The dashboard has a task page
+
+The dashboard has a task page at `/task?id=<task id>`. It shows the detail of the task drawer, and
+an operator can keep it open in a separate window. The task drawer, the event detail drawer, and the
+callback links of a task group open it. An id that is not valid, or a task that does not exist,
+shows the error page.
+
+The task group pages show one badge for each group. The list has a pager above and below the table,
+and a page size selector with 25 groups as the default. Each row has a menu that opens or cancels
+the group. The theme switch is one icon button with a menu at each width.
 
 ## 0.15.0 — 2026-11-21
 

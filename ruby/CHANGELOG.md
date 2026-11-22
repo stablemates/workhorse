@@ -3,7 +3,21 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
-## Unreleased
+## 0.16.0 — 2026-11-22
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade steps
+
+**Migrate the schema, then roll out the new processes.** Run `workhorse schema migrate`. Migration
+0107 moves the schema from version 105 to version **106**. It replaces one function body and changes
+no stored rows. The SDK compatibility floor stays at **99**, so a 0.15 process keeps working on
+version 106, and the upgrade is a rolling deployment.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-015x-to-0160) give each step.
 
 ### Each task filter of the dashboard loads its own list
 
@@ -12,6 +26,17 @@ The dashboard host forwards the new optional `taskFacets` input key `facet` (`qu
 each filter menu. The worker list read each fast-tier row once for each worker, so the read bound
 of the host could end it, and no filter showed a value. It now reads each fast-tier row once,
 and the list keeps each worker that it gave before. Migration 0107 moves the schema to version 106, and the floor stays 99.
+
+### The dashboard has a task page
+
+The dashboard has a task page at `/task?id=<task id>`. It shows the detail of the task drawer, and
+an operator can keep it open in a separate window. The task drawer, the event detail drawer, and the
+callback links of a task group open it. An id that is not valid, or a task that does not exist,
+shows the error page.
+
+The task group pages show one badge for each group. The list has a pager above and below the table,
+and a page size selector with 25 groups as the default. Each row has a menu that opens or cancels
+the group. The theme switch is one icon button with a menu at each width.
 
 ## 0.15.0 — 2026-11-21
 

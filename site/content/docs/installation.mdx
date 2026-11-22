@@ -118,23 +118,23 @@ Python tab tells you what to install when the host has no libpq.
     Maven Central serves the artifacts from `0.9.0`. A Gradle build adds the core:
 
     ```groovy
-    implementation("run.workhorse:workhorse:0.15.0")
+    implementation("run.workhorse:workhorse:0.16.0")
     ```
 
     A Maven build adds the core:
 
     ```xml
-    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.15.0</version></dependency>
+    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.16.0</version></dependency>
     ```
 
     A Spring Boot application also adds the starter:
 
     ```groovy
-    implementation("run.workhorse:workhorse-spring-boot-starter:0.15.0")
+    implementation("run.workhorse:workhorse-spring-boot-starter:0.16.0")
     ```
 
     ```xml
-    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.15.0</version></dependency>
+    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.16.0</version></dependency>
     ```
 
     The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
@@ -154,13 +154,13 @@ Python tab tells you what to install when the host has no libpq.
     brings the core:
 
     ```groovy
-    implementation("run.workhorse:workhorse-kotlin:0.15.0")
+    implementation("run.workhorse:workhorse-kotlin:0.16.0")
     ```
 
     A Maven build adds the Kotlin module:
 
     ```xml
-    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.15.0</version></dependency>
+    <dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.16.0</version></dependency>
     ```
 
     The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
@@ -248,7 +248,7 @@ A Python, Go, Rust, Ruby, Java, Kotlin, or .NET project has no `node_modules` th
 Thus, the command gives the package and the version:
 
 ```bash
-npx --package @stablemates/workhorse@0.15.0 workhorse schema install
+npx --package @stablemates/workhorse@0.16.0 workhorse schema install
 ```
 
 Use the SDK version that your application uses. All the SDKs release together from one commit, so
@@ -339,13 +339,13 @@ npm exec --no -- workhorse schema status --json
 The command exits with 0 if this build accepts the installed schema. It exits with 1 if this build
 refuses the schema, or if the PostgreSQL major version is too old. The JSON output gives the schema
 and the PostgreSQL results separately. This part of the output is for a current schema of release
-0.15.0:
+0.16.0:
 
 ```json
 {
   "schema": {
-    "installedVersion": 105,
-    "expectedVersion": 105,
+    "installedVersion": 106,
+    "expectedVersion": 106,
     "minimumVersion": 99,
     "state": "current",
     "compatible": true,
@@ -374,11 +374,11 @@ the clean-install file `schema.sql` to its GitHub release. Do these steps:
 2. Apply the file with `psql`.
 
 ```bash
-curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.15.0/schema.sql
+curl -fLO https://github.com/stablemates/workhorse/releases/download/v0.16.0/schema.sql
 psql "$DATABASE_URL" -f schema.sql
 ```
 
-The [`v0.15.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.15.0) has the file.
+The [`v0.16.0` release](https://github.com/stablemates/workhorse/releases/tag/v0.16.0) has the file.
 If you use a different version, change the two version numbers together. The file creates the
 schema that the SDK of the same release expects.
 
