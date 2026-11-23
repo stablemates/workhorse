@@ -147,6 +147,10 @@ describe("handler span after a refused completion and a late cancellation", () =
       claim: async () => task,
       complete: async () => {
         await cancellationDelivered;
+        // The worker processes the heartbeat answer before complete_v1 answers.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
         return false;
       },
       fail: async () => "stale",

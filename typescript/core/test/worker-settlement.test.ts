@@ -46,15 +46,18 @@ describe("worker settlement", () => {
     expect(fail).not.toHaveBeenCalled();
   });
 
-  it("still settles a rejected completion through fail_v1", async () => {
+  // A refused completion is not a handler error. The worker reconciles it through expire_owned_v1,
+  // as the Python, Ruby, JVM, and .NET workers do, and sends nothing to fail_v1.
+  it("reconciles a rejected completion through expire_owned_v1, not fail_v1", async () => {
     const fail = vi.fn<WorkerQueueApi["fail"]>(async () => "stale");
+    const expireOwned = vi.fn<WorkerQueueApi["expireOwned"]>(async () => "stale");
     const queue = {
       defaultQueue: "default",
       claim: async () => task,
       complete: async () => false,
       acknowledgeCancel: async () => false,
       fail,
-      expireOwned: async () => "stale",
+      expireOwned,
       tick: async () => [],
       runMaintenance: async () => [],
     } as unknown as WorkerQueueApi;
@@ -65,7 +68,8 @@ describe("worker settlement", () => {
 
     await expect(worker.runOnce()).resolves.toBe(true);
 
-    expect(fail).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+    expect(expireOwned).toHaveBeenCalledTimes(1);
   });
 
   // SM-1944: the release ran inside the handler try, so a failing release_owned_v1 charged the
