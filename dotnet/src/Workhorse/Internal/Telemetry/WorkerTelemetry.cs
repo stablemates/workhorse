@@ -151,7 +151,8 @@ internal static class WorkerTelemetry
 
     /// <summary>
     /// Marks the handler span of <paramref name="task"/> as failed with <paramref name="errorType"/>.
-    /// Only the first error counts.
+    /// The span records one <c>exception</c> event for each call, in the order of the calls, as in
+    /// TypeScript: the handler error first, and then the error of a failed statement.
     /// </summary>
     internal static void HandlerError(ClaimedTask task, string errorType)
     {
@@ -160,6 +161,15 @@ internal static class WorkerTelemetry
             attempt.Error(errorType);
         }
     }
+
+    /// <summary>
+    /// Marks the handler span of <paramref name="task"/> as failed with the type of
+    /// <paramref name="error"/>, or <see cref="RedactedErrorType"/> for a task that redacts its error
+    /// details. The worker calls this before the failure write, as TypeScript does, so the span keeps
+    /// the handler error also when PostgreSQL then reports a lost lease, or when the write fails.
+    /// </summary>
+    internal static void HandlerFailure(ClaimedTask task, Exception error) =>
+        HandlerError(task, task.RedactErrorDetails ? RedactedErrorType : error.GetType().FullName ?? error.GetType().Name);
 
     /// <summary>
     /// Sets the span outcome of the attempt of <paramref name="task"/> to a PostgreSQL status, such as
@@ -188,15 +198,10 @@ internal static class WorkerTelemetry
     }
 
     /// <summary>
-    /// Starts the <c>workhorse.retry</c> span of one fenced failure. The handler span records the
-    /// type of <paramref name="error"/>, or <see cref="RedactedErrorType"/> for a task that redacts
-    /// its error details.
+    /// Starts the <c>workhorse.retry</c> span of one fenced failure. <see cref="HandlerFailure"/>
+    /// records the error on the handler span.
     /// </summary>
-    internal static Activity? StartFailure(ClaimedTask task, Exception error)
-    {
-        HandlerError(task, task.RedactErrorDetails ? RedactedErrorType : error.GetType().FullName ?? error.GetType().Name);
-        return StartTaskSpan(Names.SpanRetry, task);
-    }
+    internal static Activity? StartFailure(ClaimedTask task) => StartTaskSpan(Names.SpanRetry, task);
 
     /// <summary>
     /// Records the state that PostgreSQL chose for one fenced failure. The handler span names that
@@ -471,7 +476,7 @@ internal static class WorkerTelemetry
         private readonly ClaimedTask _task;
         private readonly Activity? _span;
         private readonly long _startedAt = Monotonic.Now();
-        private string? _errorType;
+        private readonly List<string> _errorTypes = [];
         private string? _status;
 
         internal Attempt(ClaimedTask task, Activity? span)
@@ -483,7 +488,13 @@ internal static class WorkerTelemetry
         /// <summary>The context of the handler span, or <c>null</c> when no listener sampled it.</summary>
         internal ActivityContext? Context => _span?.Context;
 
-        internal void Error(string errorType) => Interlocked.CompareExchange(ref _errorType, errorType, null);
+        internal void Error(string errorType)
+        {
+            lock (_errorTypes)
+            {
+                _errorTypes.Add(errorType);
+            }
+        }
 
         internal void Status(string? status) => Volatile.Write(ref _status, status);
 
@@ -501,9 +512,12 @@ internal static class WorkerTelemetry
                 if (_span is not null)
                 {
                     _span.SetTag(Names.HandlerOutcome, Volatile.Read(ref _status) ?? SpanOutcome(outcome));
-                    if (Volatile.Read(ref _errorType) is { } errorType)
+                    lock (_errorTypes)
                     {
-                        RecordError(_span, errorType);
+                        foreach (var errorType in _errorTypes)
+                        {
+                            RecordError(_span, errorType);
+                        }
                     }
                 }
 

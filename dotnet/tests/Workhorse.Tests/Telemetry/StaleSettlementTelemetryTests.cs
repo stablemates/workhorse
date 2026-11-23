@@ -42,6 +42,8 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
 
         Assert.Equal(state, (await TaskAsync(DataSource, taskId)).Text("state"));
         Assert.Equal(spanOutcome, Handler(taskId).GetTagItem(Names.HandlerOutcome));
+        // The span records the handler error before fail_v1, so it keeps it after a lost lease.
+        AssertErrors(Handler(taskId), typeof(InvalidOperationException).FullName!);
         AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, metricOutcome))]);
     }
 
@@ -94,6 +96,8 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
 
         Assert.Equal(state, (await TaskAsync(DataSource, taskId)).Text("state"));
         Assert.Equal(spanOutcome, Handler(taskId).GetTagItem(Names.HandlerOutcome));
+        // The shutdown stop is not a failure, and a lost lease is not an error of the span.
+        AssertErrors(Handler(taskId));
         AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, metricOutcome))]);
     }
 
@@ -129,6 +133,7 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
         }
 
         Assert.Equal("stale", Handler(taskId).GetTagItem(Names.HandlerOutcome));
+        AssertErrors(Handler(taskId), typeof(InvalidOperationException).FullName!);
         AssertPoints("workhorse.handler.executions", [Tags((Names.QueueName, QueueName), (Names.TaskType, "email.send"), (Names.HandlerOutcome, "lease_lost"))]);
     }
 
@@ -226,6 +231,17 @@ public sealed class StaleSettlementTelemetryTests(ScratchDatabase database) : Te
     }
 
     // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
+    /// <summary>
+    /// As in TypeScript, only a handler error or a failed statement gives the handler span the error
+    /// status, with one <c>exception</c> event for each of <paramref name="errorTypes"/> in order. A
+    /// lost lease does not.
+    /// </summary>
+    private static void AssertErrors(System.Diagnostics.Activity span, params string[] errorTypes)
+    {
+        Assert.Equal(errorTypes.Length == 0 ? System.Diagnostics.ActivityStatusCode.Unset : System.Diagnostics.ActivityStatusCode.Error, span.Status);
+        Assert.Equal(errorTypes, span.Events.Where(item => item.Name == "exception").Select(item => item.Tags.Single(tag => tag.Key == "exception.type").Value as string));
+    }
+
     private static EnqueueOptions Boundaries() => new()
     {
         MaxAttempts = 1,

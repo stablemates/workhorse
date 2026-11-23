@@ -81,7 +81,7 @@ public sealed partial class Worker
         catch (Exception error)
         {
             // Only the worker's own statements reach here, never a handler exception. The run drains
-            // and reports the first one.
+            // and reports the first one. After a handler error, the span records this error second.
             WorkerTelemetry.HandlerError(task.Task, error.GetType().FullName ?? error.GetType().Name);
             task.Run.Errors.Enqueue(error);
             task.Run.Failed = true;
@@ -449,6 +449,9 @@ public sealed partial class Worker
     /// <summary>Records a handler failure. PostgreSQL retries or fails the task by its retry policy.</summary>
     private async Task SettleFailureAsync(ClaimedTask task, Exception error, Arbiter arbiter, Ownership ownership, CancellationToken cancellationToken)
     {
+        // As in TypeScript, the span records the handler error before the retry delay and fail_v1.
+        // If either one then throws, the span records that error second.
+        WorkerTelemetry.HandlerFailure(task, error);
         var envelope = FailureEnvelope.Write(error, task.RedactErrorDetails);
         int? delay = null;
         if (FailureEnvelope.ReplayConflict(error) is not null)
@@ -463,7 +466,7 @@ public sealed partial class Worker
         }
 
         Row row;
-        using (var span = WorkerTelemetry.StartFailure(task, error))
+        using (var span = WorkerTelemetry.StartFailure(task))
         {
             row = await FencedRowAsync(SqlCatalogue.FailV2, task, () => [Parameters.Json(envelope), Parameters.Integer(delay)], cancellationToken).ConfigureAwait(false);
             WorkerTelemetry.Failed(span, task, row.Text("state"));

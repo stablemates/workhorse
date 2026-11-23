@@ -2,6 +2,7 @@ package run.workhorse.internal.telemetry;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -141,13 +142,24 @@ public final class WorkerTelemetry {
 
   /**
    * Marks the handler span of the attempt that runs on this thread as failed with {@code
-   * errorType}. Only the first error counts.
+   * errorType}. The span records one {@code exception} event for each call, in the order of the
+   * calls, as in TypeScript: the handler error first, and then the error of a failed statement.
    */
   public void handlerError(String errorType) {
     Execution execution = EXECUTIONS.get();
-    if (execution != null && execution.errorType == null) {
-      execution.errorType = errorType;
+    if (execution != null) {
+      execution.errorTypes.add(errorType);
     }
+  }
+
+  /**
+   * Marks the handler span of the attempt that runs on this thread as failed with the type of
+   * {@code error}, or {@code RedactedTaskError} for a task that redacts its error details. The
+   * worker calls this before the failure write, as TypeScript does, so the span keeps the handler
+   * error also when PostgreSQL then reports a lost lease, or when the write fails.
+   */
+  public void handlerFailure(ClaimedTask task, Throwable error) {
+    handlerError(task.redactErrorDetails() ? REDACTED_ERROR_TYPE : error.getClass().getName());
   }
 
   /**
@@ -176,11 +188,9 @@ public final class WorkerTelemetry {
 
   /**
    * Runs one fenced failure in a {@code workhorse.retry} span, and returns the state PostgreSQL
-   * chose. The handler span records that state and the type of {@code error}, or {@code
-   * RedactedTaskError} for a task that redacts its error details.
+   * chose. The handler span records that state. {@link #handlerFailure} records the error.
    */
-  public @Nullable String fail(ClaimedTask task, Throwable error, Supplier<@Nullable String> fail) {
-    handlerError(task.redactErrorDetails() ? REDACTED_ERROR_TYPE : error.getClass().getName());
+  public @Nullable String fail(ClaimedTask task, Supplier<@Nullable String> fail) {
     String state;
     try (TelemetrySpan span = telemetry.span(Names.SPAN_RETRY, span(task))) {
       state = fail.get();
@@ -422,7 +432,7 @@ public final class WorkerTelemetry {
     private final ClaimedTask task;
     private final TelemetrySpan span;
     private final long startedAt;
-    private @Nullable String errorType;
+    private final List<String> errorTypes = new ArrayList<>();
     private @Nullable String spanOutcome;
 
     private Execution(ClaimedTask task, TelemetrySpan span, long startedAt) {
@@ -449,7 +459,7 @@ public final class WorkerTelemetry {
               outcome == null ? "unknown" : SPAN_OUTCOMES.getOrDefault(outcome, metricOutcome);
         }
         span.setAttribute(Names.HANDLER_OUTCOME, spanValue);
-        if (errorType != null) {
+        for (String errorType : errorTypes) {
           span.recordError(errorType);
         }
         double duration = millisSince(startedAt);

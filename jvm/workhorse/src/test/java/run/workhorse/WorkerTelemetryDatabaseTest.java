@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import run.workhorse.internal.Sql;
 import run.workhorse.internal.SqlCatalogue;
 import run.workhorse.internal.telemetry.Names;
@@ -425,23 +426,123 @@ class WorkerTelemetryDatabaseTest {
   }
 
   /**
+   * A handler fails, and then a statement of the settlement fails. As in TypeScript, the handler
+   * span records the handler error first and the error of the statement second. The worker records
+   * the handler error before it reads the retry delay, so a retry delay that throws comes second
+   * too. The statement can be {@code fail_v2}, the reconciliation of a {@code stale} answer, or the
+   * acknowledgement of a {@code cancel_requested} answer.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"fail", "reconciliation", "acknowledgement", "retry-delay"})
+  void recordsTheHandlerErrorAndThenTheErrorOfTheSettlement(String failure) throws SQLException {
+    UUID taskId = enqueueWithFarBoundaries();
+    String call =
+        switch (failure) {
+          case "fail" -> "workhorse.fail_v2(";
+          case "reconciliation" -> "workhorse.expire_owned_telemetry_v1(";
+          case "acknowledgement" -> "workhorse.acknowledge_cancel_v1(";
+          default -> null;
+        };
+    Worker.Builder builder =
+        (call == null ? lapsedLeaseWorker() : lapsedLeaseWorker(failingStatement(dataSource, call)))
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  if (failure.equals("reconciliation")) {
+                    lapse(taskId, "none");
+                  } else if (failure.equals("acknowledgement")) {
+                    execute(
+                        "SELECT status FROM workhorse.cancel_v1('"
+                            + taskId
+                            + "', 'test', 'no longer needed')");
+                  }
+                  throw new IllegalStateException("the handler failed");
+                });
+    if (failure.equals("retry-delay")) {
+      builder.retryDelay((attempt, task) -> Duration.ofMillis(-1));
+    }
+    Worker subject = builder.build();
+    RuntimeException settlement = null;
+    try {
+      subject.runOnce();
+    } catch (RuntimeException error) {
+      settlement = error;
+    }
+
+    assertTrue(settlement != null, "the failed settlement ends the pass");
+    assertSpanErrors(
+        recording.spans(Names.SPAN_HANDLER).get(0),
+        IllegalStateException.class.getName(),
+        settlement.getClass().getName());
+  }
+
+  /**
+   * A handler fails after the shutdown cancellation, and then {@code release_owned_v1} fails. As in
+   * TypeScript, the stop is not a failure of the task, so the span records only the error of the
+   * statement.
+   */
+  @Test
+  void recordsOnlyTheStatementErrorOfAFailedReleaseAfterTheShutdown() throws InterruptedException {
+    UUID taskId = enqueueWithFarBoundaries();
+    CountDownLatch started = new CountDownLatch(1);
+    Worker subject =
+        lapsedLeaseWorker(failingStatement(dataSource, "workhorse.release_owned_v1("))
+            .shutdownGrace(Duration.ofMillis(100))
+            .handle(
+                "email.send",
+                Object.class,
+                (context, payload) -> {
+                  started.countDown();
+                  context.cancellation().await(WAIT);
+                  throw new IllegalStateException("the handler failed after the shutdown");
+                })
+            .build();
+    subject.start();
+    assertTrue(started.await(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+    RuntimeException settlement = null;
+    try {
+      subject.close();
+    } catch (RuntimeException error) {
+      settlement = error;
+    }
+    waitUntil(() -> !recording.spans(Names.SPAN_HANDLER).isEmpty());
+
+    assertEquals(
+        taskId.toString(), text(recording.spans(Names.SPAN_HANDLER).get(0), Names.TASK_ID));
+    assertTrue(
+        settlement != null && !(settlement instanceof ShutdownIncompleteException),
+        "the run ends with the error of the release: " + settlement);
+    assertSpanErrors(recording.spans(Names.SPAN_HANDLER).get(0), settlement.getClass().getName());
+  }
+
+  /**
    * As in TypeScript, only a handler error or a failed statement gives the handler span the error
    * status. A lost lease does not. {@code errorType} is the type of the one exception event, or
    * {@code null} for a span without the error status.
    */
   private static void assertSpanError(SpanData span, @Nullable String errorType) {
+    if (errorType == null) {
+      assertSpanErrors(span);
+    } else {
+      assertSpanErrors(span, errorType);
+    }
+  }
+
+  /**
+   * The span has the error status and one {@code exception} event for each of {@code errorTypes},
+   * in that order. Without an error type, the span has no error status and no exception event.
+   */
+  private static void assertSpanErrors(SpanData span, String... errorTypes) {
     List<@Nullable String> exceptions =
         span.getEvents().stream()
             .filter(event -> event.getName().equals("exception"))
             .map(event -> event.getAttributes().get(AttributeKey.stringKey("exception.type")))
             .toList();
-    if (errorType == null) {
-      assertEquals(StatusCode.UNSET, span.getStatus().getStatusCode());
-      assertEquals(List.of(), exceptions);
-    } else {
-      assertEquals(StatusCode.ERROR, span.getStatus().getStatusCode());
-      assertEquals(List.of(errorType), exceptions);
-    }
+    assertEquals(
+        errorTypes.length == 0 ? StatusCode.UNSET : StatusCode.ERROR,
+        span.getStatus().getStatusCode());
+    assertEquals(List.of(errorTypes), exceptions);
   }
 
   // The enqueued boundaries are far away, so the worker's own timers cannot reach them.
@@ -461,7 +562,16 @@ class WorkerTelemetryDatabaseTest {
 
   // Only the tick before the claim runs, and no heartbeat round runs while the handler runs.
   private Worker.Builder lapsedLeaseWorker() {
-    return worker()
+    return lapsedLeaseWorker(dataSource);
+  }
+
+  private Worker.Builder lapsedLeaseWorker(DataSource source) {
+    return Worker.builder(source)
+        .queues(queueName)
+        .pollingOnly(true)
+        .pollInterval(Duration.ofMillis(10))
+        .disableRegistry(true)
+        .telemetry(telemetry)
         .lease(Duration.ofSeconds(60))
         .heartbeat(Duration.ofSeconds(30))
         .maintenanceInterval(Duration.ofHours(1));
@@ -736,6 +846,34 @@ class WorkerTelemetryDatabaseTest {
                       throw new SQLException("injected connection failure", "08006");
                     }
                     return invoke(call, connection, values);
+                  });
+            });
+  }
+
+  /**
+   * {@code source}, whose connections fail each statement that contains {@code call} with an error
+   * of PostgreSQL that is not a connection error.
+   */
+  private static DataSource failingStatement(DataSource source, String call) {
+    return (DataSource)
+        Proxy.newProxyInstance(
+            DataSource.class.getClassLoader(),
+            new Class<?>[] {DataSource.class},
+            (proxy, method, arguments) -> {
+              Object result = invoke(method, source, arguments);
+              if (!method.getName().equals("getConnection")) {
+                return result;
+              }
+              Connection connection = (Connection) result;
+              return Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (inner, statement, values) -> {
+                    if (statement.getName().equals("prepareStatement")
+                        && String.valueOf(values[0]).contains(call)) {
+                      throw new SQLException("injected statement failure", "XX000");
+                    }
+                    return invoke(statement, connection, values);
                   });
             });
   }
