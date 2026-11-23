@@ -616,6 +616,9 @@ thus also comes second. The Go worker sends a panic of the retry delay to `fail_
 of the attempt. After the shutdown cancellation, the stop of the handler is not a failure. If the release
 or the completion after the stop then fails, the span records only the error of the statement.
 
+The Rust span records neither error as an `exception` event. It gets only the error status, as
+[Rust spans](#rust-spans) states.
+
 A lost lease is an outcome of the attempt, not an error. If no handler error came first, the span
 then has the outcome `stale` and no error status. This rule applies to each of these cases:
 
@@ -630,19 +633,18 @@ The worker raises or throws its lost-lease error, such as `StaleLeaseError` in P
 error. A handler that stops for a cancellation, a deadline, an attempt timeout, a durable wait, or
 the shutdown also gives no error status.
 
-The TypeScript, Python, Go, Ruby, JVM, and .NET workers follow this rule, also for a task without
-a handler. These differences stay:
+The TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers follow this rule, also for a task
+without a handler. These differences stay:
 
 - TypeScript sends a refused completion to `fail_v1` as an error of the handler, with the text
   `Completion rejected because the lease is stale or expired`. It does not do this when PostgreSQL
   accepts a cancellation acknowledgement first, or when the attempt already has an outcome, for
   example a cancellation or `lease_expired` from a late heartbeat answer. In each other case, its span has the error
-  status after a refused completion. The Python, Go, Ruby, JVM, and .NET workers reconcile a refused
-  completion through `expire_owned_v1`, as [the lifecycle](lifecycle.md) states, so a lost lease
-  after a refused completion gives no error status.
-- The Rust worker sets the error status from the outcome, as [Rust spans](#rust-spans) states.
-  Thus a lost lease, a cancellation, and a release give the error status, and a failed statement
-  does not.
+  status after a refused completion. The Python, Go, Rust, Ruby, JVM, and .NET workers reconcile a
+  refused completion through `expire_owned_v1`, as [the lifecycle](lifecycle.md) states. Thus a
+  lost lease after a refused completion gives no error status in these workers.
+- The Rust worker sets only the error status. Its span gets no `exception` event, as
+  [Rust spans](#rust-spans) states.
 
 #### Go spans
 
@@ -706,10 +708,12 @@ The Rust worker emits the `workhorse.handler` consumer span and the `workhorse.r
 `telemetry::handler_span` and `telemetry::retry_span` create them as `tracing` spans. With the
 `opentelemetry` feature, a `tracing-opentelemetry` layer that the application installs exports them.
 The handler span carries `workhorse.queue.name`, `workhorse.task.id`, `workhorse.task.type`, and
-`workhorse.task.attempt`. If the outcome is not `succeeded` or `unknown`, the worker sets the span
-status to error. This rule differs from the rule of the other workers, which
-[Handler span status](#handler-span-status) states. The span of a task without a handler gets no
-status.
+`workhorse.task.attempt`. The worker sets the span status by the rule that
+[Handler span status](#handler-span-status) states, also for a task without a handler.
+`fail_with_state` records the handler error before the `fail_v1` write. `lease_lost_is_an_outcome`
+records a failed statement after the settlement. The worker sets only `otel.status_code`, so the
+span gets no `exception` event and no status description. The span carries no
+`workhorse.handler.outcome` attribute.
 
 The `workhorse.retry` span is a child of the handler span. It carries `workhorse.task.id`,
 `workhorse.task.type`, `workhorse.task.attempt`, and `workhorse.retry.outcome`, as the TypeScript
