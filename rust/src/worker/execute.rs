@@ -253,16 +253,10 @@ impl Inner {
                 .instrument(span.clone())
                 .await
         };
-        let settled = match settled {
-            Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
-            other => other,
-        };
+        let settled = lease_lost_is_an_outcome(&span, settled);
         let outcome = *settled.as_ref().unwrap_or(&"unknown");
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         self.record_handler_metrics(&task, outcome, elapsed);
-        if outcome != "succeeded" && outcome != "unknown" {
-            span.record("otel.status_code", "error");
-        }
         // An attempt that settled nothing, such as a refused acknowledgement of a delivered
         // cancellation, has no execution record.
         let known = settled.as_ref().ok().copied().filter(|outcome| *outcome != "unknown");
@@ -281,10 +275,10 @@ impl Inner {
         let started = Instant::now();
         let span = telemetry::handler_span(task);
         self.log_handler_started(task, &span);
-        let released = match self.release(task, true).instrument(span.clone()).await {
-            Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
-            other => other,
-        };
+        let released = lease_lost_is_an_outcome(
+            &span,
+            self.release(task, true).instrument(span.clone()).await,
+        );
         let outcome = released.as_ref().ok().copied();
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         // The release is the handler activation, so it records the handler metrics, as the
@@ -824,6 +818,10 @@ impl Inner {
         task: &ClaimedTask,
         error: HandlerError,
     ) -> Result<Outcome, Error> {
+        // The settlement runs under the handler span. The handler error gets the error status
+        // before the write, so the status stays when PostgreSQL then reports a lost lease, as in
+        // TypeScript.
+        tracing::Span::current().record("otel.status_code", "error");
         let envelope = failure_envelope(&error, task.redact_error_details);
         let delay = if error.is_conflict() {
             Some(-1)
@@ -908,6 +906,23 @@ impl Inner {
             self.metrics.add(Counter::Retried, 1.0, &dimensions);
         }
         Ok(state)
+    }
+}
+
+/// Makes a lost lease an outcome of the attempt, not an error. Any other error is a failed
+/// statement, so the handler span gets the error status, as in TypeScript. A lost lease, a refused
+/// acknowledgement, a cancellation, a timeout, a deadline, and a release give no error status.
+fn lease_lost_is_an_outcome(
+    span: &tracing::Span,
+    settled: Result<Outcome, Error>,
+) -> Result<Outcome, Error> {
+    match settled {
+        Err(Error::LeaseLost { .. }) => Ok("lease_lost"),
+        Err(error) => {
+            span.record("otel.status_code", "error");
+            Err(error)
+        }
+        ok => ok,
     }
 }
 

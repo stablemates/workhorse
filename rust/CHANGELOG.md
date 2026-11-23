@@ -11,6 +11,20 @@ adds.
 
 ## Unreleased
 
+### The handler span gets the error status only for an error
+
+An operator alerts on `workhorse.handler` spans with the error status. A heartbeat delivers a
+cancellation, and PostgreSQL accepts the acknowledgement. The Rust worker gave that span the error
+status, because it set the status from the outcome. It did the same for a lost lease, a refused
+acknowledgement, a timeout, a deadline, and a retry. A failed statement, such as a failed `fail_v1`
+or `release_owned_v1`, gave the span no error status.
+
+Now the span follows the rule of the TypeScript worker. It gets the error status only for a handler
+error that the worker sends to `fail_v1`, and for a failed statement. The worker records the handler
+error before the write, so the span keeps the error status when PostgreSQL then reports a lost
+lease. A lost lease, a cancellation, a timeout, a deadline, and a release give no error status. The
+release of a task without a handler follows the same rule.
+
 ### A lost lease of a release does not stop the worker
 
 A worker claims a task that it has no handler for, and it releases the task through
