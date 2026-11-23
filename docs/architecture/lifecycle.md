@@ -2244,13 +2244,22 @@ The SDKs differ in what a refusal does after the handler has returned.
   submits `lease_expired`. A due deadline or attempt timeout calls `expire_owned_v1`, as
   [Local timers](#local-timers) describes. A `stale` renewal that arrives while that request is in
   flight waits for its answer.
-  - If `complete_v1` refuses the write, the worker calls `acknowledge_cancel_v1`. If that call
-    accepts, `TaskAttempt` records `canceled` on the span, the metrics, and the log, also when a
-    `stale` heartbeat answer arrived first. If PostgreSQL refuses it and a heartbeat already
-    delivered a cancellation, the refusal is a lost lease: the worker records `lease_lost`, gives
-    the span `stale`, and writes nothing more. Otherwise the worker calls `settleFailure`. It sends
-    the refusal through `fail_v1`, unless the attempt already has an outcome, for example
-    `lease_expired` (SM-1863).
+  - If `complete_v1` refuses the write, `Worker.reconcileRefusedCompletion` reconciles it. If a
+    heartbeat already delivered a cancellation, the worker calls `acknowledge_cancel_v1`. A refusal
+    of that call is a lost lease: the worker records `lease_lost`, gives the span `stale`, and
+    writes nothing more (SM-1863).
+  - Otherwise `TaskAttempt.reconcileStale` calls `expire_owned_telemetry_v1` under the attempt's
+    fence, as for [a stale failure or release](#a-stale-failure-or-release). A `cancel_requested`
+    answer goes to `acknowledge_cancel_v1`. If that call accepts, `TaskAttempt` records `canceled`,
+    also when a `stale` heartbeat answer arrived first. A `stale` or `not_due` answer reports
+    `lease_lost` and leaves the task to recovery. The worker also asks after a `stale` heartbeat
+    answer or a lapsed watchdog, as Python, Go, and Rust do. That local decision is not the verdict
+    of PostgreSQL. Ruby, the JVM, and .NET finish with the outcome of the heartbeat round
+    instead.
+  - The worker sends nothing to `fail_v1`. A lost lease gives the span no error status. A failed
+    `expire_owned_telemetry_v1` or `acknowledge_cancel_v1` request ends the run with its error. After
+    the shutdown abort, the worker first writes `workhorse.worker.shutdown_settlement_failed`, as
+    after a failed completion.
 - Go `superviseOwnership` and Python `_run_supervised_attempt` record the time when the handler
   returned. After that time, a refused renewal, a lapsed watchdog, or a due expiration only stops
   the renewal. Then the fenced completion or failure gets the same verdict in PostgreSQL:
@@ -2343,7 +2352,9 @@ handler span has no outcome attribute.
   `reconcile_refusal`, `reconcileRefusal`, and `ReconcileRefusalAsync` take the attempt's
   settlement lock first, as for a refused completion. If a heartbeat round already decided the
   attempt, it finishes with that outcome and writes nothing more. Python
-  `_reconcile_rejected_completion` calls `_settle_refusal`.
+  `_reconcile_rejected_completion` calls `_settle_refusal`. TypeScript
+  `Worker.reconcileRefusedCompletion` calls `TaskAttempt.reconcileStale`, unless a heartbeat already
+  delivered a cancellation.
 - TypeScript uses the answer of an expiration request that a local expiry already sent. That
   request asks again after a `not_due` answer, so the reconciliation waits for it for at most 1 s.
   Otherwise, or after no answer in time, it sends one request of its own. If that request reads

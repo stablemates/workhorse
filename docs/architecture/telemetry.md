@@ -627,6 +627,9 @@ then has the outcome `stale` and no error status. This rule applies to each of t
 - `fail_v1` or `release_owned_v1` answers `cancel_requested`, and PostgreSQL refuses the
   acknowledgement.
 - `fail_v1` or `release_owned_v1` answers `stale`, and the reconciliation settles no cause.
+- `complete_v1` refuses the result, and the reconciliation settles no cause. A refused completion
+  is not a handler error, so no worker sends it to `fail_v1`. Each worker reconciles it through
+  `expire_owned_v1`, as [the lifecycle](lifecycle.md#after-the-handler-returns) states.
 
 The worker raises or throws its lost-lease error, such as `StaleLeaseError` in Python,
 `LeaseLostError` in Ruby, or `LeaseLostException` in the JVM and .NET. That error is not a span
@@ -634,15 +637,8 @@ error. A handler that stops for a cancellation, a deadline, an attempt timeout, 
 the shutdown also gives no error status.
 
 The TypeScript, Python, Go, Rust, Ruby, JVM, and .NET workers follow this rule, also for a task
-without a handler. These differences stay:
+without a handler. This difference stays:
 
-- TypeScript sends a refused completion to `fail_v1` as an error of the handler, with the text
-  `Completion rejected because the lease is stale or expired`. It does not do this when PostgreSQL
-  accepts a cancellation acknowledgement first, or when the attempt already has an outcome, for
-  example a cancellation or `lease_expired` from a late heartbeat answer. In each other case, its span has the error
-  status after a refused completion. The Python, Go, Rust, Ruby, JVM, and .NET workers reconcile a
-  refused completion through `expire_owned_v1`, as [the lifecycle](lifecycle.md) states. Thus a
-  lost lease after a refused completion gives no error status in these workers.
 - The Rust worker sets only the error status. Its span gets no `exception` event, as
   [Rust spans](#rust-spans) states.
 

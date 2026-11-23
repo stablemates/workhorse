@@ -1926,42 +1926,20 @@ export class Worker {
       // After the shutdown abort, the completion goes alone through complete_v1, as Go
       // settleAfterShutdown does. A fused completion could wait behind a batch in flight, and the
       // stopped worker claims nothing.
-      let accepted: boolean;
       if (attempt.stoppedForShutdown) {
         try {
-          accepted = (await writeCompletion()).accepted;
+          // The reconciliation of a refusal is part of the settlement after the shutdown abort.
+          if (!(await writeCompletion()).accepted) {
+            await this.reconcileRefusedCompletion(span, attempt);
+            return;
+          }
         } catch (error) {
           // As after a failed release, lease recovery settles the task, and run() rejects.
           this.logShutdownSettlementFailure(task, error);
           throw error;
         }
-      } else {
-        accepted = await this.writeCompletion(task, writeCompletion);
-      }
-      if (!accepted) {
-        if (await attempt.acknowledgeCancellation()) {
-          // No heartbeat delivered the request that made complete_v1 refuse the write, so the
-          // attempt records the cancellation here. PostgreSQL accepted it, so it is the outcome
-          // even if a stale heartbeat answer submitted lease_expired while the request ran.
-          attempt.arbiter.submit("cancelled");
-          attempt.recordExecution("canceled");
-          span.setAttribute("workhorse.handler.outcome", "canceled");
-          return;
-        }
-        if (attempt.arbiter.is("cancelled")) {
-          // A heartbeat delivered the cancellation after the handler returned, and PostgreSQL
-          // refused its acknowledgement. During this reconciliation, the refusal proves that the
-          // lease is lost, so the attempt reports lease_lost.
-          span.setAttribute("workhorse.handler.outcome", "stale");
-          attempt.recordExecution("lease_lost");
-          return;
-        }
-        await this.settleFailure(
-          task,
-          span,
-          attempt,
-          new Error("Completion rejected because the lease is stale or expired"),
-        );
+      } else if (!(await this.writeCompletion(task, writeCompletion))) {
+        await this.reconcileRefusedCompletion(span, attempt);
         return;
       }
       if (!attempt.arbiter.submit("completed")) return;
@@ -2087,6 +2065,29 @@ export class Worker {
   ): Promise<void> {
     const accepted = await attempt.acknowledgeCancellation();
     span.setAttribute("workhorse.handler.outcome", accepted ? "canceled" : "stale");
+  }
+
+  // Settles the cause that made complete_v1 refuse the result, as Python, Ruby, the JVM, and .NET
+  // do. The refusal is not an error of the handler, so nothing goes to fail_v1, and a lost lease
+  // gives the span no error status. A cancellation that a heartbeat delivered after the handler
+  // returned goes to acknowledge_cancel_v1. A refusal of that acknowledgement proves that the lease
+  // is lost. In each other case, reconcileStale asks expire_owned_v1 and acknowledges a
+  // cancel_requested answer. This applies also after a stale heartbeat answer or a lapsed watchdog:
+  // that local decision is not the verdict of PostgreSQL, as in Python, Go, and Rust.
+  private async reconcileRefusedCompletion(
+    span: WorkhorseTelemetrySpan,
+    attempt: TaskAttempt,
+  ): Promise<void> {
+    if (attempt.arbiter.is("cancelled")) {
+      if (await attempt.acknowledgeCancellation()) {
+        span.setAttribute("workhorse.handler.outcome", "canceled");
+        return;
+      }
+      span.setAttribute("workhorse.handler.outcome", "stale");
+      attempt.recordExecution("lease_lost");
+      return;
+    }
+    span.setAttribute("workhorse.handler.outcome", await attempt.reconcileStale());
   }
 
   // Settles an attempt whose handler, hooks, or completion threw.

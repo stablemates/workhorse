@@ -471,9 +471,11 @@ describe("Workhorse OpenTelemetry metrics", () => {
       leaseExpiresAt: new Date(Date.now() + 30_000),
     };
     // complete_v1 refuses the write because a cancellation request arrived while the handler ran.
+    // expire_owned_v1 then answers cancel_requested.
     const queue = workerQueue({
       claim: async () => task,
       complete: async () => false,
+      expireOwned: async () => "cancel_requested",
       acknowledgeCancel: async () => true,
     });
     const worker = new Worker(queue, {
@@ -528,6 +530,7 @@ describe("Workhorse OpenTelemetry metrics", () => {
     const queue = workerQueue({
       claim: async () => task,
       complete: async () => false,
+      expireOwned: async () => "cancel_requested",
       heartbeatStatus: async () => {
         if (!acknowledging) return "accepted";
         reportStale?.();

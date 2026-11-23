@@ -292,8 +292,8 @@ export class TaskAttempt {
   }
 
   /**
-   * Settles the cause of a fenced failure or release that PostgreSQL answered `stale`, under this
-   * attempt's fence, and returns the handler span outcome.
+   * Settles the cause of a completion that PostgreSQL refused, or of a fenced failure or release that
+   * PostgreSQL answered `stale`, under this attempt's fence, and returns the handler span outcome.
    *
    * `expire_owned_v1` does not read `expires_at`, so a due deadline or attempt timeout settles also
    * after the lease lapsed under an unchanged fence (SM-1884). A requested cancellation settles

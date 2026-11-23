@@ -1133,10 +1133,15 @@ describe("claim lease fence", () => {
     const recordUnhandledRejection = (reason: unknown): void => {
       unhandledRejections.push(reason);
     };
+    // Only the first request, which the local timer sends, fails. The reconciliation of the refused
+    // completion sends its own request, and a failure of that request would end the run.
+    let expirationRequests = 0;
     const rejectingQueue = new Proxy(queue, {
       get(target, property, receiver) {
         if (property === "expireOwned") {
-          return async () => {
+          return async (...args: Parameters<Queue["expireOwned"]>) => {
+            expirationRequests += 1;
+            if (expirationRequests > 1) return target.expireOwned(...args);
             expirationStarted.resolve();
             throw expirationFailure;
           };
@@ -1172,7 +1177,8 @@ describe("claim lease fence", () => {
       process.off("unhandledRejection", recordUnhandledRejection);
     }
     expect(unhandledRejections).toEqual([]);
-    // The late completion meets the passed timeout in PostgreSQL, which closes the attempt.
+    // The late completion meets the passed timeout in PostgreSQL. The reconciliation then closes
+    // the attempt through expire_owned_v1.
     await expect(admin.getTask(id)).resolves.toMatchObject({
       currentAttempt: 2,
       error: { name: "ExecutionTimeout" },

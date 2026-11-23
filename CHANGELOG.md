@@ -23,6 +23,39 @@ upgrade steps.
 
 ## Unreleased
 
+### A refused completion is not a handler error
+
+PostgreSQL refuses a `complete_v1` call, for example because the lease expired or a deadline is
+due. The TypeScript worker then called `acknowledge_cancel_v1` and sent the refusal to `fail_v1` as
+a handler error, with the text `Completion rejected because the lease is stale or expired`. Thus
+the `workhorse.handler` span got the error status and an `exception` event, also for a lost lease.
+The worker also wrote a `workhorse.retry` span, a `workhorse.tasks.failed` data point, and a
+`workhorse.task.failure_processed` record for that call.
+
+Now the TypeScript worker reconciles a refused completion as the Python, Ruby, JVM, and .NET workers
+do. It calls `expire_owned_telemetry_v1`, and it calls `acknowledge_cancel_v1` only for a
+`cancel_requested` answer or for a cancellation that a heartbeat delivered. It sends nothing to
+`fail_v1`. The handler outcome is `deadline_exceeded`, `timeout`, `canceled`, or `lease_lost`, and a
+lost lease gives the span no error status. A retry that an attempt timeout schedules now also adds
+one to `workhorse.tasks.retried`. After the shutdown abort, a failed reconciliation request now
+writes `workhorse.worker.shutdown_settlement_failed`, as a failed completion does.
+
+After a refused completion, `fail_v1` could not apply the handler error or its retry delay. It
+answered `stale` or `cancel_requested`, or it settled a due deadline or attempt timeout through
+`expire_owned_v1`. Thus the retry policy and the state of each cause do not change. Only a race can
+now give a different state, or the same state at a different time. These are examples:
+
+- The local lease window of the worker closed, but PostgreSQL still holds the lease and a deadline
+  or attempt timeout is due. The worker now settles that cause at once, as the Python, Go, and Rust
+  workers do. Before, lease recovery settled the task later.
+- A cancellation request arrives while the worker reconciles a due attempt timeout or deadline.
+  The worker asks `expire_owned_v1` first, so the expiry can win, as in Python, Ruby, the JVM, and
+  .NET. Before, the cancellation could win.
+- A cancellation request is pending when `complete_v1` refuses, and no heartbeat delivered it. The
+  worker now sends `acknowledge_cancel_v1` after the `expire_owned_v1` answer. If the lease expires between the two
+  calls, PostgreSQL refuses the acknowledgement, and lease recovery settles the cancellation. Before,
+  the first call was the acknowledgement.
+
 ### A late cancellation after a refused completion reports a lost lease
 
 PostgreSQL refuses a completion, and the worker reconciles. A heartbeat round delivered a
