@@ -608,8 +608,13 @@ The `workhorse.handler` span gets the error status and an `exception` event in t
    settle, and the run ends with it: a `BaseException` that is not an `Exception` in Python, an
    `Exception` that is not a `StandardError` in Ruby, or a `java.lang.Error` in the JVM.
 
-If cases 1 and 2 both occur, the TypeScript, Python, Go, and Ruby spans record the handler error
-first and the error of the statement second. The JVM and .NET spans record only the handler error.
+If cases 1 and 2 both occur, the span records the handler error first and the error of the
+statement second. The statement can be `fail_v1`, the reconciliation after a `stale` answer, or the
+acknowledgement after a `cancel_requested` answer. The worker records the handler error before it
+reads the retry delay. In TypeScript, Python, Ruby, the JVM, and .NET, an error of the retry delay
+thus also comes second. The Go worker sends a panic of the retry delay to `fail_v1` as the failure
+of the attempt. After the shutdown cancellation, the stop of the handler is not a failure. If the release
+or the completion after the stop then fails, the span records only the error of the statement.
 
 A lost lease is an outcome of the attempt, not an error. If no handler error came first, the span
 then has the outcome `stale` and no error status. This rule applies to each of these cases:

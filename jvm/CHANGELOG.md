@@ -11,6 +11,16 @@ adds.
 
 ## Unreleased
 
+### The handler span records the handler error and the error of a failed settlement
+
+If a handler fails and a statement of the settlement then fails, the `workhorse.handler` span kept
+only the handler error. The statement can be `fail_v1`, the reconciliation after a `stale` answer,
+or the acknowledgement after a `cancel_requested` answer. The span now records the handler error
+first and the error of the statement second, as in TypeScript, Python, Go, and Ruby. The worker
+also records the handler error before it reads the retry delay. Thus if the retry delay throws, the
+span records the handler error first and the error of the retry delay second. Before, it recorded
+only the error of the retry delay.
+
 ### A lost lease is not an error of the handler span
 
 A heartbeat delivers a cancellation, and PostgreSQL then refuses `acknowledge_cancel_v1`. Or the

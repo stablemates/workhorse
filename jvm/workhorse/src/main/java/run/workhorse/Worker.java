@@ -3033,7 +3033,7 @@ public final class Worker implements AutoCloseable {
       settlementError = error;
       // As in TypeScript, a lost lease is an outcome of the attempt, not an error of the span. Only
       // a handler error, which the failure records before fail_v1, or a failed statement gives the
-      // span the error status.
+      // span the error status. A failed statement after a handler error comes second.
       if (!(error instanceof LeaseLostException)) {
         telemetry.handlerError(error.getClass().getName());
       }
@@ -3293,12 +3293,14 @@ public final class Worker implements AutoCloseable {
   /** Records a handler failure. PostgreSQL retries or fails the task by its retry policy. */
   private void settleFailure(
       ClaimedTask task, Exception error, Arbiter arbiter, Ownership ownership) {
+    // As in TypeScript, the span records the handler error before the retry delay and fail_v1. If
+    // either one then throws, the span records that error second.
+    telemetry.handlerFailure(task, error);
     String envelope = Json.write(failureEnvelope(error, task.redactErrorDetails()));
     Long delay = replayConflict(error) != null ? Long.valueOf(-1) : retryDelayOverride(task);
     String state =
         telemetry.fail(
             task,
-            error,
             () ->
                 fencedRow(
                         SqlCatalogue.FAIL_V2,
