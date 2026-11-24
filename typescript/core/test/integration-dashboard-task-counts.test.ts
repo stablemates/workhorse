@@ -222,12 +222,27 @@ describe("dashboard task counts", () => {
   it("estimates from the column widths after a DELETE of every task", async () => {
     // An ANALYZE after the DELETE stores 0 rows on the old pages. A refill adds pages, and a stored
     // density of 0 would keep the estimate at 0.
-    await database.pool.query("DELETE FROM workhorse.task");
-    await database.pool.query("ANALYZE workhorse.task");
+    await database.pool.query("TRUNCATE workhorse.task CASCADE");
     await database.pool.query(
       `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
        SELECT 'dashboard-counts-bulk', 'dashboard.counts', '{}'::jsonb, 1
-         FROM generate_series(1, 120000)`,
+         FROM generate_series(1, 10)`,
+    );
+    await database.pool.query("DELETE FROM workhorse.task");
+    await database.pool.query("ANALYZE workhorse.task");
+    // The estimate reads the page count and the stored column widths, not the rows. The stored
+    // widths describe the narrow payloads that the earlier ANALYZE sampled. They give 25 rows for
+    // each page, so the estimate passes 50,000 at 2,000 pages. A payload of 1,500 bytes keeps each
+    // row below the TOAST threshold, so 4 rows fill a page, and 12,000 rows add 3,000 pages. Narrow
+    // rows need about 150,000 rows for the same pages (SM-2057). After the ANALYZE, the planner
+    // also thinks that the task table is empty. Thus the foreign key check of each task_query row
+    // can scan all of task_created_retention_idx. When it does, the time of the refill grows with
+    // the square of its rows.
+    await database.pool.query(
+      `INSERT INTO workhorse.task(queue_name, task_type, payload, max_attempts)
+       SELECT 'dashboard-counts-bulk', 'dashboard.counts',
+              jsonb_build_object('padding', repeat('x', 1500)), 1
+         FROM generate_series(1, 12000)`,
     );
 
     const stored = await database.pool.query<{
