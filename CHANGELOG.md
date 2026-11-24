@@ -54,6 +54,27 @@ All seven SDKs do the same (ADR 0126).
   `a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval`. The new fixture
   `a-listening-worker-claims-past-the-tasks-it-cannot-run-before-it-waits` pins the run limit.
 
+### A busy fast-tier queue no longer keeps a worker from its other queues
+
+A worker can serve several queues. On the fast tier, a completion claims the next task of its own
+queue in the same statement. While one fast-tier queue had a backlog, its completions refilled every
+slot. Thus the worker did not claim from its other queues until the backlog ended.
+
+Now a worker with more than one queue records when it last asked each queue for tasks. If another
+queue had no claim for one fairness interval, the next fast-tier completion claims no task. Its slot
+becomes free, and the next claim continues the queue rotation. The fairness interval is `pollMs`,
+but at least 250 ms. A worker with one queue does not skip a refill. ADR 0076 rule 17 records the
+rule for every SDK (SM-1676, SM-1833).
+
+A plain claim in flight also no longer makes a fused completion claim no task. Before, at a
+concurrency of 5 or more, a completion below the refill batch claimed with limit 0 while a plain
+claim for its cohort was in flight. Its slot then waited for the next plain claim. After one free
+slot, for example from a failed task, the worker could stay in plain claims. Now the completion
+always refills the slot of its own task. The runtime fixtures
+`a-fused-refill-gives-the-other-queues-a-claim` and
+`a-fairness-skip-costs-few-plain-claims-at-a-refill-batch-above-one` pin both rules. The change
+needs no migration.
+
 ### A refused completion is not a handler error
 
 PostgreSQL refuses a `complete_v1` call, for example because the lease expired or a deadline is

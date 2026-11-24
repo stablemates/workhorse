@@ -101,6 +101,8 @@ module Conformance
       when "subscription-recovery" then subscription_recovery(fixture)
       when "graceful-drain" then graceful_drain(fixture)
       when "slot-refill" then slot_refill(fixture)
+      when "queue-fairness" then queue_fairness(fixture)
+      when "queue-fairness-cost" then queue_fairness_cost(fixture)
       when "budget-admission-race" then budget_race(fixture)
       when "missing-handler" then missing_handler(fixture)
       when "release-wait" then release_wait(fixture)
@@ -840,6 +842,101 @@ module Conformance
           check(thread.join(RUN_WAIT), "the worker did not stop")
         end
       end
+    end
+
+    # Puts the hot and the cold queue of a queue-fairness fixture on the fast tier, enqueues the hot
+    # backlog, and returns the names of both queues.
+    def queue_fairness_queues(fixture)
+      hot = "#{queue_name(fixture)}-hot"
+      cold = "#{queue_name(fixture)}-cold"
+      admin = W::Admin.new(@connection)
+      [hot, cold].each do |name|
+        admin.set_queue_tier(name, :fast, audit: W::AdminAudit.new("runtime-fixture", fixture["id"], "#{fixture["id"]}-#{name}"))
+      end
+      fixture["hotTaskCount"].times { |sequence| queue.enqueue(fixture["taskType"], {"sequence" => sequence}, queue: hot) }
+      [hot, cold]
+    end
+
+    # A fused refill asks only its own queue. The cold queue's task must still run before the hot
+    # queue's backlog ends (ADR 0076, rule 17).
+    def queue_fairness(fixture)
+      hot, cold = queue_fairness_queues(fixture)
+      started = Concurrent::Array.new
+      with_pool(6) do |pool|
+        # The hot queue comes first, so the first plain claim asks it and its completions refill.
+        subject = W::Worker.new(pool, queues: [hot, cold], worker_id: "ruby-#{fixture["id"]}", polling_only: true,
+          disable_registry: true, concurrency: fixture["concurrency"], shutdown_grace: JOIN_GRACE)
+          .handle(fixture["taskType"]) do |_payload, context|
+          started << context.task.queue
+          sleep(fixture["hotHandlerMs"] / 1000.0) if context.task.queue == hot
+          {}
+        end
+        thread = Thread.new { subject.run }
+        begin
+          # The cold task arrives while fused refills already hold the slots, so the result does not
+          # depend on which queue the first plain claim asks.
+          eventually("#{fixture["id"]} never started its hot tasks", 7) do
+            started.size >= fixture["coldEnqueueAfterHotStarts"]
+          end
+          queue.enqueue(fixture["taskType"], {"cold" => true}, queue: cold)
+          eventually("#{fixture["id"]} never ran the cold task", 7) { started.include?(cold) }
+          position = started.index(cold)
+          check(position <= fixture["expectedMaximumHotTasksBeforeCold"], "#{position} hot tasks started before the cold task")
+        ensure
+          subject.stop
+          check(thread.join(RUN_WAIT), "the worker did not stop")
+        end
+      end
+    end
+
+    # A worker with a refill batch above 1 runs a hot backlog beside an empty cold queue. The
+    # injection records and delays each plain claim. A completion during that delay must still refill
+    # its own slot, or each plain claim after a fairness skip leaves free slots for the next one, and
+    # the worker stays in plain claims (ADR 0076, SM-1833 amendment).
+    def queue_fairness_cost(fixture)
+      hot, cold = queue_fairness_queues(fixture)
+      hot_starts = Concurrent::AtomicFixnum.new
+      counts = nil
+      with_pool(8) do |pool|
+        subject = W::Worker.new(pool, queues: [hot, cold], worker_id: "ruby-#{fixture["id"]}", polling_only: true,
+          disable_registry: true, poll_interval: fixture["pollMs"] / 1000.0, concurrency: fixture["concurrency"],
+          shutdown_grace: JOIN_GRACE)
+          .handle(fixture["taskType"]) do |_payload, _context|
+          hot_starts.increment
+          sleep(fixture["hotHandlerMs"] / 1000.0)
+          {}
+        end
+        read = lambda do
+          row = @connection.exec(fixture["countsQuery"]).first
+          [Integer(row["plain_claims"], 10), Integer(row["zero_limit_completions"], 10)]
+        end
+        injected_body(fixture.fetch("injection")) do
+          thread = Thread.new { subject.run }
+          begin
+            # A slow start must not count: the window starts once every slot ran a hot task.
+            eventually("#{fixture["id"]} never started its hot tasks", 7) { hot_starts.value >= fixture["concurrency"] }
+            before = read.call
+            starts_before = hot_starts.value
+            sleep(fixture["measureMs"] / 1000.0)
+            # A completion after the stop claims nothing, so the counts come before it.
+            after = read.call
+            check(hot_starts.value > starts_before, "no hot task started during the measurement")
+            # The hot backlog must outlast the run, or the plain claims at its end would count too.
+            check(hot_starts.value < fixture["hotTaskCount"], "every hot task started before the counts")
+            counts = [after[0], after[0] - before[0], after[1] - before[1]]
+          ensure
+            subject.stop
+            check(thread.join(RUN_WAIT), "the worker did not stop")
+          end
+        end
+      end
+      total, plain, zero = counts
+      # The injection recorded the first claim at least.
+      check(total.positive?, "the injection recorded no plain claim")
+      most_plain = fixture["expectedMaximumPlainClaims"]
+      check(plain <= most_plain, "#{plain} plain claims, want at most #{most_plain}")
+      most_zero = fixture["expectedMaximumZeroLimitCompletions"]
+      check(zero <= most_zero, "#{zero} limit-0 completions, want at most #{most_zero}")
     end
 
     # Commits a budgeted task on one queue while that queue's claim is already past its first read.

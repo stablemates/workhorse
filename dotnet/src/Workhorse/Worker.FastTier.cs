@@ -261,10 +261,12 @@ public sealed partial class Worker
     }
 
     /// <summary>
-    /// Sets aside the slots that a completion's fused claim can fill (ADR 0076, rules 12 and 13). The
-    /// claim asks for the free slots of the task's cohort plus the slot that the task leaves. It claims
-    /// nothing while the worker stops, pauses, or waits after an empty claim, and it waits for the
-    /// refill batch while another claim for the cohort is in flight.
+    /// Sets aside the slots that a completion's fused claim can fill (ADR 0076, rules 12, 13 and 17).
+    /// The claim asks for the free slots of the task's cohort plus the slot that the task leaves. It
+    /// claims nothing while the worker stops, pauses, or waits after an empty claim. While another
+    /// claim for the cohort is in flight, it claims the other free slots only when they reach the
+    /// refill batch, but it always refills the slot that the task leaves (SM-1833). It also claims
+    /// nothing when another queue of the worker has waited one fairness interval for a claim.
     /// </summary>
     private CompletionClaim ReserveCompletionClaim(Active task)
     {
@@ -280,10 +282,30 @@ public sealed partial class Worker
 
             var slots = SlotState;
             var limit = Math.Min(slots.Free, slots.CohortFree(task.Cohort)) + 1;
-            var claiming = slots.WholeClaims > 0 || slots.Claims[task.Cohort] > 0;
-            if (limit <= 0 || (claiming && limit < slots.RefillBatch))
+            if (limit <= 0)
             {
                 return idle;
+            }
+
+            // The completion gives its slot back, so the next plain claim continues the rotation.
+            if (!run.FairnessSkipPending && OtherQueueWaiting(task.Task.Queue))
+            {
+                run.FairnessSkipPending = true;
+                return idle;
+            }
+
+            var claiming = slots.WholeClaims > 0 || slots.Claims[task.Cohort] > 0;
+            var held = claiming && limit < slots.RefillBatch;
+            // Until the plain claim after a skip starts, a fused claim refills only its own slot, so it
+            // cannot take the slot that the skipped completion gave back.
+            if (held || run.FairnessSkipPending)
+            {
+                limit = 1;
+            }
+
+            if (_queues.Length > 1)
+            {
+                _queueAskedAt[task.Task.Queue] = Monotonic.Now();
             }
 
             slots.ReservedTotal += limit;

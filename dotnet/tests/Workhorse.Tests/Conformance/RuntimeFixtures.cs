@@ -175,6 +175,8 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "heartbeat-busy" => HeartbeatBusyAsync(fixture),
             "maintenance-phase-error" => MaintenancePhaseErrorAsync(fixture),
             "slot-refill" => SlotRefillAsync(fixture),
+            "queue-fairness" => QueueFairnessAsync(fixture),
+            "queue-fairness-cost" => QueueFairnessCostAsync(fixture),
             "batch" => BatchAsync(fixture),
             "suspension-replay" => SuspensionReplayAsync(fixture),
             "suspension-race" => SuspensionRaceAsync(fixture),
@@ -1075,6 +1077,150 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         await ExpectStateAsync(taskId, Get(fixture, "expectedState"));
         var attempts = await AttemptsAsync(taskId);
         Failure.Check(attempts == (long)fixture["expectedAttempts"]!, $"the task recorded {attempts} attempts");
+    }
+
+    /// <summary>
+    /// A fused refill asks only its own queue. The cold queue's task must still run before the hot
+    /// queue's backlog ends (ADR 0076, rule 17).
+    /// </summary>
+    private async Task QueueFairnessAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var hot = $"{QueueName(fixture)}-hot";
+        var cold = $"{QueueName(fixture)}-cold";
+        await QueueFairnessQueuesAsync(fixture, hot, cold);
+        var started = new ConcurrentQueue<string>();
+        var hotHandler = Millis(fixture, "hotHandlerMs");
+        await using var pool = Intercept.Create(_database, Intercept.Hook.None);
+        var grace = TimeSpan.Zero;
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+        var subject = NewWorker(pool, fixture, options =>
+        {
+            options.Queues = [hot, cold];
+            options.Concurrency = checked((int)(long)fixture["concurrency"]!);
+            grace = options.ShutdownGrace;
+        });
+        subject.Handle<JsonElement>(TaskType(fixture), async (context, _) =>
+        {
+            started.Enqueue(context.Task.Queue);
+            if (context.Task.Queue == hot)
+            {
+                await Task.Delay(hotHandler);
+            }
+        });
+        var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
+        try
+        {
+            // The cold task arrives while fused refills already hold the slots, so the result does not
+            // depend on which queue the first plain claim asks.
+            var coldAfter = (long)fixture["coldEnqueueAfterHotStarts"]!;
+            await EventuallyAsync($"{Runner.Text(fixture["id"])} started fewer than {coldAfter} hot tasks", 7, () => started.Count >= coldAfter);
+            await EnqueueAsync(TaskType(fixture), Json.Members(("cold", true)), Options(cold));
+            await EventuallyAsync($"{Runner.Text(fixture["id"])} never ran the cold task", 7, () => started.Contains(cold));
+            var position = started.ToList().IndexOf(cold);
+            Failure.Check(
+                position <= (long)fixture["expectedMaximumHotTasksBeforeCold"]!,
+                $"{position} hot tasks started before the cold task");
+        }
+        finally
+        {
+            subject.Stop();
+            await StoppedAsync(run, grace);
+        }
+    }
+
+    /// <summary>
+    /// Puts the hot and the cold queue of a queue-fairness fixture on the fast tier, and enqueues the
+    /// hot backlog.
+    /// </summary>
+    private async Task QueueFairnessQueuesAsync(OrderedDictionary<string, object?> fixture, string hot, string cold)
+    {
+        await using (var connection = await _database.DataSource.OpenConnectionAsync())
+        {
+            foreach (var queue in new[] { hot, cold })
+            {
+                await Sql.RowsAsync(
+                    connection,
+                    SqlCatalogue.SetQueueTierV1,
+                    [Parameters.Text(queue), Parameters.Text("fast"), Parameters.Text("runtime-fixture"), Parameters.Text(Runner.Text(fixture["id"]))],
+                    CancellationToken.None);
+            }
+        }
+
+        var hotTaskCount = (long)fixture["hotTaskCount"]!;
+        for (long sequence = 0; sequence < hotTaskCount; sequence++)
+        {
+            await EnqueueAsync(TaskType(fixture), Json.Members(("sequence", sequence)), Options(hot));
+        }
+    }
+
+    /// <summary>
+    /// A worker with a refill batch above 1 runs a hot backlog beside an empty cold queue. The
+    /// injection records and delays each plain claim. A completion during that delay must still refill
+    /// its own slot, or each plain claim after a fairness skip leaves free slots for the next one, and
+    /// the worker stays in plain claims (ADR 0076, SM-1833 amendment).
+    /// </summary>
+    private async Task QueueFairnessCostAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var hot = $"{QueueName(fixture)}-hot";
+        var cold = $"{QueueName(fixture)}-cold";
+        await QueueFairnessQueuesAsync(fixture, hot, cold);
+        var hotHandler = Millis(fixture, "hotHandlerMs");
+        var hotStarts = 0;
+        (long Total, long Plain, long Zero) counts = default;
+        await using var pool = Intercept.Create(_database, Intercept.Hook.None);
+        var grace = TimeSpan.Zero;
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+        var subject = NewWorker(pool, fixture, options =>
+        {
+            options.Queues = [hot, cold];
+            options.Concurrency = checked((int)(long)fixture["concurrency"]!);
+            options.PollInterval = Millis(fixture, "pollMs");
+            grace = options.ShutdownGrace;
+        });
+        subject.Handle<JsonElement>(TaskType(fixture), async (_, _) =>
+        {
+            Interlocked.Increment(ref hotStarts);
+            await Task.Delay(hotHandler);
+        });
+        await InjectedBodyAsync(Get(fixture, "injection"), async () =>
+        {
+            var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
+            try
+            {
+                // A slow start must not count: the window starts once every slot ran a hot task.
+                var slots = (long)fixture["concurrency"]!;
+                await EventuallyAsync($"{Runner.Text(fixture["id"])} never started its hot tasks", 7, () => Volatile.Read(ref hotStarts) >= slots);
+                var before = await FairnessCountsAsync(fixture);
+                var startsBefore = Volatile.Read(ref hotStarts);
+                await Task.Delay(Millis(fixture, "measureMs"));
+                // A completion after the stop claims nothing, so the counts come before it.
+                var after = await FairnessCountsAsync(fixture);
+                Failure.Check(Volatile.Read(ref hotStarts) > startsBefore, "no hot task started during the measurement");
+                // The hot backlog must outlast the run, or the plain claims at its end would count too.
+                Failure.Check(Volatile.Read(ref hotStarts) < (long)fixture["hotTaskCount"]!, "every hot task started before the counts");
+                counts = (after.Plain, after.Plain - before.Plain, after.Zero - before.Zero);
+            }
+            finally
+            {
+                subject.Stop();
+                await StoppedAsync(run, grace);
+            }
+        });
+        // The injection recorded the first claim at least.
+        Failure.Check(counts.Total > 0, "the injection recorded no plain claim");
+        var mostPlain = (long)fixture["expectedMaximumPlainClaims"]!;
+        Failure.Check(counts.Plain <= mostPlain, $"{counts.Plain} plain claims, want at most {mostPlain}");
+        var mostZero = (long)fixture["expectedMaximumZeroLimitCompletions"]!;
+        Failure.Check(counts.Zero <= mostZero, $"{counts.Zero} limit-0 completions, want at most {mostZero}");
+    }
+
+    /// <summary>The plain claims and the tasks completed with limit 0 that the fixture's injection recorded.</summary>
+    private async Task<(long Plain, long Zero)> FairnessCountsAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var row = Json.Object((await RowsAsync((string)fixture["countsQuery"]!))[0])!;
+        return (
+            Convert.ToInt64(row["plain_claims"], System.Globalization.CultureInfo.InvariantCulture),
+            Convert.ToInt64(row["zero_limit_completions"], System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>

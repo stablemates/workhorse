@@ -75,6 +75,8 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "poll-cadence" => poll_cadence(database, fixture).await,
             "graceful-drain" => graceful_drain(database, fixture).await,
             "slot-refill" => slot_refill(database, fixture).await,
+            "queue-fairness" => queue_fairness(database, fixture).await,
+            "queue-fairness-cost" => queue_fairness_cost(database, fixture).await,
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
             "release-wait" => release_wait(database, fixture).await,
@@ -1102,6 +1104,159 @@ async fn sequence_value(client: &Client, sequence: &str) -> Checked<i64> {
         .await
         .map_err(sql)?;
     Ok(row.get(0))
+}
+
+/// Puts the hot and the cold queue of a queue-fairness fixture on the fast tier, enqueues the hot
+/// backlog, and returns the queue client with the names of both queues.
+async fn queue_fairness_queues(
+    database: &ScratchDatabase,
+    fixture: &Value,
+) -> Checked<(Queue<Client>, String, String)> {
+    let (hot, cold) =
+        (format!("{}-hot", queue_name(fixture)), format!("{}-cold", queue_name(fixture)));
+    let admin = Admin::connect(database.url()).await.map_err(driver)?;
+    for name in [&hot, &cold] {
+        let audit = AdminAudit {
+            actor: "runtime-fixture".into(),
+            reason: text(fixture, "id").into(),
+            request_id: format!("{}-{name}", text(fixture, "id")),
+        };
+        admin.set_queue_tier(name, QueueTier::Fast, &audit).await.map_err(driver)?;
+    }
+    let queue = queue(database, fixture).await?;
+    let mut on = EnqueueOptions::default();
+    on.queue = Some(hot.clone());
+    for sequence in 0..number(fixture, "hotTaskCount") {
+        queue
+            .enqueue(text(fixture, "taskType"), &json!({"sequence": sequence}), on.clone())
+            .await
+            .map_err(driver)?;
+    }
+    Ok((queue, hot, cold))
+}
+
+/// A fused refill asks only its own queue. The task of the cold queue must still run before the
+/// backlog of the hot queue ends (ADR 0076, rule 17).
+async fn queue_fairness(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let (queue, hot, cold) = queue_fairness_queues(database, fixture).await?;
+    let task_type = text(fixture, "taskType");
+    let mut worker_options = options(fixture);
+    worker_options.queues = vec![hot.clone(), cold.clone()];
+    worker_options.concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
+    let worker = worker(database, 16, worker_options)?;
+    let started = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (recorded, hot_handler) = (Arc::clone(&started), millis(fixture, "hotHandlerMs"));
+    let hot_queue = hot.clone();
+    worker.handle(task_type, move |_: Value, context: HandlerContext| {
+        let task_queue = context.task().queue.clone();
+        recorded.lock().unwrap().push(task_queue.clone());
+        let hot = task_queue == hot_queue;
+        async move {
+            if hot {
+                tokio::time::sleep(hot_handler).await;
+            }
+            Ok(Value::Null)
+        }
+    });
+    let (stop, running) = run(&worker);
+    let outcome = async {
+        // The cold task arrives while fused refills already hold the slots, so the result does
+        // not depend on which queue the first plain claim asks.
+        let hot_starts = usize::try_from(number(fixture, "coldEnqueueAfterHotStarts"))
+            .map_err(|error| error.to_string())?;
+        eventually_within(Duration::from_secs(7), "the worker never started its hot tasks", || {
+            let count = started.lock().unwrap().len();
+            async move { Ok(count >= hot_starts) }
+        })
+        .await?;
+        let mut on = EnqueueOptions::default();
+        on.queue = Some(cold.clone());
+        queue.enqueue(task_type, &json!({"cold": true}), on).await.map_err(driver)?;
+        eventually_within(Duration::from_secs(7), "the worker never ran the cold task", || async {
+            Ok(started.lock().unwrap().contains(&cold))
+        })
+        .await?;
+        let position = started.lock().unwrap().iter().position(|name| *name == cold).unwrap_or(0);
+        let most = usize::try_from(number(fixture, "expectedMaximumHotTasksBeforeCold"))
+            .map_err(|error| error.to_string())?;
+        check(position <= most, || {
+            format!("{position} hot tasks started before the cold task, want at most {most}")
+        })
+    }
+    .await;
+    let _ = stop.send(());
+    running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    outcome
+}
+
+/// A worker with a refill batch above 1 runs a hot backlog beside an empty cold queue. The
+/// injection records and delays each plain claim. A completion during that delay must still refill
+/// its own slot, or each plain claim after a fairness skip leaves free slots for the next one, and
+/// the worker stays in plain claims (ADR 0076, SM-1833 amendment).
+async fn queue_fairness_cost(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let (_queue, hot, cold) = queue_fairness_queues(database, fixture).await?;
+    let mut worker_options = options(fixture);
+    worker_options.queues = vec![hot, cold];
+    worker_options.concurrency = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
+    worker_options.poll_interval = Some(millis(fixture, "pollMs"));
+    let worker = worker(database, 16, worker_options)?;
+    let hot_starts = Arc::new(AtomicUsize::new(0));
+    let (started, hot_handler) = (Arc::clone(&hot_starts), millis(fixture, "hotHandlerMs"));
+    worker.handle(text(fixture, "taskType"), move |_: Value, _: HandlerContext| {
+        started.fetch_add(1, Ordering::SeqCst);
+        async move {
+            tokio::time::sleep(hot_handler).await;
+            Ok(Value::Null)
+        }
+    });
+    let client = database.connect().await;
+    let counts = || async {
+        let row = client.query_one(text(fixture, "countsQuery"), &[]).await.map_err(sql)?;
+        Ok::<_, String>((row.get::<_, i32>(0), row.get::<_, i32>(1)))
+    };
+    let measured = with_injected_body(&client, &fixture["injection"], async {
+        let (stop, running) = run(&worker);
+        let window = async {
+            // A slow start must not count: the window starts once every slot ran a hot task.
+            let slots = usize::try_from(number(fixture, "concurrency")).unwrap_or(1);
+            eventually_within(
+                Duration::from_secs(7),
+                "the worker never started its hot tasks",
+                || {
+                    let started = hot_starts.load(Ordering::SeqCst);
+                    async move { Ok(started >= slots) }
+                },
+            )
+            .await?;
+            let before = counts().await?;
+            let starts_before = hot_starts.load(Ordering::SeqCst);
+            tokio::time::sleep(millis(fixture, "measureMs")).await;
+            // A completion after the stop claims nothing, so the counts come before it.
+            let after = counts().await?;
+            let started = hot_starts.load(Ordering::SeqCst);
+            check(started > starts_before, || "no hot task started during the measurement".into())?;
+            let total = usize::try_from(number(fixture, "hotTaskCount")).unwrap_or(0);
+            // The hot backlog must outlast the run, or the plain claims at its end would count too.
+            check(started < total, || format!("all {total} hot tasks started before the counts"))?;
+            Ok((after.0, after.0 - before.0, after.1 - before.1))
+        }
+        .await;
+        let _ = stop.send(());
+        running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+        window
+    })
+    .await?;
+    let (total, plain_claims, zero_limit_completions) = measured;
+    // The injection recorded the first claim at least.
+    check(total > 0, || "the injection recorded no plain claim".into())?;
+    let most_plain = number(fixture, "expectedMaximumPlainClaims");
+    check(i64::from(plain_claims) <= most_plain, || {
+        format!("{plain_claims} plain claims, want at most {most_plain}")
+    })?;
+    let most_zero = number(fixture, "expectedMaximumZeroLimitCompletions");
+    check(i64::from(zero_limit_completions) <= most_zero, || {
+        format!("{zero_limit_completions} limit-0 completions, want at most {most_zero}")
+    })
 }
 
 /// Wraps `claim_many_v1` so every claim records its limit and in-flight count in sequences, which

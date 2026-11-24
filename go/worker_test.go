@@ -136,6 +136,14 @@ type workerRuntimeFixture struct {
 	AcceptedResult                       any                               `json:"acceptedResult"`
 	ExpectedAccepted                     workerFixtureTaskState            `json:"expectedAccepted"`
 	ShutdownGraceMS                      int                               `json:"shutdownGraceMs"`
+	HotTaskCount                         int                               `json:"hotTaskCount"`
+	HotHandlerMS                         int                               `json:"hotHandlerMs"`
+	ExpectedMaximumHotTasksBeforeCold    int                               `json:"expectedMaximumHotTasksBeforeCold"`
+	ColdEnqueueAfterHotStarts            int                               `json:"coldEnqueueAfterHotStarts"`
+	MeasureMS                            int                               `json:"measureMs"`
+	CountsQuery                          string                            `json:"countsQuery"`
+	ExpectedMaximumPlainClaims           int                               `json:"expectedMaximumPlainClaims"`
+	ExpectedMaximumZeroLimitCompletions  int                               `json:"expectedMaximumZeroLimitCompletions"`
 	ShutdownBehavior                     map[string]string                 `json:"shutdownBehavior"`
 	HandlerResult                        string                            `json:"handlerResult"`
 	ExpectedCancelled                    workerFixtureReleasedState        `json:"expectedCancelled"`

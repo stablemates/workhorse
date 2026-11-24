@@ -274,6 +274,58 @@ export interface SlotRefillRuntimeFixture extends RuntimeFixtureBase {
   expectedMaximumClaimsPerTask: number;
 }
 
+/**
+ * A worker consumes a hot and a cold fast-tier queue (ADR 0076, rule 17). The hot queue keeps a
+ * backlog, so each hot completion could refill its slot from the hot queue. The cold queue's task
+ * must still run before the hot backlog ends.
+ */
+export interface QueueFairnessRuntimeFixture extends RuntimeFixtureBase {
+  kind: "queue-fairness";
+  concurrency: number;
+  hotTaskCount: number;
+  /** How long each hot handler runs, so the hot backlog outlasts several fairness intervals. */
+  hotHandlerMs: number;
+  /**
+   * The runner enqueues the cold task only after this many hot tasks started. Then fused refills
+   * already hold the slots, whichever queue the first plain claim of the SDK asks.
+   */
+  coldEnqueueAfterHotStarts: number;
+  /** The most hot tasks that may start before the cold task starts. */
+  expectedMaximumHotTasksBeforeCold: number;
+}
+
+/**
+ * A worker with a refill batch above 1 consumes a hot and an empty cold fast-tier queue (ADR 0076,
+ * rule 17 and the SM-1833 amendment). The injection records and delays each plain fast-tier claim,
+ * which is a `complete_many_and_claim_v1` call with no task to complete. It also records each call
+ * that completes tasks with a claim limit of 0. A completion during the delay must still refill its
+ * own slot. Then each fairness skip costs a bounded number of plain claims and limit-0 completions,
+ * and the worker goes back to fused refills.
+ */
+export interface QueueFairnessCostRuntimeFixture extends RuntimeFixtureBase {
+  kind: "queue-fairness-cost";
+  concurrency: number;
+  /** An explicit poll interval below the default. The fairness interval stays at the default. */
+  pollMs: number;
+  hotTaskCount: number;
+  hotHandlerMs: number;
+  /**
+   * The runner waits until `concurrency` hot tasks started, so a slow worker start does not count.
+   * It then reads the counts, lets the worker run for this time, and reads them again. It checks
+   * the change between the two reads and requires more hot starts. The hot backlog must outlast
+   * the run. A completion after the stop claims nothing, so the runner reads before the stop.
+   */
+  measureMs: number;
+  injection: RuntimeBodyInjection;
+  /**
+   * Returns one row with `plain_claims` and `zero_limit_completions`, the tasks that calls with a
+   * claim limit of 0 completed.
+   */
+  countsQuery: string;
+  expectedMaximumPlainClaims: number;
+  expectedMaximumZeroLimitCompletions: number;
+}
+
 export interface TracePropagationRuntimeFixture extends RuntimeFixtureBase {
   kind: "trace-propagation";
 }
@@ -723,6 +775,8 @@ export type RuntimeFixture =
   | SubscriptionRecoveryRuntimeFixture
   | GracefulDrainRuntimeFixture
   | SlotRefillRuntimeFixture
+  | QueueFairnessRuntimeFixture
+  | QueueFairnessCostRuntimeFixture
   | TracePropagationRuntimeFixture
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture

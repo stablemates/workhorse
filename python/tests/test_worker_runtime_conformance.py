@@ -90,6 +90,8 @@ SYNC_ONLY_RUNTIME_FIXTURE_KINDS = frozenset(
         "oversized-checkpoint",
         "oversized-result",
         "poll-cadence",
+        "queue-fairness",
+        "queue-fairness-cost",
         "refused-completion",
         "slot-refill",
         "suspension-race",
@@ -175,6 +177,8 @@ def execute_runtime_fixture(
         ),
         "graceful-drain": execute_graceful_drain_fixture,
         "slot-refill": execute_slot_refill_fixture,
+        "queue-fairness": execute_queue_fairness_fixture,
+        "queue-fairness-cost": execute_queue_fairness_cost_fixture,
         # The worker runs on a pool of its own, so the runner can hold its LISTEN.
         "subscription-recovery": lambda enqueue_connection, recovery_fixture: (
             execute_subscription_recovery_fixture(
@@ -1464,6 +1468,143 @@ class ClaimRecordingExecutor:
     def claims(self) -> int:
         with self._lock:
             return len(self.limits)
+
+
+def set_fast_tier(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> tuple[str, str]:
+    """Put the hot and the cold queue of a queue-fairness fixture on the fast tier."""
+    hot = f"{runtime_queue(fixture)}-hot"
+    cold = f"{runtime_queue(fixture)}-cold"
+    admin = Admin(connection)
+    for queue_name in (hot, cold):
+        audit = AdminAudit(
+            actor="runtime-fixture",
+            reason=fixture["id"],
+            request_id=f"{fixture['id']}-{queue_name}",
+        )
+        admin.set_queue_tier(queue_name, "fast", audit)
+    return hot, cold
+
+
+# A fused refill asks only its own queue. The cold queue's task must still run before the hot
+# queue's backlog ends (ADR 0076, rule 17).
+def execute_queue_fairness_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    hot, cold = set_fast_tier(connection, fixture)
+    queue = Queue(connection)
+    for sequence in range(fixture["hotTaskCount"]):
+        queue.enqueue(fixture["taskType"], {"sequence": sequence}, EnqueueOptions(queue=hot))
+    started_lock = Lock()
+    started: list[str] = []
+
+    def handler(_payload: object, context: HandlerContext) -> None:
+        with started_lock:
+            started.append(context.task.queue)
+        if context.task.queue == hot:
+            sleep(fixture["hotHandlerMs"] / 1000)
+
+    def started_count() -> int:
+        with started_lock:
+            return len(started)
+
+    def cold_started() -> bool:
+        with started_lock:
+            return cold in started
+
+    errors: list[BaseException] = []
+    worker = Worker(
+        worker_pool,
+        queues=[hot, cold],
+        worker_id=f"python-{fixture['id']}",
+        concurrency=fixture["concurrency"],
+        registry_interval_ms=0,
+    ).handle(fixture["taskType"], handler)
+    thread = run_in_thread(worker.run, errors)
+    try:
+        deadline = monotonic() + 7
+        while started_count() < fixture["coldEnqueueAfterHotStarts"]:
+            assert monotonic() < deadline, f"{fixture['id']} did not start the hot tasks"
+            sleep(0.005)
+        # The cold task arrives while fused refills already hold the slots, so the result does
+        # not depend on which queue the first plain claim asks.
+        queue.enqueue(fixture["taskType"], {"cold": True}, EnqueueOptions(queue=cold))
+        deadline = monotonic() + 7
+        while not cold_started():
+            assert monotonic() < deadline, f"{fixture['id']} never ran the cold task"
+            sleep(0.005)
+        with started_lock:
+            cold_at = started.index(cold)
+        assert cold_at <= fixture["expectedMaximumHotTasksBeforeCold"]
+    finally:
+        worker.stop()
+        join(thread)
+    assert errors == []
+
+
+# A completion during a plain claim must still refill its own slot. Otherwise each plain claim
+# after a fairness skip leaves free slots for the next one, and the worker stays in plain claims
+# (ADR 0076, SM-1833 amendment).
+def execute_queue_fairness_cost_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    hot, cold = set_fast_tier(connection, fixture)
+    queue = Queue(connection)
+    for sequence in range(fixture["hotTaskCount"]):
+        queue.enqueue(fixture["taskType"], {"sequence": sequence}, EnqueueOptions(queue=hot))
+    started_lock = Lock()
+    hot_starts = 0
+
+    def handler(_payload: object, _context: HandlerContext) -> None:
+        nonlocal hot_starts
+        with started_lock:
+            hot_starts += 1
+        sleep(fixture["hotHandlerMs"] / 1000)
+
+    errors: list[BaseException] = []
+    with injected_function_body(connection, fixture["injection"]):
+        worker = Worker(
+            worker_pool,
+            queues=[hot, cold],
+            worker_id=f"python-{fixture['id']}",
+            concurrency=fixture["concurrency"],
+            poll_ms=fixture["pollMs"],
+            registry_interval_ms=0,
+        ).handle(fixture["taskType"], handler)
+
+        def started_count() -> int:
+            with started_lock:
+                return hot_starts
+
+        def counts() -> tuple[int, int]:
+            row = connection.execute(fixture["countsQuery"]).fetchone()
+            assert row is not None
+            return int(row[0]), int(row[1])
+
+        thread = run_in_thread(worker.run, errors)
+        try:
+            # A slow start must not count: the window starts once every slot ran a hot task.
+            deadline = monotonic() + 7
+            while started_count() < fixture["concurrency"]:
+                assert monotonic() < deadline, f"{fixture['id']} did not start the hot tasks"
+                sleep(0.005)
+            before = counts()
+            starts_before = started_count()
+            sleep(fixture["measureMs"] / 1000)
+            # A completion after the stop claims nothing, so the counts come before it.
+            after = counts()
+            assert started_count() > starts_before, f"{fixture['id']} made no progress"
+            # The hot backlog must outlast the run, or the plain claims at its end would count too.
+            assert started_count() < fixture["hotTaskCount"]
+        finally:
+            worker.stop()
+            join(thread)
+    assert errors == []
+    # The injection recorded the first claim at least.
+    assert after[0] > 0
+    assert after[0] - before[0] <= fixture["expectedMaximumPlainClaims"]
+    assert after[1] - before[1] <= fixture["expectedMaximumZeroLimitCompletions"]
 
 
 def execute_slot_refill_fixture(

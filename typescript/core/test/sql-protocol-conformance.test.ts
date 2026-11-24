@@ -67,6 +67,8 @@ import type {
   ReleaseRunRuntimeFixture,
   ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
+  QueueFairnessRuntimeFixture,
+  QueueFairnessCostRuntimeFixture,
   SubscriptionRecoveryRuntimeFixture,
   RuntimeBodyInjection,
   RuntimeFunctionInjection,
@@ -1917,6 +1919,126 @@ async function withInjectedFunctionBody<T>(
   }
 }
 
+async function setFastTier(admin: Admin, fixtureId: string, queueNames: string[]): Promise<void> {
+  for (const queueName of queueNames) {
+    await admin.setQueueTier(queueName, "fast", {
+      actor: "runtime-fixture",
+      reason: fixtureId,
+      requestId: `${fixtureId}-${queueName}`,
+    });
+  }
+}
+
+// A fused refill asks only its own queue. The cold queue's task must still run before the hot
+// queue's backlog ends (ADR 0076, rule 17).
+async function executeQueueFairnessRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  fixture: QueueFairnessRuntimeFixture,
+): Promise<void> {
+  const hot = `runtime-${fixture.id}-hot`;
+  const cold = `runtime-${fixture.id}-cold`;
+  await setFastTier(admin, fixture.id, [hot, cold]);
+  await Promise.all(
+    Array.from({ length: fixture.hotTaskCount }, (_, sequence) =>
+      queue.enqueue(fixture.taskType, { sequence }, { queue: hot }),
+    ),
+  );
+  const started: string[] = [];
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queues: [hot, cold],
+    concurrency: fixture.concurrency,
+    registryIntervalMs: 0,
+  }).handle(fixture.taskType, async (_payload, context) => {
+    started.push(context.task.queue);
+    if (context.task.queue === hot) await sleep(fixture.hotHandlerMs);
+    return null;
+  });
+  const running = worker.run();
+  try {
+    // The cold task arrives while fused refills already hold the slots, so the result does not
+    // depend on which queue the first plain claim asks.
+    await waitUntil(
+      () => started.length >= fixture.coldEnqueueAfterHotStarts,
+      `${fixture.id} never started its hot tasks`,
+    );
+    await queue.enqueue(fixture.taskType, { cold: true }, { queue: cold });
+    await waitUntil(() => started.includes(cold), `${fixture.id} never ran the cold task`);
+    expect(started.indexOf(cold)).toBeLessThanOrEqual(fixture.expectedMaximumHotTasksBeforeCold);
+  } finally {
+    worker.stop();
+    await running;
+  }
+}
+
+// A completion during a plain claim must still refill its own slot. Otherwise each plain claim
+// after a fairness skip leaves free slots for the next one, and the worker stays in plain claims
+// (ADR 0076, SM-1833 amendment).
+async function executeQueueFairnessCostRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: QueueFairnessCostRuntimeFixture,
+): Promise<void> {
+  const hot = `runtime-${fixture.id}-hot`;
+  const cold = `runtime-${fixture.id}-cold`;
+  await setFastTier(admin, fixture.id, [hot, cold]);
+  await Promise.all(
+    Array.from({ length: fixture.hotTaskCount }, (_, sequence) =>
+      queue.enqueue(fixture.taskType, { sequence }, { queue: hot }),
+    ),
+  );
+  const counts = await withInjectedFunctionBody(database, fixture.injection, async () => {
+    let hotStarts = 0;
+    const worker = new Worker(queue, {
+      workerId: `runtime-${fixture.id}`,
+      queues: [hot, cold],
+      concurrency: fixture.concurrency,
+      pollMs: fixture.pollMs,
+      registryIntervalMs: 0,
+    }).handle(fixture.taskType, async () => {
+      hotStarts += 1;
+      await sleep(fixture.hotHandlerMs);
+      return null;
+    });
+    const read = async () =>
+      (
+        await database.query<{ plain_claims: number; zero_limit_completions: number }>(
+          fixture.countsQuery,
+        )
+      ).rows[0]!;
+    const running = worker.run();
+    try {
+      // A slow start must not count: the window starts once every slot ran a hot task.
+      await waitUntil(
+        () => hotStarts >= fixture.concurrency,
+        `${fixture.id} never started its hot tasks`,
+      );
+      const before = await read();
+      const startsBefore = hotStarts;
+      await sleep(fixture.measureMs);
+      // A completion after the stop claims nothing, so the counts come before it.
+      const after = await read();
+      expect(hotStarts).toBeGreaterThan(startsBefore);
+      // The hot backlog must outlast the run, or the plain claims at its end would count too.
+      expect(hotStarts).toBeLessThan(fixture.hotTaskCount);
+      return {
+        total: after.plain_claims,
+        plain: after.plain_claims - before.plain_claims,
+        zero: after.zero_limit_completions - before.zero_limit_completions,
+      };
+    } finally {
+      worker.stop();
+      await running;
+    }
+  });
+  // The injection recorded the first claim at least.
+  expect(counts.total).toBeGreaterThan(0);
+  expect(counts.plain).toBeLessThanOrEqual(fixture.expectedMaximumPlainClaims);
+  expect(counts.zero).toBeLessThanOrEqual(fixture.expectedMaximumZeroLimitCompletions);
+}
+
 async function executeHeartbeatBusyRuntimeFixture(
   queue: Queue,
   admin: Admin,
@@ -2354,6 +2476,12 @@ async function executeRuntimeFixture(
       break;
     case "slot-refill":
       await executeSlotRefillRuntimeFixture(database, admin, fixture);
+      break;
+    case "queue-fairness":
+      await executeQueueFairnessRuntimeFixture(queue, admin, fixture);
+      break;
+    case "queue-fairness-cost":
+      await executeQueueFairnessCostRuntimeFixture(queue, admin, database, fixture);
       break;
     case "trace-propagation":
       await executeTracePropagationRuntimeFixture(queue, database, fixture);
