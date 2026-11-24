@@ -377,29 +377,41 @@ filter by task type. Thus a version 1 worker can claim a task that it has no han
 `orders`.
 
 1. A version 1 worker claims an `order.ship-v2` task. It has no handler for that type.
-2. The worker gives the task back to the queue. The attempt stays the same.
-3. The release wakes the listening version 1 workers. Another version 1 worker can claim the task
-   and give it back. The first worker waits for its poll interval before it claims again.
-4. A version 2 worker claims the task and runs it.
+2. The worker gives the task back to the queue. The task goes behind the other ready tasks of its
+   priority, and the attempt stays the same.
+3. The worker claims again at once. It gets the `order.ship` task that is next, and runs it.
+4. Later, the worker claims the `order.ship-v2` task again and gives it back. If no other task is
+   ready, the worker waits for its poll interval before it claims again.
+5. A version 2 worker claims the task and runs it.
 
 Thus the task runs, but later than necessary. Until a version 2 worker claims the task, version 1
-workers can claim and give it back again. Each version 1 worker claims it at most once in each poll
-interval. The worker logs `workhorse.handler.missing` for each release. Each release uses a
-slot of an old worker. The time for which an old worker held the task counts against the
-execution timeout of the task. A new queue keeps the old workers away from the new tasks.
+workers claim it and give it back again. A version 1 worker claims past a bounded number of such
+tasks before it waits, so the old tasks behind them still run. The worker logs
+`workhorse.handler.missing` for each release. Each release uses a slot of an old worker. The time
+for which an old worker held the task counts against the execution timeout of the task.
+
+A new task type with a higher priority than the old types is worse. The release keeps the priority,
+so each claim of a version 1 worker returns the new task first. That worker then runs no old task
+until a version 2 worker claims the new one. A new queue keeps the old workers away from the new
+tasks.
 
 <details>
 <summary>Reference: a claim without a handler</summary>
 
 - A worker that claims a task of an unregistered type calls `release_owned_v1`.
-- `release_owned_v1` sets the task to `ready` without a change to `current_attempt`. It adds the
-  elapsed lease to `execution_used_ms` and appends a `released` event.
-- If each claim of a pass had no handler, the pass counts as empty for the poll backoff.
-- If every task of a claim was released, the run loop of each SDK starts a release wait. It ends
-  only at its deadline, on stop, or on pause.
+- `release_owned_v1` sets the task to `ready` with a new `sequence` and without a change to
+  `current_attempt`. It adds the elapsed lease to `execution_used_ms` and appends a `released`
+  event. A claim orders the ready tasks by priority, then by `sequence`.
+- If each claim of a single pass had no handler, the pass returns `false`.
+- If every task of a claim was released, the run loop of each SDK claims again at once. This release
+  run ends at a claim that returns a task that the run already released, at its 10th claim, or at a
+  claim that returns no task.
+- When a release run ends, the run loop starts a release wait. The wait counts as one empty claim
+  for the poll backoff. It ends only at its deadline, on stop, or on pause.
 - `release_owned_v1` notifies `workhorse_tasks`. That notification does not end the release wait.
-- A listening worker waits for its poll interval between these claims: 5,000 ms by default, ±10%
-  jitter. A worker without an active listener waits for its poll backoff.
+- A listening worker waits for its poll interval between two release runs: 5,000 ms by default,
+  ±10% jitter. A worker without an active listener waits for its poll backoff.
+- The release keeps the priority of the task. A claim has no task-type filter.
 
 More detail: [Task lifecycle: Owned release](../architecture/lifecycle.md#owned-release) and [Operations: Polling cadence](../architecture/operations.md#polling-cadence).
 

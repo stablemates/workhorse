@@ -99,6 +99,7 @@ func TestGoWorkerSatisfiesEverySharedRuntimeFixture(t *testing.T) {
 		"budget-admission-race":    executeBudgetAdmissionRaceFixture,
 		"missing-handler":          executeWorkerMissingHandlerFixture,
 		"release-wait":             executeWorkerReleaseWaitFixture,
+		"release-run":              executeWorkerReleaseRunFixture,
 		"json-round-trip":          executeWorkerJSONRoundTripFixture,
 		"checkpoint-no-value":      executeWorkerCheckpointNoValueFixture,
 		"durable-script":           executeWorkerDurableScriptFixture,
@@ -1188,7 +1189,7 @@ func executeWorkerReleaseWaitFixture(t *testing.T, fixture workerRuntimeFixture)
 		t.Fatal(err)
 	}
 	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
-		Queue: queueName, WorkerID: "go-" + fixture.ID,
+		Queue: queueName, WorkerID: "go-" + fixture.ID, Concurrency: fixture.Concurrency,
 		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
 		PollInterval:  time.Duration(fixture.PollMS) * time.Millisecond,
 	})
@@ -1229,14 +1230,129 @@ func executeWorkerReleaseWaitFixture(t *testing.T, fixture workerRuntimeFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(times) < fixture.ExpectedMinimumReleases || len(times) > fixture.ExpectedMaximumReleases {
-		t.Fatalf("the worker released the task %d times while it ran", len(times))
+	// A gap of at least the least wait is a release wait. The releases between two waits are one
+	// release run: the claim that released the task and the claim that got it back.
+	var runs [][]float64
+	for index, time := range times {
+		if index == 0 || time-times[index-1] >= fixture.ExpectedMinimumReleaseGapMS {
+			runs = append(runs, nil)
+		}
+		runs[len(runs)-1] = append(runs[len(runs)-1], time)
 	}
-	for index := 1; index < len(times); index++ {
-		if gap := times[index] - times[index-1]; gap < fixture.ExpectedMinimumReleaseGapMS {
-			t.Fatalf("the worker released the task again after %.0f ms", gap)
+	if len(runs) < fixture.ExpectedMinimumWaits || len(runs) > fixture.ExpectedMaximumWaits {
+		t.Fatalf("the worker made %d release runs while it ran: %v", len(runs), runs)
+	}
+	// The end of the window can cut the last run short.
+	for index, run := range runs {
+		if len(run) > fixture.ExpectedReleasesPerWait ||
+			(index < len(runs)-1 && len(run) != fixture.ExpectedReleasesPerWait) {
+			t.Fatalf("release run %d has %d releases: %v", index, len(run), runs)
 		}
 	}
+}
+
+// executeWorkerReleaseRunFixture runs a worker with one slot that has no handler for the tasks
+// ahead of the one task that it can run. Each release puts its task behind the others, so the
+// worker claims again at once until the release run reaches its limit.
+func executeWorkerReleaseRunFixture(t *testing.T, fixture workerRuntimeFixture) {
+	databaseURL := createConformanceDatabase(t, testDatabaseURL(t), "worker-release-run")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	queueName := "runtime-" + fixture.ID
+	queue := workhorse.NewQueue(workhorse.NewPGXExecutor(pool), queueName)
+	unhandled := make([]string, 0, fixture.UnhandledTasks)
+	for index := range fixture.UnhandledTasks {
+		taskID, err := queue.Enqueue(ctx, fixture.TaskType, map[string]any{"index": index})
+		if err != nil {
+			t.Fatal(err)
+		}
+		unhandled = append(unhandled, taskID)
+	}
+	handled, err := queue.Enqueue(ctx, fixture.RegisteredTaskType, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := workhorse.NewWorker(pool, workhorse.WorkerOptions{
+		Queue: queueName, WorkerID: "go-" + fixture.ID, Concurrency: fixture.Concurrency,
+		LeaseDuration: time.Duration(fixture.LeaseMS) * time.Millisecond,
+		PollInterval:  time.Duration(fixture.PollMS) * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Handle(fixture.RegisteredTaskType, func(context.Context, any, *workhorse.HandlerContext) (any, error) {
+		return nil, nil
+	})
+	runContext, stop := context.WithCancel(ctx)
+	defer stop()
+	runResult := make(chan error, 1)
+	go func() { runResult <- worker.Run(runContext) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for workerFixtureTaskStateFor(t, ctx, pool, handled).State != fixture.ExpectedAfterHandled.State {
+		if time.Now().After(deadline) {
+			stop()
+			<-runResult
+			t.Fatal("the handled task did not succeed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stop()
+	if err := awaitSignal(t, runResult, "Run to return after the stop"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The releases before the handled task succeeded. The worker claims again after it, and the
+	// runner ignores those releases.
+	rows, err := pool.Query(ctx, `SELECT event.task_id::text,
+			(extract(epoch FROM event.occurred_at) * 1000)::float8
+		FROM workhorse.task_event event
+		WHERE event.task_id = ANY($1::uuid[]) AND event.event_type = 'released'
+			AND event.occurred_at < (
+				SELECT succeeded.occurred_at FROM workhorse.task_event succeeded
+				WHERE succeeded.task_id = $2::uuid AND succeeded.event_type = 'succeeded'
+			)
+		ORDER BY event.occurred_at, event.task_id`, unhandled, handled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type release struct {
+		TaskID string
+		AtMS   float64
+	}
+	releases, err := pgx.CollectRows(rows, pgx.RowToStructByPos[release])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each release put its task behind the others, so the worker released each task once.
+	released := make([]string, 0, len(releases))
+	for _, row := range releases {
+		released = append(released, row.TaskID)
+	}
+	slices.Sort(released)
+	expected := slices.Clone(unhandled)
+	slices.Sort(expected)
+	if !slices.Equal(released, expected) {
+		t.Fatalf("the worker released %v before the handled task, want each of %v once", released, expected)
+	}
+	limit := fixture.ExpectedReleasesBeforeWait
+	for index := 1; index < len(releases); index++ {
+		gap := releases[index].AtMS - releases[index-1].AtMS
+		if index < limit && gap >= fixture.ExpectedMaximumRunGapMS {
+			t.Fatalf("release %d of the run came %.0f ms after the one before", index+1, gap)
+		}
+		if index == limit && gap < fixture.ExpectedMinimumReleaseGapMS {
+			t.Fatalf("the release wait after the run lasted only %.0f ms", gap)
+		}
+	}
+	for _, taskID := range unhandled {
+		assertWorkerFixtureTaskState(t, ctx, pool, taskID, fixture.ExpectedAfterRelease)
+	}
+	assertWorkerFixtureTaskState(t, ctx, pool, handled, fixture.ExpectedAfterHandled)
 }
 
 // executeWorkerOversizedCheckpointFixture checkpoints an array of zeros whose jsonb text is above

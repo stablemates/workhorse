@@ -58,13 +58,20 @@ the worker polls at the polling-only base until the subscription is live, and at
 base after that. Then it ends the live listener session and checks that the worker claims at once
 and polls at the polling-only base again.
 
-Its release-wait fixture runs a listening worker that has no handler for its one ready task, with
-a 1,000 ms poll interval. Each runner reads the gap between two `released` events, which PostgreSQL
-stamps in the release statement. Every worker starts its release wait when its claim returns, and
-then releases the task on a handler thread or task. So a release that starts late makes the next
-gap shorter than the wait.
+Its release-wait fixture runs a listening worker with one slot that has no handler for its one
+ready task, with a 1,000 ms poll interval. Each runner reads the gaps between the `released`
+events, which PostgreSQL stamps in the release statement. A gap of at least 800 ms is a release
+wait. Between two waits, the worker releases the task twice: the claim after the first release gets
+the same task back and ends the release run
+([ADR 0126](../docs/decisions/0126-claim-past-the-tasks-that-no-handler-serves-before-the-release-wait.md)).
+Every worker starts its release wait when its claim returns, and then releases the task on a
+handler thread or task. So a release that starts late makes the next gap shorter than the wait.
 
-The shortest wait is 900 ms, and the fixture requires at least 800 ms. The margin is for this
+Its release-run fixture enqueues 11 tasks that the worker cannot run, and then one that it can run.
+The worker with one slot releases each of the 11 tasks once before the handled task succeeds. It
+waits only after its 10th released-only claim, so the gap before the 11th release is a release wait.
+
+The shortest wait is 900 ms, and both fixtures require at least 800 ms. The margin is for this
 measurement. With a live subscription and no registry cap, the focused poll-wait cases of each SDK
 check that the wait is at least 0.9 times the poll interval
 ([ADR 0112](../docs/decisions/0112-define-the-poll-wait-order-and-the-worker-interval-range.md)).

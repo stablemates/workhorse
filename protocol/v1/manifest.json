@@ -92,6 +92,7 @@
     "budget-admission-serialization",
     "missing-handler-release",
     "unrunnable-task-release-wait",
+    "unrunnable-task-release-run",
     "json-value-round-trip",
     "heartbeat-failure-tolerance",
     "heartbeat-busy-retry",

@@ -320,23 +320,62 @@ export interface MissingHandlerRuntimeFixture extends RuntimeFixtureBase {
 }
 
 /**
- * A listening worker that cannot run a ready task claims it at most once in each poll interval.
- * The notification that each release sends does not end the wait that the release started.
+ * A listening worker that cannot run its one ready task claims it at most twice in each poll
+ * interval. The first claim releases the task, and the release run claims again at once. The second
+ * claim returns the same task, so the worker releases it again and starts the release wait. The
+ * notification that each release sends does not end that wait (ADR 0126).
  */
 export interface ReleaseWaitRuntimeFixture extends RuntimeFixtureBase {
   kind: "release-wait";
   registeredTaskType: string;
+  /**
+   * One slot. With more slots, the claim after a release can run before the release commits. It
+   * then finds no task and starts the release wait, so a run has one release or two.
+   */
+  concurrency: number;
   leaseMs: number;
   pollMs: number;
   /** How long the continuous loop runs before the runner counts the releases. */
   runMs: number;
-  expectedMinimumReleases: number;
-  expectedMaximumReleases: number;
   /**
-   * The least time between two releases of the task. It is below the shortest wait, the poll
-   * interval less its jitter, because each release statement stamps its event after the wait starts.
+   * The release waits in the run. A gap of at least `expectedMinimumReleaseGapMs` between two
+   * releases is a wait, and the releases between two waits are one release run.
+   */
+  expectedMinimumWaits: number;
+  expectedMaximumWaits: number;
+  /** The releases of each release run. The window can cut the last run short. */
+  expectedReleasesPerWait: number;
+  /**
+   * The least time between two release runs. It is below the shortest wait, the poll interval less
+   * its jitter, because each release statement stamps its event after the wait starts.
    */
   expectedMinimumReleaseGapMs: number;
+}
+
+/**
+ * A listening worker with one slot reaches a task that it can run behind tasks that it cannot run.
+ * Each release puts its task behind the other ready tasks, so the worker claims again at once,
+ * until the release run reaches its claim limit. Then the worker waits, and the next run reaches
+ * the rest (ADR 0126).
+ */
+export interface ReleaseRunRuntimeFixture extends RuntimeFixtureBase {
+  kind: "release-run";
+  registeredTaskType: string;
+  /** The tasks of `taskType` that the runner enqueues before the one task of `registeredTaskType`. */
+  unhandledTasks: number;
+  /** One slot, so each claim of the run starts after the release before it commits. */
+  concurrency: number;
+  leaseMs: number;
+  pollMs: number;
+  /** The release run limit: the released-only claims in a row before the release wait. */
+  expectedReleasesBeforeWait: number;
+  /** The most time between two releases of one release run. */
+  expectedMaximumRunGapMs: number;
+  /** The least time between the last release of the run and the next release, the release wait. */
+  expectedMinimumReleaseGapMs: number;
+  /** Each task that the worker cannot run, after the handled task succeeds. */
+  expectedAfterRelease: ExpectedRuntimeState;
+  expectedAfterHandled: ExpectedRuntimeState;
 }
 
 /**
@@ -688,6 +727,7 @@ export type RuntimeFixture =
   | BudgetAdmissionRaceRuntimeFixture
   | MissingHandlerRuntimeFixture
   | ReleaseWaitRuntimeFixture
+  | ReleaseRunRuntimeFixture
   | JsonRoundTripRuntimeFixture
   | CheckpointNoValueRuntimeFixture
   | DurableScriptRuntimeFixture

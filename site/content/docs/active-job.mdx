@@ -212,7 +212,9 @@ More detail: [Schema and protocol: Handlers](https://github.com/stablemates/work
 
 A worker can claim a task of a type that it has no handler for. Then Workhorse releases the task.
 Thus a typed job that is not in `jobs:` never runs. Each time a worker claims its task, the worker
-releases the task again. Each worker claims the task at most once in each poll interval.
+releases the task again. The release puts the task behind the other ready tasks, so the worker can
+still run the jobs behind it. If the task is the only ready task, each worker claims it at most
+twice in each poll interval.
 
 List every typed job in `jobs:`. Do not depend on Rails to load the job classes for you. In
 development, Rails does not load job classes eagerly.
@@ -223,12 +225,16 @@ development, Rails does not load job classes eagerly.
 - A claim has no task-type filter.
 - Each SDK releases a task of an unregistered type through `release_owned_v1` and records the
   `released` handler outcome. The release does not use an attempt.
-- A pass whose claims were all unrunnable counts as empty for the poll backoff.
-- If every task of a claim was released, `Worker#run` starts a release wait. It ends only at its
-  deadline, on stop, or on pause.
+- `release_owned_v1` gives the task a new `sequence`, so the task goes behind the other ready tasks
+  of its priority. It keeps the priority.
+- If every task of a claim was released, `Worker#run` claims again at once. This release run ends
+  at a claim that returns a task that the run already released, at its 10th claim, or at a claim
+  that returns no task.
+- When a release run ends, `Worker#run` starts a release wait. The wait counts as one empty claim
+  for the poll backoff. It ends only at its deadline, on stop, or on pause.
 - `release_owned_v1` notifies `workhorse_tasks`. That notification does not end the release wait.
-- A listening worker waits for its poll interval between these claims: 5,000 ms by default, ±10%
-  jitter. A worker without an active listener waits for its poll backoff.
+- A listening worker waits for its poll interval between two release runs: 5,000 ms by default,
+  ±10% jitter. A worker without an active listener waits for its poll backoff.
 
 More detail: [Task lifecycle: Owned release](https://github.com/stablemates/workhorse/blob/main/docs/architecture/lifecycle.md#owned-release) and [Operations: Polling cadence](https://github.com/stablemates/workhorse/blob/main/docs/architecture/operations.md#polling-cadence).
 

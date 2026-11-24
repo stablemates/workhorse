@@ -368,7 +368,9 @@ describe("worker dispatch", () => {
     await running;
   });
 
-  it("treats a claim of only unhandled tasks as empty and releases them", async () => {
+  // SM-1905: each release puts its task behind the other ready tasks, so the next claim reaches
+  // the next task. The worker claims again at once until the release run reaches its limit.
+  it("claims again at once after a claim of only unhandled tasks, up to the release run limit", async () => {
     let supplied = 0;
     const fake = fakeQueue({
       answer: () => {
@@ -377,16 +379,96 @@ describe("worker dispatch", () => {
       },
     });
     const worker = new Worker(fake.queue, {
-      concurrency: 4,
+      concurrency: 1,
       registryIntervalMs: 0,
       pollMs: 200,
     }).handle("dispatch", async () => null);
     const running = worker.run();
 
-    await fake.claimsReceived(1);
+    await fake.claimsReceived(10);
     await sleep(100);
-    expect(fake.limits).toHaveLength(1);
-    expect(fake.released).toEqual(["unknown-1"]);
+    expect(fake.limits).toHaveLength(10);
+    expect(fake.released).toEqual(Array.from({ length: 10 }, (_, index) => `unknown-${index + 1}`));
+
+    // The release wait ends at its deadline, and a new run starts.
+    await fake.claimsReceived(11);
+
+    worker.stop();
+    await running;
+  });
+
+  it("starts the release wait when a claim returns a task that the run released", async () => {
+    const fake = fakeQueue({ answer: () => [claimedTask("unknown-1", "no-handler")] });
+    const worker = new Worker(fake.queue, {
+      concurrency: 1,
+      registryIntervalMs: 0,
+      pollMs: 200,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+
+    await fake.claimsReceived(2);
+    await sleep(100);
+    expect(fake.limits).toHaveLength(2);
+    expect(fake.released).toEqual(["unknown-1", "unknown-1"]);
+
+    worker.stop();
+    await running;
+  });
+
+  it("ends the release run at a claim that runs a handler", async () => {
+    let supplied = 0;
+    const fake = fakeQueue({
+      answer: () => {
+        supplied += 1;
+        // The ninth claim reaches a task with a handler. Then the same task that the run released
+        // first comes back, and it does not end the new run.
+        if (supplied === 9) return [claimedTask("handled", "dispatch")];
+        return [claimedTask(supplied > 9 ? "unknown-1" : `unknown-${supplied}`, "no-handler")];
+      },
+    });
+    const worker = new Worker(fake.queue, {
+      concurrency: 1,
+      registryIntervalMs: 0,
+      pollMs: 200,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+
+    await fake.claimsReceived(11);
+    await sleep(100);
+    expect(fake.limits).toHaveLength(11);
+    expect(fake.completed).toEqual(["handled"]);
+
+    worker.stop();
+    await running;
+  });
+
+  // With more than one slot, the claim after a release can run before the release commits and
+  // find no task. If its wait were an empty wait, the notification of that release would end it.
+  it("starts the release wait after an empty claim inside a release run", async () => {
+    const fake = fakeQueue();
+    let notify: (() => void) | undefined;
+    const queue = {
+      ...fake.queue,
+      subscribeToTaskNotifications: async (_queue: string, onNotification: () => void) => {
+        notify = onNotification;
+        return { close: async () => {} };
+      },
+    } as unknown as WorkerQueueApi;
+    const worker = new Worker(queue, {
+      concurrency: 1,
+      registryIntervalMs: 0,
+      pollMs: 60_000,
+    }).handle("dispatch", async () => null);
+    const running = worker.run();
+    await fake.claimsReceived(1);
+    fake.held[0]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
+    await fake.claimsReceived(2);
+    fake.held[1]!.answer.resolve([]);
+    await settle();
+
+    notify?.();
+    await sleep(100);
+    expect(fake.limits).toHaveLength(2);
 
     worker.stop();
     await running;
@@ -410,23 +492,26 @@ describe("worker dispatch", () => {
       pollMs: 60_000,
     }).handle("dispatch", async () => null);
     const running = worker.run();
+    // The second claim returns the task that the first one released, so the release wait starts.
     await fake.claimsReceived(1);
     fake.held[0]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
+    await fake.claimsReceived(2);
+    fake.held[1]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
     await settle();
-    expect(fake.released).toEqual(["unknown-1"]);
+    expect(fake.released).toEqual(["unknown-1", "unknown-1"]);
 
     notify?.();
     await sleep(100);
-    expect(fake.limits).toHaveLength(1);
+    expect(fake.limits).toHaveLength(2);
 
     // A resume claims at once, without the rest of the release wait.
     worker.pause();
     await settle();
     worker.resume();
-    await fake.claimsReceived(2);
+    await fake.claimsReceived(3);
 
     worker.stop();
-    fake.held[1]!.answer.resolve([]);
+    fake.held[2]!.answer.resolve([]);
     await running;
   });
 
@@ -738,14 +823,16 @@ describe("worker dispatch under a wall clock step", () => {
     try {
       await fake.claimsReceived(1);
       fake.held[0]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
+      await fake.claimsReceived(2);
+      fake.held[1]!.answer.resolve([claimedTask("unknown-1", "no-handler")]);
       await settle();
-      expect(fake.released).toEqual(["unknown-1"]);
+      expect(fake.released).toEqual(["unknown-1", "unknown-1"]);
 
       // The notification wakes the loop, which checks the wait again. The step must not end it.
       stepWallClock(10 * 60_000);
       notify?.();
       await sleep(100);
-      expect(fake.limits).toHaveLength(1);
+      expect(fake.limits).toHaveLength(2);
     } finally {
       vi.restoreAllMocks();
       worker.stop();

@@ -384,17 +384,35 @@
     "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
   },
   {
-    "id": "a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval",
+    "id": "a-listening-worker-claims-a-task-it-cannot-run-at-most-twice-in-each-poll-interval",
     "kind": "release-wait",
     "covers": ["unrunnable-task-release-wait"],
     "taskType": "protocol.release-wait",
     "registeredTaskType": "protocol.release-wait-registered",
+    "concurrency": 1,
     "leaseMs": 5000,
     "pollMs": 1000,
     "runMs": 2500,
-    "expectedMinimumReleases": 2,
-    "expectedMaximumReleases": 3,
+    "expectedMinimumWaits": 2,
+    "expectedMaximumWaits": 3,
+    "expectedReleasesPerWait": 2,
     "expectedMinimumReleaseGapMs": 800
+  },
+  {
+    "id": "a-listening-worker-claims-past-the-tasks-it-cannot-run-before-it-waits",
+    "kind": "release-run",
+    "covers": ["unrunnable-task-release-run"],
+    "taskType": "protocol.release-run",
+    "registeredTaskType": "protocol.release-run-registered",
+    "unhandledTasks": 11,
+    "concurrency": 1,
+    "leaseMs": 5000,
+    "pollMs": 1000,
+    "expectedReleasesBeforeWait": 10,
+    "expectedMaximumRunGapMs": 500,
+    "expectedMinimumReleaseGapMs": 800,
+    "expectedAfterRelease": { "state": "ready", "attempt": 1 },
+    "expectedAfterHandled": { "state": "succeeded", "attempt": 1 }
   },
   {
     "id": "json-values-survive-the-payload-and-result-round-trip",

@@ -18,6 +18,24 @@ The worker logged `workhorse.worker.shutdown_settlement_failed`, although no wri
 already returned no error, and the outcome was already `lease_lost`. The worker now writes the
 record only for a write that fails for another reason, as TypeScript and Python do (SM-2074).
 
+### A worker reaches a task that it can run behind tasks that it cannot run
+
+A worker with one slot claimed a ready task that it had no handler for. It released the task and
+waited one poll interval before it claimed again. Each release put the task behind the other ready
+tasks, but the worker waited again for each such task. Thus a task behind four such tasks waited
+about 20 s with the default poll interval (SM-1905).
+
+The worker now claims again at once after a claim that released every task, in `Worker.Run`. This
+release run ends at a claim that gets back a task that the run released, at its tenth claim, or at a
+claim that returns no task. Then the worker starts the release wait, as before. All seven SDKs do
+the same (ADR 0126).
+
+- A worker that has no handler for its only ready task now releases that task at most twice in each
+  poll interval, not once. With one slot, the second claim gets the task back and ends the run.
+- `Worker.RunOnce` does not change.
+- A task without a handler at a higher priority still keeps the worker from the lower-priority
+  tasks, because the release keeps the priority. SM-2085 records the schema change for this case.
+
 ### A provider that another package registers first gets the worker telemetry
 
 An application can register its OpenTelemetry providers in the `init` function of a package that

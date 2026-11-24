@@ -226,6 +226,7 @@ final class RuntimeFixtures {
         case "budget-admission-race" -> budgetRace(fixture);
         case "missing-handler" -> missingHandler(fixture);
         case "release-wait" -> releaseWait(fixture);
+        case "release-run" -> releaseRun(fixture);
         case "subscription-recovery" -> subscriptionRecovery(fixture);
         case "json-round-trip" -> jsonRoundTrip(fixture);
         case "checkpoint-no-value" -> checkpointNoValue(fixture);
@@ -1760,17 +1761,7 @@ final class RuntimeFixtures {
     UUID taskId = enqueue(taskType(fixture), Map.of(), options(name));
     long listeners;
     try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
-      Worker subject =
-          Worker.builder(pool)
-              .queues(name)
-              .workerId("jvm-" + fixture.get("id"))
-              .disableRegistry(true)
-              .lease(millis(fixture, "leaseMs"))
-              .pollInterval(millis(fixture, "pollMs"))
-              .shutdownGrace(JOIN_GRACE)
-              .handle(
-                  (String) fixture.get("registeredTaskType"), Object.class, (ctx, payload) -> null)
-              .build();
+      Worker subject = releaseWorker(pool, name, fixture);
       CompletableFuture<Void> run = running(subject, subject::run);
       try {
         Thread.sleep((Long) fixture.get("runMs"));
@@ -1796,16 +1787,127 @@ final class RuntimeFixtures {
                 + "' AND event_type = 'released' ORDER BY occurred_at")) {
       times.add((Double) row.get("at_ms"));
     }
+    // A gap of at least the least wait is a release wait. The releases between two waits are one
+    // release run: the claim that released the task and the claim that got it back.
+    long leastGap = (Long) fixture.get("expectedMinimumReleaseGapMs");
+    List<List<Double>> runs = new ArrayList<>();
+    for (int index = 0; index < times.size(); index++) {
+      if (index == 0 || times.get(index) - times.get(index - 1) >= leastGap) {
+        runs.add(new ArrayList<>());
+      }
+      runs.get(runs.size() - 1).add(times.get(index));
+    }
     check(
-        times.size() >= (Long) fixture.get("expectedMinimumReleases")
-            && times.size() <= (Long) fixture.get("expectedMaximumReleases"),
-        "the worker released the task " + times.size() + " times while it ran");
+        runs.size() >= (Long) fixture.get("expectedMinimumWaits")
+            && runs.size() <= (Long) fixture.get("expectedMaximumWaits"),
+        "the worker made " + runs.size() + " release runs while it ran: " + runs);
+    // The end of the window can cut the last run short.
+    long perWait = (Long) fixture.get("expectedReleasesPerWait");
+    for (int index = 0; index < runs.size(); index++) {
+      int size = runs.get(index).size();
+      check(
+          size == perWait || (index == runs.size() - 1 && size < perWait),
+          "release run " + index + " has " + size + " releases: " + runs);
+    }
+  }
+
+  /**
+   * A listening worker with the slots of the fixture and a handler only for its registered type.
+   */
+  private static Worker releaseWorker(
+      Intercept pool, String name, Map<String, @Nullable Object> fixture) {
+    return Worker.builder(pool)
+        .queues(name)
+        .workerId("jvm-" + fixture.get("id"))
+        .disableRegistry(true)
+        .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
+        .lease(millis(fixture, "leaseMs"))
+        .pollInterval(millis(fixture, "pollMs"))
+        .shutdownGrace(JOIN_GRACE)
+        .handle((String) fixture.get("registeredTaskType"), Object.class, (ctx, payload) -> null)
+        .build();
+  }
+
+  /**
+   * A worker with one slot reaches a task that it can run behind tasks that it cannot run. Each
+   * release puts its task behind the others, so the worker claims again at once until the release
+   * run reaches its limit.
+   */
+  private void releaseRun(Map<String, @Nullable Object> fixture) throws Exception {
+    String name = queueName(fixture);
+    List<UUID> unhandled = new ArrayList<>();
+    for (long index = 0; index < (Long) fixture.get("unhandledTasks"); index++) {
+      unhandled.add(enqueue(taskType(fixture), Map.of("index", index), options(name)));
+    }
+    UUID handled = enqueue((String) fixture.get("registeredTaskType"), Map.of(), options(name));
+    @SuppressWarnings("unchecked")
+    Map<String, @Nullable Object> afterHandled =
+        (Map<String, @Nullable Object>) fixture.get("expectedAfterHandled");
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject = releaseWorker(pool, name, fixture);
+      CompletableFuture<Void> run = running(subject, subject::run);
+      try {
+        eventually(
+            "the handled task did not succeed",
+            10,
+            () -> Objects.equals(state(handled).get("state"), afterHandled.get("state")));
+      } finally {
+        subject.stop();
+      }
+      run.get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
+    }
+    // The releases before the handled task succeeded. The worker claims again after it, and the
+    // runner ignores those releases.
+    StringBuilder ids = new StringBuilder();
+    for (UUID id : unhandled) {
+      ids.append(ids.isEmpty() ? "" : ",").append('\'').append(id).append('\'');
+    }
+    List<String> released = new ArrayList<>();
+    List<Double> times = new ArrayList<>();
+    synchronized (connection) {
+      for (Map<String, @Nullable Object> row :
+          Runner.sql(
+              connection,
+              "SELECT event.task_id::text AS task_id,"
+                  + " (extract(epoch FROM event.occurred_at) * 1000)::float8 AS at_ms"
+                  + " FROM workhorse.task_event event WHERE event.task_id IN ("
+                  + ids
+                  + ") AND event.event_type = 'released' AND event.occurred_at < ("
+                  + "SELECT succeeded.occurred_at FROM workhorse.task_event succeeded"
+                  + " WHERE succeeded.task_id = '"
+                  + handled
+                  + "' AND succeeded.event_type = 'succeeded')"
+                  + " ORDER BY event.occurred_at, event.task_id")) {
+        released.add((String) row.get("task_id"));
+        times.add((Double) row.get("at_ms"));
+      }
+    }
+    // Each release put its task behind the others, so the worker released each task once.
+    List<String> expected = new ArrayList<>();
+    unhandled.forEach(id -> expected.add(id.toString()));
+    List<String> sorted = new ArrayList<>(released);
+    sorted.sort(null);
+    expected.sort(null);
+    check(
+        sorted.equals(expected),
+        "the worker released " + released + " before the handled task, want each of " + expected);
+    long limit = (Long) fixture.get("expectedReleasesBeforeWait");
     for (int index = 1; index < times.size(); index++) {
       double gap = times.get(index) - times.get(index - 1);
       check(
-          gap >= (Long) fixture.get("expectedMinimumReleaseGapMs"),
-          "the worker released the task again after " + Math.round(gap) + " ms");
+          index >= limit || gap < (Long) fixture.get("expectedMaximumRunGapMs"),
+          "release " + (index + 1) + " of the run came " + Math.round(gap) + " ms after the last");
+      check(
+          index != limit || gap >= (Long) fixture.get("expectedMinimumReleaseGapMs"),
+          "the release wait after the run lasted only " + Math.round(gap) + " ms");
     }
+    @SuppressWarnings("unchecked")
+    Map<String, @Nullable Object> afterRelease =
+        (Map<String, @Nullable Object>) fixture.get("expectedAfterRelease");
+    for (UUID id : unhandled) {
+      expectState(id, afterRelease);
+    }
+    expectState(handled, afterHandled);
   }
 
   /** The shortest wait at the notification base: 5 s less its jitter of 10 %. */

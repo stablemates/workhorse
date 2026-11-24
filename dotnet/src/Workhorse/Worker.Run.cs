@@ -78,6 +78,12 @@ public sealed partial class Worker
         /// <summary>Whether the subscription was live when the run chose its last wait.</summary>
         internal bool ListenedAtLastWait;
         internal EmptyWait? EmptyWait;
+
+        /// <summary>Whether the run is the continuous loop. Only that loop claims again in a release run.</summary>
+        internal bool Continuous;
+
+        /// <summary>The claims in a row that released every task they claimed (ADR 0126).</summary>
+        internal readonly ReleaseRun ReleaseRun = new();
         internal bool PassEnded;
         internal bool ClaimedAny;
         internal Exception? ClaimError;
@@ -229,6 +235,7 @@ public sealed partial class Worker
         }
 
         var run = StartRun(version);
+        run.Continuous = continuous;
         // As in TypeScript, only RunAsync writes the life-cycle records, and it writes the start
         // first. RunOnceAsync writes none.
         if (continuous)

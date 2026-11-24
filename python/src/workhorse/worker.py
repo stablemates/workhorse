@@ -445,6 +445,10 @@ _REDACTED_ERROR_MESSAGE = "Task handler failed; details redacted"
 # it claims again, so a task enqueued into a quiet queue is never delayed past it.
 _MAX_EMPTY_POLL_MS = 5_000
 _NOTIFICATION_CLAIM_DELAY_SECONDS = 0.05
+# Claims in a row that only release their tasks before the run loop starts a release wait. A release
+# gives the task a new place behind the other ready tasks of its priority, so each claim of the run
+# reaches the next task (ADR 0126).
+_RELEASE_RUN_LIMIT = 10
 # While PostgreSQL answers not_due, the expiry watch asks again after this wait. The wait doubles
 # after each answer, up to the maximum. Each request locks the task row, so a short fixed retry
 # makes the heartbeat of the attempt answer busy (SM-1701).
@@ -537,6 +541,12 @@ class _DispatchSlots:
     # so a wake does not end that wait: only its deadline, a stop, or a pause does.
     empty_wait: tuple[float, int | None] | None = None
     consecutive_empty_claims: int = 0
+    # Whether the loop is the continuous loop. Only that loop claims again in a release run.
+    continuous: bool = False
+    # The release run: the claims in a row that released every task they claimed, and the ids of
+    # those tasks. A claim that ran a handler, an empty claim, or a release wait ends it (ADR 0126).
+    release_run_claims: int = 0
+    release_run_task_ids: set[str] = field(default_factory=set)
     # Whether the last chosen wait had a live subscription. The backoff restarts after a loss.
     listened_at_last_wait: bool = False
     claimed_any: bool = False
@@ -2638,6 +2648,7 @@ class Worker:
                 for cohort in range(cohorts)
             ],
             listener=listener,
+            continuous=continuous,
             cohort_active=[0] * cohorts,
             cohort_handed_over=[0] * cohorts,
             cohort_reserved=[0] * cohorts,
@@ -2902,18 +2913,34 @@ class Worker:
             if slots.claim_error is None:
                 slots.claim_error = outcome.error
             return
-        # A claim that only handed its tasks back made no progress: every one of them goes
-        # straight back to its queue. It backs off like an empty claim instead of spinning on
-        # a task no handler here can run, and a caller looping run_once backs off too.
         if any(task.type in self._handlers for task, _ in outcome.claimed):
             slots.consecutive_empty_claims = 0
             slots.claimed_any = True
             slots.empty_wait = None
+            slots.release_run_claims = 0
+            slots.release_run_task_ids.clear()
             return
-        slots.consecutive_empty_claims += 1
+        # A claim that only handed its tasks back made no progress, so a single pass ends.
         slots.pass_ended = True
+        # An empty claim inside a run can find only the tasks whose release is still in flight. It
+        # starts the release wait too, so the notification of that release does not end the wait.
+        releasing = bool(outcome.claimed) or slots.release_run_claims > 0
+        if outcome.claimed and slots.continuous:
+            # Each release moved its task behind the other ready tasks of its priority. The next
+            # claim reaches the next task, so the run claims again at once. A task that comes back,
+            # or a long run, starts the release wait: claiming again then would spin on a task no
+            # handler here can run.
+            task_ids = {task.id for task, _ in outcome.claimed}
+            repeated = not task_ids.isdisjoint(slots.release_run_task_ids)
+            slots.release_run_task_ids |= task_ids
+            slots.release_run_claims += 1
+            if not repeated and slots.release_run_claims < _RELEASE_RUN_LIMIT:
+                return
+        slots.release_run_claims = 0
+        slots.release_run_task_ids.clear()
+        slots.consecutive_empty_claims += 1
         deadline = monotonic() + self._dispatch_wait_seconds(slots)
-        if not outcome.claimed:
+        if not releasing:
             if slots.empty_wait is None:
                 slots.empty_wait = (deadline, outcome.wake_version)
         elif slots.empty_wait is None or slots.empty_wait[1] is not None:

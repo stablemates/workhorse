@@ -1111,11 +1111,16 @@ connection.
 | ------------------------------------------- | --------------------------------------------------- |
 | Active listener, `Worker.run()`             | 5,000 ms default fallback poll, ±10% jitter         |
 | Notification after an empty claim           | Random delay from 0 through 50 ms before claiming   |
-| Claim that released every task              | The next empty wait; a notification does not end it |
+| Claim that released every task              | None; the release run claims again at once          |
+| End of a release run                        | The next empty wait; a notification does not end it |
 | Explicit `pollMs`                           | Replaces both bases; no cap with an active listener |
 | No active listener, first empty wait        | 250 ms, ±10% jitter                                 |
 | No active listener, consecutive empty waits | Double through a 5,000 ms cap, ±10% jitter          |
 | `runOnce()`                                 | No wait; never opens a listener                     |
+
+A release run ends at a claim that returns a task that the run already released, at its tenth
+claim, or at a claim that returns no task
+([Task lifecycle: Continuous loop](lifecycle.md#continuous-loop)).
 
 Every pass uses authoritative `claim_many_v1` transitions.
 

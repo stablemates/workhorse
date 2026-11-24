@@ -104,6 +104,7 @@ module Conformance
       when "budget-admission-race" then budget_race(fixture)
       when "missing-handler" then missing_handler(fixture)
       when "release-wait" then release_wait(fixture)
+      when "release-run" then release_run(fixture)
       when "json-round-trip" then json_round_trip(fixture)
       when "checkpoint-no-value" then checkpoint_no_value(fixture)
       when "durable-script" then DurableScript.new(@url, fixture).run("all")
@@ -988,10 +989,7 @@ module Conformance
       name = queue_name(fixture)
       task_id = queue.enqueue(fixture["taskType"], {}, queue: name).task_id
       with_pool do |pool|
-        subject = W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true,
-          lease: fixture["leaseMs"] / 1000.0, poll_interval: fixture["pollMs"] / 1000.0,
-          shutdown_grace: JOIN_GRACE)
-          .handle(fixture["registeredTaskType"]) { nil }
+        subject = release_worker(pool, name, fixture)
         thread = Thread.new { subject.run }
         begin
           sleep(fixture["runMs"] / 1000.0)
@@ -1008,12 +1006,71 @@ module Conformance
       times = @connection.exec_params("SELECT (extract(epoch FROM occurred_at) * 1000)::float8 AS at_ms " \
         "FROM workhorse.task_event WHERE task_id = $1 AND event_type = 'released' ORDER BY occurred_at", [task_id])
         .map { |row| Float(row["at_ms"]) }
-      check(times.size.between?(fixture["expectedMinimumReleases"], fixture["expectedMaximumReleases"]),
-        "the worker released the task #{times.size} times while it ran")
-      times.each_cons(2) do |earlier, later|
-        check(later - earlier >= fixture["expectedMinimumReleaseGapMs"],
-          "the worker released the task again after #{(later - earlier).round} ms")
+      # A gap of at least the least wait is a release wait. The releases between two waits are one
+      # release run: the claim that released the task and the claim that got it back.
+      runs = times.slice_when { |earlier, later| later - earlier >= fixture["expectedMinimumReleaseGapMs"] }.to_a
+      check(runs.size.between?(fixture["expectedMinimumWaits"], fixture["expectedMaximumWaits"]),
+        "the worker made #{runs.size} release runs while it ran: #{runs}")
+      # The end of the window can cut the last run short.
+      per_wait = fixture["expectedReleasesPerWait"]
+      check(runs[...-1].all? { |run| run.size == per_wait } && runs.last.size <= per_wait,
+        "release runs #{runs.map(&:size)}, want #{per_wait} releases each")
+    end
+
+    # A listening worker with the slots of the fixture and a handler only for registeredTaskType.
+    def release_worker(pool, name, fixture)
+      W::Worker.new(pool, queues: [name], worker_id: "ruby-#{fixture["id"]}", disable_registry: true,
+        concurrency: fixture["concurrency"], lease: fixture["leaseMs"] / 1000.0,
+        poll_interval: fixture["pollMs"] / 1000.0, shutdown_grace: JOIN_GRACE)
+        .handle(fixture["registeredTaskType"]) { nil }
+    end
+
+    # A worker with one slot reaches a task that it can run behind tasks that it cannot run. Each
+    # release puts its task behind the others, so the worker claims again at once until the release
+    # run reaches its limit.
+    def release_run(fixture)
+      name = queue_name(fixture)
+      unhandled = Array.new(fixture["unhandledTasks"]) do |index|
+        queue.enqueue(fixture["taskType"], {"index" => index}, queue: name).task_id
       end
+      handled = queue.enqueue(fixture["registeredTaskType"], {}, queue: name).task_id
+      with_pool do |pool|
+        subject = release_worker(pool, name, fixture)
+        thread = Thread.new { subject.run }
+        begin
+          eventually("the handled task did not succeed") do
+            state(handled)["state"] == fixture["expectedAfterHandled"]["state"]
+          end
+        ensure
+          subject.stop
+          check(thread.join(RUN_WAIT), "the worker did not stop")
+        end
+        thread.value
+      end
+      # The releases before the handled task succeeded. The worker claims again after it, and the
+      # runner ignores those releases.
+      encoded = PG::TextEncoder::Array.new.encode(unhandled)
+      releases = @connection.exec_params(<<~SQL, [encoded, handled]).map { |row| [row["task_id"], Float(row["at_ms"])] }
+        SELECT event.task_id::text AS task_id, (extract(epoch FROM event.occurred_at) * 1000)::float8 AS at_ms
+          FROM workhorse.task_event event
+         WHERE event.task_id = ANY($1::uuid[]) AND event.event_type = 'released'
+           AND event.occurred_at < (
+             SELECT succeeded.occurred_at FROM workhorse.task_event succeeded
+              WHERE succeeded.task_id = $2 AND succeeded.event_type = 'succeeded'
+           )
+         ORDER BY event.occurred_at, event.task_id
+      SQL
+      # Each release put its task behind the others, so the worker released each task once.
+      check(releases.map(&:first).sort == unhandled.sort,
+        "the worker released #{releases.map(&:first)} before the handled task, want each of #{unhandled} once")
+      gaps = releases.map(&:last).each_cons(2).map { |earlier, later| later - earlier }
+      limit = fixture["expectedReleasesBeforeWait"]
+      check(gaps.first(limit - 1).all? { |gap| gap < fixture["expectedMaximumRunGapMs"] },
+        "release gaps of the run #{gaps.first(limit - 1).map(&:round)}")
+      check(gaps[limit - 1] >= fixture["expectedMinimumReleaseGapMs"],
+        "the release wait after the run lasted only #{gaps[limit - 1].round} ms")
+      unhandled.each { |task_id| expect_state(task_id, fixture["expectedAfterRelease"]) }
+      expect_state(handled, fixture["expectedAfterHandled"])
     end
 
     def json_round_trip(fixture)

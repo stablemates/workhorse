@@ -162,6 +162,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
             "budget-admission-race" => BudgetRaceAsync(fixture),
             "missing-handler" => MissingHandlerAsync(fixture),
             "release-wait" => ReleaseWaitAsync(fixture),
+            "release-run" => ReleaseRunAsync(fixture),
             "subscription-recovery" => SubscriptionRecoveryAsync(fixture),
             "json-round-trip" => JsonRoundTripAsync(fixture),
             "checkpoint-no-value" => CheckpointNoValueAsync(fixture),
@@ -1574,17 +1575,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         var listened = false;
         await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
         {
-            var options = BaseOptions(name, $"dotnet-{Runner.Text(fixture["id"])}");
-            options.PollingOnly = false;
-            options.Lease = Millis(fixture, "leaseMs");
-            options.PollInterval = Millis(fixture, "pollMs");
-            // The shared server can stall a claim on its WAL flush for longer than Patience. A stop
-            // during that claim waits until ShutdownGrace, so the grace must end before Patience
-            // (SM-1799).
-            options.ShutdownGrace = ReleaseWaitShutdownGrace;
-            // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
-            var subject = new Worker(pool.DataSource, options);
-            subject.Handle<JsonElement>((string)fixture["registeredTaskType"]!, (_, _) => Task.CompletedTask);
+            var subject = ReleaseWorker(pool, name, fixture);
             var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
             try
             {
@@ -1610,14 +1601,114 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
                 $"SELECT (extract(epoch FROM occurred_at) * 1000)::float8 AS at_ms FROM workhorse.task_event WHERE task_id = '{taskId}' AND event_type = 'released' ORDER BY occurred_at"))
             .Select(row => Convert.ToDouble(Json.Object(row)!["at_ms"], CultureInfo.InvariantCulture))
             .ToList();
-        Failure.Check(
-            times.Count >= (long)fixture["expectedMinimumReleases"]! && times.Count <= (long)fixture["expectedMaximumReleases"]!,
-            $"the worker released the task {times.Count} times while it ran");
-        for (var index = 1; index < times.Count; index++)
+        // A gap of at least the least wait is a release wait. The releases between two waits are one
+        // release run: the claim that released the task and the claim that got it back.
+        var leastGap = (long)fixture["expectedMinimumReleaseGapMs"]!;
+        var runs = new List<List<double>>();
+        for (var index = 0; index < times.Count; index++)
         {
-            var gap = times[index] - times[index - 1];
-            Failure.Check(gap >= (long)fixture["expectedMinimumReleaseGapMs"]!, $"the worker released the task again after {Math.Round(gap)} ms");
+            if (index == 0 || times[index] - times[index - 1] >= leastGap)
+            {
+                runs.Add([]);
+            }
+
+            runs[^1].Add(times[index]);
         }
+
+        var sizes = string.Join(", ", runs.Select(run => run.Count));
+        Failure.Check(
+            runs.Count >= (long)fixture["expectedMinimumWaits"]! && runs.Count <= (long)fixture["expectedMaximumWaits"]!,
+            $"the worker made {runs.Count} release runs while it ran, of sizes {sizes}");
+        // The end of the window can cut the last run short.
+        var perWait = (long)fixture["expectedReleasesPerWait"]!;
+        for (var index = 0; index < runs.Count; index++)
+        {
+            var size = runs[index].Count;
+            Failure.Check(size == perWait || (index == runs.Count - 1 && size < perWait), $"release run {index} has {size} releases, of sizes {sizes}");
+        }
+    }
+
+    /// <summary>A listening worker with the slots of the fixture and a handler only for its registered type.</summary>
+    private static Worker ReleaseWorker(Intercept pool, string name, OrderedDictionary<string, object?> fixture)
+    {
+        var options = BaseOptions(name, $"dotnet-{Runner.Text(fixture["id"])}");
+        options.PollingOnly = false;
+        options.Concurrency = checked((int)(long)fixture["concurrency"]!);
+        options.Lease = Millis(fixture, "leaseMs");
+        options.PollInterval = Millis(fixture, "pollMs");
+        // The shared server can stall a claim on its WAL flush for longer than Patience. A stop
+        // during that claim waits until ShutdownGrace, so the grace must end before Patience
+        // (SM-1799).
+        options.ShutdownGrace = ReleaseWaitShutdownGrace;
+        // The runner does not dispose the worker, because DisposeAsync waits for the run without a bound (SM-1801).
+        var subject = new Worker(pool.DataSource, options);
+        subject.Handle<JsonElement>((string)fixture["registeredTaskType"]!, (_, _) => Task.CompletedTask);
+        return subject;
+    }
+
+    /// <summary>
+    /// A worker with one slot reaches a task that it can run behind tasks that it cannot run. Each
+    /// release puts its task behind the others, so the worker claims again at once until the release
+    /// run reaches its limit.
+    /// </summary>
+    private async Task ReleaseRunAsync(OrderedDictionary<string, object?> fixture)
+    {
+        var name = QueueName(fixture);
+        var unhandled = new List<Guid>();
+        for (var index = 0L; index < (long)fixture["unhandledTasks"]!; index++)
+        {
+            unhandled.Add(await EnqueueAsync(TaskType(fixture), Json.Members(("index", index)), Options(name)));
+        }
+
+        var handled = await EnqueueAsync((string)fixture["registeredTaskType"]!, Json.Members(), Options(name));
+        var afterHandled = Get(fixture, "expectedAfterHandled");
+        await using (var pool = Intercept.Create(_database, Intercept.Hook.None))
+        {
+            var subject = ReleaseWorker(pool, name, fixture);
+            var run = Running(subject, () => subject.RunAsync(CancellationToken.None));
+            try
+            {
+                await EventuallyAsync(
+                    "the handled task did not succeed",
+                    10,
+                    async () => Equals((await StateAsync(handled))["state"], afterHandled["state"]));
+            }
+            finally
+            {
+                subject.Stop();
+                await StoppedAsync(run, ReleaseWaitShutdownGrace);
+            }
+
+            await JoinAsync(run);
+        }
+
+        // The releases before the handled task succeeded. The worker claims again after it, and the
+        // runner ignores those releases.
+        var ids = string.Join(", ", unhandled.Select(id => $"'{id}'"));
+        var releases = (await RowsAsync(
+                $"SELECT event.task_id::text AS task_id, (extract(epoch FROM event.occurred_at) * 1000)::float8 AS at_ms FROM workhorse.task_event event WHERE event.task_id IN ({ids}) AND event.event_type = 'released' AND event.occurred_at < (SELECT succeeded.occurred_at FROM workhorse.task_event succeeded WHERE succeeded.task_id = '{handled}' AND succeeded.event_type = 'succeeded') ORDER BY event.occurred_at, event.task_id"))
+            .Select(row => Json.Object(row)!)
+            .Select(row => (TaskId: (string)row["task_id"]!, AtMs: Convert.ToDouble(row["at_ms"], CultureInfo.InvariantCulture)))
+            .ToList();
+        // Each release put its task behind the others, so the worker released each task once.
+        var released = releases.Select(release => release.TaskId).Order(StringComparer.Ordinal).ToList();
+        var expected = unhandled.Select(id => id.ToString()).Order(StringComparer.Ordinal).ToList();
+        Failure.Check(released.SequenceEqual(expected), $"the worker released {string.Join(", ", released)} before the handled task, want each of {string.Join(", ", expected)} once");
+        var limit = (long)fixture["expectedReleasesBeforeWait"]!;
+        for (var index = 1; index < releases.Count; index++)
+        {
+            var gap = releases[index].AtMs - releases[index - 1].AtMs;
+            Failure.Check(index >= limit || gap < (long)fixture["expectedMaximumRunGapMs"]!, $"release {index + 1} of the run came {Math.Round(gap)} ms after the one before");
+            Failure.Check(index != limit || gap >= (long)fixture["expectedMinimumReleaseGapMs"]!, $"the release wait after the run lasted only {Math.Round(gap)} ms");
+        }
+
+        var afterRelease = Get(fixture, "expectedAfterRelease");
+        foreach (var id in unhandled)
+        {
+            await ExpectStateAsync(id, afterRelease);
+        }
+
+        await ExpectStateAsync(handled, afterHandled);
     }
 
     /// <summary>The shortest wait at the notification base: 5 s less its jitter of 10 %.</summary>

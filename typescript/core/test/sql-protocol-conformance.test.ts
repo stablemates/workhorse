@@ -64,6 +64,7 @@ import type {
   ResultContractFailureRuntimeFixture,
   ShutdownCancellationRuntimeFixture,
   PollCadenceRuntimeFixture,
+  ReleaseRunRuntimeFixture,
   ReleaseWaitRuntimeFixture,
   SlotRefillRuntimeFixture,
   SubscriptionRecoveryRuntimeFixture,
@@ -1402,6 +1403,7 @@ async function executeReleaseWaitRuntimeFixture(
   const worker = new Worker(queue, {
     workerId: `runtime-${fixture.id}`,
     queue: queueName,
+    concurrency: fixture.concurrency,
     leaseMs: fixture.leaseMs,
     pollMs: fixture.pollMs,
     registryIntervalMs: 0,
@@ -1429,16 +1431,100 @@ async function executeReleaseWaitRuntimeFixture(
     [id],
   );
   const times = released.rows.map((row) => Number(row.at_ms));
-  expect(times.length, "releases while the worker ran").toBeGreaterThanOrEqual(
-    fixture.expectedMinimumReleases,
+  // A gap of at least the least wait is a release wait. The releases between two waits are one
+  // release run: the claim that released the task and the claim that got it back.
+  const runs: number[][] = [];
+  for (const [index, time] of times.entries()) {
+    if (index === 0 || time - times[index - 1]! >= fixture.expectedMinimumReleaseGapMs) {
+      runs.push([]);
+    }
+    runs.at(-1)!.push(time);
+  }
+  expect(runs.length, "release waits while the worker ran").toBeGreaterThanOrEqual(
+    fixture.expectedMinimumWaits,
   );
-  expect(times.length, "releases while the worker ran").toBeLessThanOrEqual(
-    fixture.expectedMaximumReleases,
+  expect(runs.length, "release waits while the worker ran").toBeLessThanOrEqual(
+    fixture.expectedMaximumWaits,
   );
+  // The end of the window can cut the last run short.
+  const sizes = runs.map((run) => run.length);
+  expect(sizes.slice(0, -1), "releases of each release run").toEqual(
+    sizes.slice(0, -1).map(() => fixture.expectedReleasesPerWait),
+  );
+  expect(sizes.at(-1), "releases of the last release run").toBeLessThanOrEqual(
+    fixture.expectedReleasesPerWait,
+  );
+}
+
+async function executeReleaseRunRuntimeFixture(
+  queue: Queue,
+  admin: Admin,
+  database: Queryable,
+  fixture: ReleaseRunRuntimeFixture,
+): Promise<void> {
+  const queueName = `runtime-${fixture.id}`;
+  const unhandled: string[] = [];
+  for (let index = 0; index < fixture.unhandledTasks; index += 1) {
+    unhandled.push(await queue.enqueue(fixture.taskType, { index }, { queue: queueName }));
+  }
+  const handled = await queue.enqueue(fixture.registeredTaskType, {}, { queue: queueName });
+  const worker = new Worker(queue, {
+    workerId: `runtime-${fixture.id}`,
+    queue: queueName,
+    concurrency: fixture.concurrency,
+    leaseMs: fixture.leaseMs,
+    pollMs: fixture.pollMs,
+    registryIntervalMs: 0,
+  }).handle(fixture.registeredTaskType, async () => null);
+  const running = worker.run();
+  try {
+    const deadline = Date.now() + 10_000;
+    while ((await admin.getTask(handled))?.state !== fixture.expectedAfterHandled.state) {
+      expect(Date.now(), "the handled task succeeds").toBeLessThan(deadline);
+      await sleep(20);
+    }
+  } finally {
+    worker.stop();
+    await running;
+  }
+  // The releases before the handled task succeeded. The worker claims again after it, and the
+  // runner ignores those releases.
+  const released = await database.query<{ task_id: string; at_ms: number }>(
+    `SELECT event.task_id::text AS task_id,
+            (extract(epoch FROM event.occurred_at) * 1000)::float8 AS at_ms
+       FROM workhorse.task_event event
+      WHERE event.task_id = ANY($1::uuid[]) AND event.event_type = 'released'
+        AND event.occurred_at < (
+          SELECT succeeded.occurred_at FROM workhorse.task_event succeeded
+           WHERE succeeded.task_id = $2 AND succeeded.event_type = 'succeeded'
+        )
+      ORDER BY event.occurred_at, event.task_id`,
+    [unhandled, handled],
+  );
+  // Each release put its task behind the others, so the worker released each task once.
+  expect(
+    released.rows.map((row) => row.task_id).toSorted(),
+    "tasks released before the handled one",
+  ).toEqual(unhandled.toSorted());
+  const times = released.rows.map((row) => Number(row.at_ms));
   const gaps = times.slice(1).map((time, index) => time - times[index]!);
-  expect(Math.min(...gaps), "least time between two releases").toBeGreaterThanOrEqual(
+  const runGaps = gaps.slice(0, fixture.expectedReleasesBeforeWait - 1);
+  expect(Math.max(...runGaps), "most time between two releases of the run").toBeLessThan(
+    fixture.expectedMaximumRunGapMs,
+  );
+  expect(gaps[fixture.expectedReleasesBeforeWait - 1], "the release wait").toBeGreaterThanOrEqual(
     fixture.expectedMinimumReleaseGapMs,
   );
+  for (const id of unhandled) {
+    await expect(admin.getTask(id)).resolves.toMatchObject({
+      state: fixture.expectedAfterRelease.state,
+      currentAttempt: fixture.expectedAfterRelease.attempt,
+    });
+  }
+  await expect(admin.getTask(handled)).resolves.toMatchObject({
+    state: fixture.expectedAfterHandled.state,
+    currentAttempt: fixture.expectedAfterHandled.attempt,
+  });
 }
 
 async function executeJsonRoundTripRuntimeFixture(
@@ -2280,6 +2366,9 @@ async function executeRuntimeFixture(
       break;
     case "release-wait":
       await executeReleaseWaitRuntimeFixture(queue, database, fixture);
+      break;
+    case "release-run":
+      await executeReleaseRunRuntimeFixture(queue, admin, database, fixture);
       break;
     case "json-round-trip":
       await executeJsonRoundTripRuntimeFixture(queue, admin, database, fixture);
