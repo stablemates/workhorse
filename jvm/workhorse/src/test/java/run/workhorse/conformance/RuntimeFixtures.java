@@ -43,6 +43,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 import org.postgresql.PGConnection;
+import run.workhorse.Admin;
+import run.workhorse.AdminAudit;
 import run.workhorse.AlreadyWaitingException;
 import run.workhorse.BatchFailed;
 import run.workhorse.BatchHandler;
@@ -67,6 +69,7 @@ import run.workhorse.LeaseLostException;
 import run.workhorse.LimitExceededException;
 import run.workhorse.Queue;
 import run.workhorse.QueueOptions;
+import run.workhorse.QueueTier;
 import run.workhorse.RateLimit;
 import run.workhorse.RateLimitPolicyDefinition;
 import run.workhorse.Worker;
@@ -239,6 +242,8 @@ final class RuntimeFixtures {
         case "heartbeat-busy" -> heartbeatBusy(fixture);
         case "maintenance-phase-error" -> maintenancePhaseError(fixture);
         case "slot-refill" -> slotRefill(fixture);
+        case "queue-fairness" -> queueFairness(fixture);
+        case "queue-fairness-cost" -> queueFairnessCost(fixture);
         case "batch" -> batch(fixture);
         case "suspension-replay" -> suspensionReplay(fixture);
         case "suspension-race" -> suspensionRace(fixture);
@@ -1082,6 +1087,164 @@ final class RuntimeFixtures {
         run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
       }
     }
+  }
+
+  /**
+   * A fused refill asks only its own queue. The cold queue's task must still run before the hot
+   * queue's backlog ends (ADR 0076, rule 17).
+   */
+  private void queueFairness(Map<String, @Nullable Object> fixture) throws Exception {
+    String hot = queueName(fixture) + "-hot";
+    String cold = queueName(fixture) + "-cold";
+    queueFairnessQueues(fixture, hot, cold);
+    long hotHandlerMs = (Long) fixture.get("hotHandlerMs");
+    List<String> started = new CopyOnWriteArrayList<>();
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          Worker.builder(pool)
+              .queues(hot, cold)
+              .workerId("jvm-" + fixture.get("id"))
+              .pollingOnly(true)
+              .disableRegistry(true)
+              .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
+              .shutdownGrace(JOIN_GRACE)
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    started.add(ctx.task().queue());
+                    if (hot.equals(ctx.task().queue())) {
+                      Thread.sleep(hotHandlerMs);
+                    }
+                    return null;
+                  })
+              .build();
+      CompletableFuture<Void> run = running(subject, subject::run);
+      try {
+        // The cold task arrives while fused refills already hold the slots, so the result does not
+        // depend on which queue the first plain claim asks.
+        long hotStarts = (Long) fixture.get("coldEnqueueAfterHotStarts");
+        eventually(
+            "the worker did not start " + hotStarts + " hot tasks",
+            7,
+            () -> started.size() >= hotStarts);
+        enqueue(taskType(fixture), Map.of("cold", true), options(cold));
+        eventually("the worker never ran the cold task", 7, () -> started.contains(cold));
+        int coldAt = started.indexOf(cold);
+        check(
+            coldAt <= (Long) fixture.get("expectedMaximumHotTasksBeforeCold"),
+            coldAt + " hot tasks started before the cold task");
+      } finally {
+        subject.stop();
+        run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  /**
+   * Puts the hot and the cold queue of a queue-fairness fixture on the fast tier, and enqueues the
+   * hot backlog.
+   */
+  private void queueFairnessQueues(Map<String, @Nullable Object> fixture, String hot, String cold)
+      throws Exception {
+    Admin admin = new Admin(Connections.borrowed(connection));
+    for (String name : List.of(hot, cold)) {
+      synchronized (connection) {
+        admin.setQueueTier(
+            name,
+            QueueTier.FAST,
+            new AdminAudit(
+                "runtime-fixture",
+                String.valueOf(fixture.get("id")),
+                fixture.get("id") + "-" + name));
+      }
+    }
+    long hotTaskCount = (Long) fixture.get("hotTaskCount");
+    for (long sequence = 0; sequence < hotTaskCount; sequence++) {
+      enqueue(taskType(fixture), Map.of("sequence", sequence), options(hot));
+    }
+  }
+
+  /**
+   * A worker with a refill batch above 1 runs a hot backlog beside an empty cold queue. The
+   * injection records and delays each plain claim. A completion during that delay must still refill
+   * its own slot, or each plain claim after a fairness skip leaves free slots for the next one, and
+   * the worker stays in plain claims (ADR 0076, SM-1833 amendment).
+   */
+  private void queueFairnessCost(Map<String, @Nullable Object> fixture) throws Exception {
+    String hot = queueName(fixture) + "-hot";
+    String cold = queueName(fixture) + "-cold";
+    queueFairnessQueues(fixture, hot, cold);
+    long hotHandlerMs = (Long) fixture.get("hotHandlerMs");
+    long hotTaskCount = (Long) fixture.get("hotTaskCount");
+    AtomicInteger hotStarts = new AtomicInteger();
+    Map<String, @Nullable Object> injection = object(fixture, "injection");
+    long[] counts = new long[3];
+    try (Intercept pool = new Intercept(opener, new Intercept.Hook() {})) {
+      Worker subject =
+          Worker.builder(pool)
+              .queues(hot, cold)
+              .workerId("jvm-" + fixture.get("id"))
+              .pollingOnly(true)
+              .disableRegistry(true)
+              .concurrency(Math.toIntExact((Long) fixture.get("concurrency")))
+              .pollInterval(millis(fixture, "pollMs"))
+              .shutdownGrace(JOIN_GRACE)
+              .handle(
+                  taskType(fixture),
+                  Object.class,
+                  (ctx, payload) -> {
+                    hotStarts.incrementAndGet();
+                    Thread.sleep(hotHandlerMs);
+                    return null;
+                  })
+              .build();
+      injectedBody(
+          injection,
+          () -> {
+            CompletableFuture<Void> run = running(subject, subject::run);
+            try {
+              // A slow start must not count: the window starts once every slot ran a hot task.
+              long slots = (Long) fixture.get("concurrency");
+              eventually(
+                  "the worker did not start its hot tasks", 7, () -> hotStarts.get() >= slots);
+              long[] before = fairnessCounts(fixture);
+              int startsBefore = hotStarts.get();
+              Thread.sleep((Long) fixture.get("measureMs"));
+              // A completion after the stop claims nothing, so the counts come before it.
+              long[] after = fairnessCounts(fixture);
+              check(hotStarts.get() > startsBefore, "no hot task started during the measurement");
+              // The hot backlog must outlast the run, or the plain claims at its end would count.
+              check(hotStarts.get() < hotTaskCount, "every hot task started before the counts");
+              counts[0] = after[0];
+              counts[1] = after[0] - before[0];
+              counts[2] = after[1] - before[1];
+            } finally {
+              subject.stop();
+              run.handle((value, error) -> null).get(RUN_WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+          });
+    }
+    // The injection recorded the first claim at least.
+    check(counts[0] > 0, "the injection recorded no plain claim");
+    long mostPlain = (Long) fixture.get("expectedMaximumPlainClaims");
+    check(counts[1] <= mostPlain, counts[1] + " plain claims, want at most " + mostPlain);
+    long mostZero = (Long) fixture.get("expectedMaximumZeroLimitCompletions");
+    check(counts[2] <= mostZero, counts[2] + " limit-0 completions, want at most " + mostZero);
+  }
+
+  /**
+   * The plain claims and the tasks completed with limit 0 that the fixture's injection recorded.
+   */
+  private long[] fairnessCounts(Map<String, @Nullable Object> fixture) throws SQLException {
+    Map<String, @Nullable Object> row;
+    synchronized (connection) {
+      row = Runner.sql(connection, (String) fixture.get("countsQuery")).get(0);
+    }
+    return new long[] {
+      ((Number) row.get("plain_claims")).longValue(),
+      ((Number) row.get("zero_limit_completions")).longValue()
+    };
   }
 
   /**

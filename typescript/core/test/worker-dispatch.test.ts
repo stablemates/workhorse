@@ -680,7 +680,239 @@ describe("worker dispatch", () => {
     expect(Math.max(...fake.completions.map((claim) => claim.limit))).toBeLessThanOrEqual(8);
     expect(new Set(fake.completions.map((claim) => claim.cohort))).toEqual(new Set([0, 1]));
   });
+
+  // SM-1676: a fused completion claim asks only the completing task's queue. While that queue had
+  // a backlog, each completion refilled the slot, and no plain claim reached the other queues.
+  it("gives another queue a claim while a fast queue keeps a backlog", async () => {
+    const backlog = 400;
+    const waiting = new Map<string, ClaimedTask[]>([
+      ["a", tasks("a", backlog).map((task) => Object.assign(task, { queue: "a" }))],
+      ["b", [{ ...claimedTask("b-0"), queue: "b" }]],
+    ]);
+    const take = (queue: string, limit: number): ClaimedTask[] =>
+      waiting.get(queue)!.splice(0, limit);
+    const fake = fakeQueue();
+    // The fused claim limit of each completion of queue a, in completion order.
+    const fused: Array<{ id: string; limit: number }> = [];
+    const queue = {
+      ...fake.queue,
+      claimMany: unsupportedWorkerQueueOperation,
+      claimFast: async (_workerId: string, limit: number, options: { queue: string }) =>
+        take(options.queue, limit),
+      completeAndClaim: async (
+        task: ClaimedTask,
+        _workerId: string,
+        _result: Json,
+        claim: CompletionClaim,
+      ) => {
+        if (claim.queue === "a") fused.push({ id: task.id, limit: claim.limit });
+        return { accepted: true, claimed: take(claim.queue, claim.limit) };
+      },
+    } as unknown as WorkerQueueApi;
+    const ran: string[] = [];
+    const worker = new Worker(queue, {
+      queues: ["a", "b"],
+      concurrency: 1,
+      registryIntervalMs: 0,
+    }).handle("dispatch", async (_payload, context) => {
+      ran.push(context.task.id);
+      await sleep(2);
+      return null;
+    });
+    const done = worker.run();
+    while (!ran.includes("b-0")) await sleep(5);
+    worker.stop();
+    await done;
+
+    // Once queue b has waited a fairness interval, one a completion claims nothing. Its slot goes
+    // to a plain claim, which asks b next. Every other a completion still refills its slot.
+    const coldAt = ran.indexOf("b-0");
+    expect(coldAt).toBeLessThan(backlog / 2);
+    // Under host load the first completion can already come a fairness interval after the start,
+    // so it may be the one that skips.
+    const skip = fused.findIndex((completion) => completion.limit === 0);
+    expect(skip).toBeGreaterThanOrEqual(0);
+    expect(fused.slice(0, skip).every((completion) => completion.limit === 1)).toBe(true);
+    expect(fused[skip]!.id).toBe(ran[coldAt - 1]);
+  });
+
+  // SM-1676: while a plain claim of another cohort was in flight, the next completion could claim
+  // the slot that a fairness skip gave back. Every slot was then full again, and no plain claim
+  // could ask the waiting queue.
+  it("keeps the slot of a fairness skip free for a plain claim", async () => {
+    const backlog = tasks("a", 100).map((task) => Object.assign(task, { queue: "a" }));
+    let hold = false;
+    const held: Array<() => void> = [];
+    const fused: CompletionClaim[] = [];
+    const queue = {
+      ...fakeQueue().queue,
+      claimMany: unsupportedWorkerQueueOperation,
+      claimFast: async (_workerId: string, limit: number, options: { queue: string }) => {
+        if (hold) {
+          await new Promise<void>((resolve) => {
+            held.push(resolve);
+          });
+        }
+        return options.queue === "a" ? backlog.splice(0, limit) : [];
+      },
+      completeAndClaim: async (
+        _task: ClaimedTask,
+        _workerId: string,
+        _result: Json,
+        claim: CompletionClaim,
+      ) => {
+        fused.push(claim);
+        return { accepted: true, claimed: backlog.splice(0, claim.limit) };
+      },
+    } as unknown as WorkerQueueApi;
+    const { handler, finish, finishAll } = gatedHandlers();
+    const worker = new Worker(queue, {
+      queues: ["a", "b"],
+      concurrency: 4,
+      cohorts: 2,
+      registryIntervalMs: 0,
+    }).handle("dispatch", handler);
+    const running = worker.run();
+
+    // Cohort 0 runs a-0 and a-1. Cohort 1 runs a-2 and a-3.
+    await vi.waitFor(() => expect(backlog[0]!.id).toBe("a-4"));
+    hold = true;
+    // A cohort 1 completion skips its refill, and the plain claim that takes its slot is held.
+    await sleep(FAIRNESS_INTERVAL_MS + 10);
+    finish("a-2");
+    await vi.waitFor(() => expect(held.length).toBeGreaterThan(0));
+    // Queue b waits a fairness interval again while that claim is in flight.
+    await sleep(FAIRNESS_INTERVAL_MS + 10);
+    finish("a-0");
+    await settle();
+    finish("a-1");
+    await settle();
+
+    const cohortZero = fused.filter((claim) => claim.cohort === 0).map((claim) => claim.limit);
+    expect(cohortZero).toEqual([0, 1]);
+
+    worker.stop();
+    hold = false;
+    for (const release of held.splice(0)) release();
+    // Tasks that the held claim and the last completions return also start, so keep finishing.
+    const state = { ended: false };
+    void running.finally(() => {
+      state.ended = true;
+    });
+    while (!state.ended) {
+      finishAll();
+      await sleep(5);
+    }
+    await running;
+  });
+
+  // SM-1833: with a refill batch above 1, a completion claimed nothing while a plain claim was in
+  // flight. Its slot then needed the next plain claim, and completions during that claim did the
+  // same. After the first fairness skip, the worker stayed in plain claims and did not go back to
+  // fused refills.
+  it.each([5, 6, 7, 8])(
+    "goes back to fused refills after a fairness skip at concurrency %i",
+    async (concurrency) => {
+      const run = await runFastBacklog({ concurrency, runMs: 2 * FAIRNESS_INTERVAL_MS + 100 });
+      expect(dispatchRefillBatch(concurrency)).toBe(2);
+      // Each fairness interval gives at most two skips. The plain claims after them ask a, or b
+      // and then a. Thus at most three plain claims per interval, plus the first claim.
+      expect(run.zeroLimitCompletions).toBeLessThanOrEqual(2 * 3);
+      expect(run.plainClaims).toBeLessThanOrEqual(3 * 3 + 2);
+      expect(run.fusedClaims).toBeGreaterThan(run.plainClaims);
+    },
+  );
+
+  // SM-1833: the same hold also kept a worker with one queue in plain claims. A failed task frees its
+  // slot without a refill, and the plain claim for that slot started the same sequence.
+  it("goes back to fused refills after a failed task frees a slot", async () => {
+    const run = await runFastBacklog({
+      concurrency: 5,
+      queues: ["a"],
+      failTask: "a-10",
+      runMs: FAIRNESS_INTERVAL_MS,
+    });
+    // The first claim, and the claim for the slot of the failed task.
+    expect(run.plainClaims).toBeLessThanOrEqual(2);
+    expect(run.zeroLimitCompletions).toBe(0);
+  });
+
+  // SM-1833: the fairness interval was the poll interval. A short poll then made the plain claims
+  // of rule 17 almost as frequent as the round trips.
+  it("keeps the fairness interval at the default poll interval or above", async () => {
+    const run = await runFastBacklog({
+      concurrency: 1,
+      pollMs: 10,
+      runMs: 2 * FAIRNESS_INTERVAL_MS + 100,
+    });
+    expect(run.zeroLimitCompletions).toBeLessThanOrEqual(2 * 3);
+  });
 });
+
+// ADR 0076 rule 17: the poll interval, at least the default poll interval of 250 ms.
+const FAIRNESS_INTERVAL_MS = 250;
+
+// Runs a worker on fast-tier queues a and b, or on `queues`. Queue a always has a task, and queue b
+// is empty. A plain claim takes 20 ms and a handler 2 ms, so several completions happen during each
+// plain claim.
+async function runFastBacklog(options: {
+  concurrency: number;
+  queues?: string[];
+  pollMs?: number;
+  // The handler of this task fails, so its slot gets no fused refill.
+  failTask?: string;
+  runMs: number;
+}): Promise<{ zeroLimitCompletions: number; fusedClaims: number; plainClaims: number }> {
+  let sequence = 0;
+  const take = (queue: string, limit: number): ClaimedTask[] =>
+    queue === "a"
+      ? Array.from({ length: limit }, () => {
+          sequence += 1;
+          return { ...claimedTask(`a-${sequence}`), queue: "a" };
+        })
+      : [];
+  // Counts stop at stop(), because each completion after it claims nothing.
+  const counts = { zeroLimitCompletions: 0, fusedClaims: 0, plainClaims: 0 };
+  let stopping = false;
+  const queue = {
+    ...fakeQueue().queue,
+    claimMany: unsupportedWorkerQueueOperation,
+    fail: async () => "failed",
+    claimFast: async (_workerId: string, limit: number, claim: { queue: string }) => {
+      if (!stopping) counts.plainClaims += 1;
+      await sleep(20);
+      return take(claim.queue, limit);
+    },
+    completeAndClaim: async (
+      _task: ClaimedTask,
+      _workerId: string,
+      _result: Json,
+      claim: CompletionClaim,
+    ) => {
+      if (!stopping) {
+        if (claim.limit === 0) counts.zeroLimitCompletions += 1;
+        else counts.fusedClaims += 1;
+      }
+      return { accepted: true, claimed: take(claim.queue, claim.limit) };
+    },
+  } as unknown as WorkerQueueApi;
+  const worker = new Worker(queue, {
+    queues: options.queues ?? ["a", "b"],
+    concurrency: options.concurrency,
+    registryIntervalMs: 0,
+    ...(options.pollMs === undefined ? {} : { pollMs: options.pollMs }),
+  }).handle("dispatch", async (_payload, context) => {
+    await sleep(2);
+    if (context.task.id === options.failTask) throw new Error("the handler failed");
+    return null;
+  });
+  const done = worker.run();
+  await sleep(options.runMs);
+  stopping = true;
+  worker.stop();
+  await done;
+  return counts;
+}
 
 // SM-1653: the loop raced every handler promise on each iteration, and each race added a reaction
 // to every pending promise. One long handler then kept one reaction for each short task beside it.

@@ -27,6 +27,13 @@ public sealed partial class Worker
     private Slots? _slotState;
     private long _dispatchSequence;
     private long _nextQueue;
+
+    /// <summary>
+    /// The monotonic time when a claim last asked each queue for tasks, plain or fused. A worker with
+    /// more than one queue reads it, so a fused refill cannot keep the other queues from a claim (ADR
+    /// 0076, rule 17). It changes under the state lock.
+    /// </summary>
+    private readonly Dictionary<string, long> _queueAskedAt = new(StringComparer.Ordinal);
     private int _notified;
     private volatile Listener.Subscription? _listener;
 
@@ -51,6 +58,9 @@ public sealed partial class Worker
     /// </summary>
     private sealed record Claimed(ClaimedTask Task, string Payload, long StartedAt, bool FastClaimed = false);
 
+    /// <summary>A plain claim waits for this task before it asks a queue. A test sets it.</summary>
+    internal Func<Task>? PlainClaimHook;
+
     /// <summary>The claims that started and have not answered. A test reads it.</summary>
     internal int ClaimsInFlight;
 
@@ -68,6 +78,12 @@ public sealed partial class Worker
         lock (_stateLock)
         {
             run.Listener = listener;
+            // A queue counts as asked when the run starts, so the first completions keep their refills.
+            var startedAt = Monotonic.Now();
+            foreach (var queue in _queues)
+            {
+                _queueAskedAt[queue] = startedAt;
+            }
         }
 
         _listener = listener;
@@ -269,6 +285,8 @@ public sealed partial class Worker
             if (plan is not null)
             {
                 SlotState.Reserve(plan);
+                // A plain claim continues the rotation, so the next completion can skip its refill again.
+                run.FairnessSkipPending = false;
             }
 
             return plan;
@@ -439,6 +457,11 @@ public sealed partial class Worker
             Exception? error = null;
             try
             {
+                if (PlainClaimHook is { } hook)
+                {
+                    await hook().ConfigureAwait(false);
+                }
+
                 if (delayed)
                 {
                     await Task.Delay(Random.Shared.Next(NotificationClaimDelayMs + 1)).ConfigureAwait(false);
@@ -482,6 +505,7 @@ public sealed partial class Worker
         for (var offset = 0; offset < _queues.Length && claimed.Count < limit && run.GateOpen; offset++)
         {
             var queue = _queues[(start + offset) % _queues.Length];
+            MarkAsked(queue);
             using var span = WorkerTelemetry.StartClaim(queue);
             var probedAt = Monotonic.Now();
             if (await ClaimFastAsync(run, queue, Math.Min(limit, fastLimit) - claimed.Count).ConfigureAwait(false) is { } fast)
@@ -549,6 +573,47 @@ public sealed partial class Worker
             var task = claimed[index].Task;
             WorkerLog.Claimed(_logger, task.Id, task.Type, task.Attempt, queue, WorkerId);
         }
+    }
+
+    /// <summary>Records that a claim asks <paramref name="queue"/> now. A worker with one queue records nothing.</summary>
+    private void MarkAsked(string queue)
+    {
+        if (_queues.Length < 2)
+        {
+            return;
+        }
+
+        lock (_stateLock)
+        {
+            _queueAskedAt[queue] = Monotonic.Now();
+        }
+    }
+
+    /// <summary>
+    /// True when a queue other than <paramref name="queue"/> has had no claim for one fairness
+    /// interval: the poll interval, but at least the default poll interval. A fused claim asks only
+    /// its own queue, so while that queue has a backlog its completions keep every slot, and no plain
+    /// claim asks the other queues (ADR 0076, rule 17). The caller holds the state lock.
+    /// </summary>
+    private bool OtherQueueWaiting(string queue)
+    {
+        if (_queues.Length < 2)
+        {
+            return false;
+        }
+
+        var now = Monotonic.Now();
+        // A short poll would make the plain claims of rule 17 as frequent as the round trips.
+        var interval = Monotonic.Millis(Math.Max(_pollMs, DefaultPollMs));
+        foreach (var other in _queues)
+        {
+            if (other != queue && _queueAskedAt.TryGetValue(other, out var askedAt) && now - askedAt >= interval)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Claimed ClaimedOf(Row row, string queue, long startedAt, bool fastClaimed) =>

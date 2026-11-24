@@ -357,6 +357,44 @@
     "expectedMaximumClaimsPerTask": 0.75
   },
   {
+    "id": "a-fused-refill-gives-the-other-queues-a-claim",
+    "kind": "queue-fairness",
+    "covers": ["fused-refill-queue-fairness"],
+    "taskType": "protocol.queue-fairness",
+    "concurrency": 1,
+    "hotTaskCount": 200,
+    "hotHandlerMs": 5,
+    "coldEnqueueAfterHotStarts": 3,
+    "expectedMaximumHotTasksBeforeCold": 100
+  },
+  {
+    "id": "a-fairness-skip-costs-few-plain-claims-at-a-refill-batch-above-one",
+    "kind": "queue-fairness-cost",
+    "covers": ["fused-refill-queue-fairness"],
+    "taskType": "protocol.queue-fairness-cost",
+    "concurrency": 5,
+    "pollMs": 25,
+    "hotTaskCount": 800,
+    "hotHandlerMs": 10,
+    "measureMs": 1000,
+    "injection": {
+      "function": "workhorse.complete_many_and_claim_v1(text,uuid[],bigint[],jsonb[],text,integer,integer)",
+      "header": "workhorse.complete_many_and_claim_v1(p_worker_id text, p_task_ids uuid[], p_fence_tokens bigint[], p_results jsonb[], p_queue_name text, p_limit integer, p_lease_ms integer DEFAULT 30000) RETURNS TABLE (accepted uuid[], task_id uuid, task_type text, priority integer, payload jsonb, contract_version text, result_max_bytes integer, redact_error_details boolean, trace_context jsonb, attempt integer, max_attempts integer, retry_policy jsonb, deadline_at timestamptz, execution_timeout_ms bigint, attempt_timeout_at timestamptz, fence_token bigint, lease_expires_at timestamptz)",
+      "setup": [
+        "CREATE TABLE workhorse.protocol_injected_fast_claims (queue_name text NOT NULL, completions integer NOT NULL, claim_limit integer NOT NULL)",
+        "DO $copy$ BEGIN EXECUTE replace(pg_get_functiondef('workhorse.complete_many_and_claim_v1(text,uuid[],bigint[],jsonb[],text,integer,integer)'::regprocedure), 'FUNCTION workhorse.complete_many_and_claim_v1(', 'FUNCTION workhorse.protocol_original_complete_many_and_claim_v1('); END $copy$"
+      ],
+      "body": "BEGIN IF coalesce(cardinality(p_task_ids), 0) = 0 OR p_limit = 0 THEN INSERT INTO workhorse.protocol_injected_fast_claims (queue_name, completions, claim_limit) VALUES (p_queue_name, coalesce(cardinality(p_task_ids), 0), p_limit); END IF; IF coalesce(cardinality(p_task_ids), 0) = 0 THEN PERFORM pg_sleep(0.01); END IF; RETURN QUERY SELECT * FROM workhorse.protocol_original_complete_many_and_claim_v1(p_worker_id, p_task_ids, p_fence_tokens, p_results, p_queue_name, p_limit, p_lease_ms); END;",
+      "teardown": [
+        "DROP FUNCTION IF EXISTS workhorse.protocol_original_complete_many_and_claim_v1(text,uuid[],bigint[],jsonb[],text,integer,integer)",
+        "DROP TABLE IF EXISTS workhorse.protocol_injected_fast_claims"
+      ]
+    },
+    "countsQuery": "SELECT (count(*) FILTER (WHERE completions = 0))::int AS plain_claims, (coalesce(sum(completions) FILTER (WHERE completions > 0), 0))::int AS zero_limit_completions FROM workhorse.protocol_injected_fast_claims",
+    "expectedMaximumPlainClaims": 20,
+    "expectedMaximumZeroLimitCompletions": 10
+  },
+  {
     "id": "budget-admission-holds-across-queues",
     "kind": "budget-admission-race",
     "covers": ["budget-admission-serialization"],

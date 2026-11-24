@@ -36,6 +36,19 @@ the same (ADR 0126).
 - A task without a handler at a higher priority still keeps the worker from the lower-priority
   tasks, because the release keeps the priority. SM-2085 records the schema change for this case.
 
+### A busy fast-tier queue no longer keeps the worker from its other queues
+
+While one fast-tier queue had a backlog, the fused refill of each completion kept every slot. Thus
+the worker did not claim from its other queues until the backlog ended. Now, if another queue had no
+claim for one fairness interval, the next fast-tier completion claims no task, and the next plain
+claim continues the queue rotation. The fairness interval is `PollInterval`, but at least 250 ms. A
+worker with one queue does not skip a refill (ADR 0076 rule 17, SM-1676, SM-1833).
+
+A fused completion also no longer claims with limit 0 while a plain claim for its cohort is in
+flight. At a concurrency of 5 or more, its slot then waited for the next plain claim, and after one
+free slot the worker could stay in plain claims. Now the completion always refills the slot of its
+own task. The change needs no migration.
+
 ### A provider that another package registers first gets the worker telemetry
 
 An application can register its OpenTelemetry providers in the `init` function of a package that

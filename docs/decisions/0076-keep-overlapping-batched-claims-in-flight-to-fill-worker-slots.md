@@ -4,8 +4,10 @@
 - **Date:** 2026-09-23
 - **Amended by:** SM-919 (a worker that batches completions splits its slots into cohorts; see below)
 - **Amended by:** SM-1676 (a fused refill gives the other queues of a worker a claim; see below).
-  Rule 17 is not shipped: SM-1834 removed it before 0.10.0, and
-  [SM-1833](https://linear.app/stablemates/issue/SM-1833) owns a corrected rule.
+  SM-1834 removed rule 17 before 0.10.0.
+- **Amended by:** [SM-1833](https://linear.app/stablemates/issue/SM-1833) (a fused claim always
+  refills the slot of its own task, and the fairness interval has a lower bound; see below). Rule 17
+  is back in every SDK worker with this amendment.
 - **Amended by:** [ADR 0078](0078-start-a-long-running-workers-first-claim-beside-its-startup-maintenance-pass.md)
   (a long-running worker starts its first claim beside its startup maintenance pass)
 - **Related:** [ADR 0071](0071-give-every-worker-a-pool-and-a-dedicated-heartbeat-connection.md),
@@ -103,6 +105,8 @@ on its own completion round trip while the other cohorts' handlers run.
     tasks it claims join that cohort.
 13. **Refill batch per cohort.** Rule 3 applies to a fused claim within its cohort. A claim in
     flight for another cohort does not hold back a completion's claim for its own free slots.
+    _Amended by SM-1833:_ rule 3 holds back only the other free slots of the cohort. The fused claim
+    always asks for the slot of its own task (see [the SM-1833 amendment](#sm-1833-amendment)).
 14. **Plain claims.** While no claim is in flight, a plain claim fills the cohort with the most
     free slots. The next cohort's claim starts when that claim returns. The first claim asks for one
     cohort's share, which starts the cohorts out of phase. It still reserves every free slot until
@@ -139,15 +143,13 @@ when the worker can read it.
 
 ### Queue fairness for fused refills
 
-**Status of rule 17: not shipped.** No release contains rule 17. A measurement in the private
+**Status of rule 17.** No release up to 0.16 contains rule 17. A measurement in the private
 performance lab ([SM-1821](https://linear.app/stablemates/issue/SM-1821)) did not confirm the cost
 estimate below for every worker. Thus the maintainer decided not to ship rule 17 in 0.10.0, and
-[SM-1834](https://linear.app/stablemates/issue/SM-1834) removed it from every
-SDK worker. Every worker again behaves as rule 12 states: while one fast-tier queue has a backlog,
-the other queues of the worker can get no claim until that backlog ends. The fixture
-`a-fused-refill-gives-the-other-queues-a-claim` is also removed.
-[SM-1833](https://linear.app/stablemates/issue/SM-1833) owns a corrected rule. The text below
-records the decision of SM-1676 and the rejected options without change.
+[SM-1834](https://linear.app/stablemates/issue/SM-1834) removed it from every SDK worker.
+[The SM-1833 amendment](#sm-1833-amendment) finds the cause, corrects rules 13 and 17, and puts
+rule 17 back in every SDK worker. The text from here to that amendment records the decision of
+SM-1676 and its rejected options without change.
 
 _Amended by [SM-1676](https://linear.app/stablemates/issue/SM-1676)._ Rule 12 lets a fast-tier
 completion refill its slot in the same statement. That fused claim asks only the queue of the
@@ -186,6 +188,81 @@ the rule in every SDK.
 The rule uses time and not a count of tasks, so its cost does not grow with the task rate. A count,
 such as one skipped refill after each `concurrency` completions, would send every second task
 through a plain claim at concurrency 1.
+
+### SM-1833 amendment
+
+_Amended by [SM-1833](https://linear.app/stablemates/issue/SM-1833)._ SM-1821 found that the cost
+estimate of rule 17 did not hold for a TypeScript worker with more than one cohort. A unit test now
+shows the cause. It shows the same cause at concurrency 5 to 7, with one cohort and a refill batch
+of 2.
+
+**The cause.** Rules 3 and 13 held back a fused claim while a plain claim for its cohort was in
+flight, unless the free slots reached the refill batch. The free slots include the slot of the
+completed task. Thus, with a refill batch above 1, a completion could claim with limit 0, and its
+slot waited for the next plain claim.
+
+**Example.**
+
+1. A fast-tier worker has concurrency 5, so its refill batch is 2. A fairness skip frees one slot.
+2. A plain claim starts for that slot and reserves it.
+3. Two handlers finish while the plain claim is in flight. Each completion has 1 free slot, which is
+   below the refill batch. So each one claims with limit 0.
+4. The plain claim returns. Two slots are free, so the loop starts the next plain claim.
+5. More completions arrive during that claim, and step 3 occurs again.
+
+The worker stays in plain claims until a plain claim round trip passes with no completion in the
+cohort. Rule 17 starts the sequence again in each fairness interval. A failed task also frees a slot
+with no refill, so the same sequence can start in a worker with one queue. Thus the necessary
+condition is a refill batch above 1, which is a concurrency of 5 or more. A second cohort is not
+necessary.
+
+SM-1821 also found that a short explicit poll interval makes rule 17 expensive. Then the fairness
+interval is about as long as one plain claim round trip, and the worker sends plain claims all the
+time.
+
+The amendment changes two rules.
+
+- **Rule 13.** While a plain claim that can fill the cohort is in flight, rule 3 holds back only the
+  other free slots of the cohort. If the free slots, with the slot of the completed task, are below
+  the refill batch, the fused claim asks for 1 task: the slot of its own task. It never asks for 0
+  tasks because of the refill batch. A fused claim adds no round trip, because the completion sends
+  its statement anyway. A claim of limit 0 only moves the slot to a later plain claim.
+- **Rule 17.** The fairness interval is the poll interval, but at least the default poll interval of
+  250 ms. Without an explicit poll interval, it is 250 ms, as before.
+
+Each completion during a plain claim now keeps its slot. The plain claim fills only the slot that
+the skip gave back, and the worker goes back to fused refills when it returns. With two queues, each
+fairness interval then costs at most two skipped refills and the plain claims after them. With more
+queues, each other queue can need one more skipped refill. A worker with one queue
+keeps its fused refills after a failed task in the same way.
+
+The shared fixture `a-fairness-skip-costs-few-plain-claims-at-a-refill-batch-above-one` pins both
+changes in every SDK. At concurrency 5, it delays each plain claim in PostgreSQL so that completions
+happen during it. It then requires a bound on the plain claims and on the completions with limit 0.
+The TypeScript unit test `goes back to fused refills after a fairness skip` checks concurrency 5 to 8.
+The private performance lab has not measured the corrected rule. SM-1833 owns that measurement.
+
+#### Rejected options for SM-1833
+
+**A skip does not count toward the refill-batch hold.** Only the plain claim after a fairness skip
+would let completions keep their slots. It ends the sequence that a skip starts. A failed task or a
+released task still starts the same sequence, because its plain claim still holds back the fused
+claims. It also needs one more state in each SDK: which plain claim a skip started. The chosen rule
+covers every free slot with less state.
+
+**A plain claim after a skip asks only the other queues.** It saves one plain claim when the
+rotation would ask the busy queue first. It does not end the sequence, because completions during
+that claim still claim with limit 0. If the other queues are empty, the claim also counts as empty
+(rule 5). The worker then starts no claim until the poll deadline, and the skipped slot stays idle
+for that time. It also adds an exception to the queue rotation of rule 14.
+
+**Only a lower bound on the fairness interval.** It makes the sequence start less often, but it does
+not end it. A worker at concurrency 5 or more can still stay in plain claims for most of each
+interval. The amendment keeps the lower bound for the short-poll cost, beside the change to rule 13.
+
+**A fixed fairness interval that does not follow the poll interval.** A worker with a long poll
+interval asks an empty queue less often, and a fixed interval of 250 ms would ask it more often
+than its polls do. The lower bound keeps that property and still removes the short-poll cost.
 
 ## Consequences
 
