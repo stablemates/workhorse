@@ -456,7 +456,7 @@ public sealed partial class Worker
                         case "result_too_large":
                             throw new ChildResultLimitExceededException(row.RequiredLong("result_bytes"), row.RequiredLong("result_limit_bytes"));
                         case "created" or "completed":
-                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => ChildSetLog.Processed(_worker._logger, Task.Id, _worker.WorkerId, requests.Count, status));
+                            Processed(status == "created" ? Outcome.SuspendedForChild : null, () => DurableLog.ChildSetProcessed(_worker._logger, Task.Id, _worker.WorkerId, requests.Count, status));
                             return Joined(row.Json("children"), mode);
                         default:
                             throw new UnexpectedStatusException("runChildren", status);

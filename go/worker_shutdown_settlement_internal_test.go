@@ -291,3 +291,59 @@ func TestFailAfterShutdownLogsAFailedWriteOnce(t *testing.T) {
 		t.Fatalf("expected one shutdown settlement failure event, received %d:\n%s", logged, output.String())
 	}
 }
+
+// lostLeaseExecutor answers every statement with a lost lease, as a fenced write does after lease
+// recovery or an expiry took the task.
+type lostLeaseExecutor struct{ err error }
+
+func (executor lostLeaseExecutor) Query(context.Context, string, ...any) ([]Row, error) {
+	return nil, executor.err
+}
+
+// SM-2074: a settlement write after the stop that finds the lease lost is not a failed write. The
+// attempt is lease_lost, Run gets no error, and the worker writes no shutdown settlement warning.
+func TestAfterShutdownSettlementDoesNotLogALostLease(t *testing.T) {
+	task := ClaimedTask{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		Type:       "send-invoice",
+		Queue:      "billing",
+		Attempt:    2,
+		FenceToken: 7,
+	}
+	settlements := []struct {
+		name   string
+		settle func(*Worker, Executor) (handlerOutcome, error)
+	}{
+		{"release", func(worker *Worker, executor Executor) (handlerOutcome, error) {
+			return worker.settleAfterShutdown(context.Background(), executor, task, nil, nil,
+				errors.New("handler stopped"))
+		}},
+		{"completion", func(worker *Worker, executor Executor) (handlerOutcome, error) {
+			return worker.settleAfterShutdown(context.Background(), executor, task, nil, []byte("null"), nil)
+		}},
+		{"failure", func(worker *Worker, executor Executor) (handlerOutcome, error) {
+			return worker.failAfterShutdown(context.Background(), executor, task, errors.New("handler failed"))
+		}},
+	}
+	for _, settlement := range settlements {
+		for _, lost := range []error{fmt.Errorf("fenced write: %w", ErrStaleLease), errExpirationNotDue} {
+			t.Run(settlement.name+"/"+lost.Error(), func(t *testing.T) {
+				var output bytes.Buffer
+				worker := newDefaultWorker(t, WorkerOptions{})
+				worker.logger = slog.New(slog.NewTextHandler(&output, nil))
+
+				outcome, err := settlement.settle(worker, lostLeaseExecutor{err: lost})
+
+				if outcome != handlerOutcomeLeaseLost {
+					t.Fatalf("expected the lease_lost outcome, received %v", outcome)
+				}
+				if shutdownSettlementError(err) != nil {
+					t.Fatalf("a lost lease must not fail Run: %v", err)
+				}
+				if strings.Contains(output.String(), shutdownSettlementFailedEvent) {
+					t.Fatalf("a lost lease is not a failed settlement:\n%s", output.String())
+				}
+			})
+		}
+	}
+}

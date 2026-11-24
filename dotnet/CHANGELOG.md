@@ -11,6 +11,32 @@ adds.
 
 ## Unreleased
 
+### Each log record carries the keys of the other SDKs
+
+An operator writes one query for the workers of all seven SDKs, such as
+`event.name = workhorse.worker.expiration_request_failed AND workhorse.worker.id = X`. A .NET
+record carried its values under the names of its log template, such as `WorkerId`, so the query did
+not match it. Each record of the `Workhorse` package now carries its values under the keys of the
+TypeScript record, such as `workhorse.task.id`, `workhorse.queue.name`, `workhorse.worker.id`, and
+`error.type` (SM-2064). The message of the record still states the values, and the event ID of
+each event does not change.
+
+This changes the keys that a structured log sink reads. Change each query, filter, or alert that
+reads a .NET template name:
+
+| Before                          | After                                                                |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `TaskId`, `TaskType`, `Attempt` | `workhorse.task.id`, `workhorse.task.type`, `workhorse.task.attempt` |
+| `Queue`                         | `workhorse.queue.name`                                               |
+| `WorkerId`, `Queues`            | `workhorse.worker.id`, `workhorse.worker.queues`                     |
+| `ErrorType`                     | `error.type`                                                         |
+| Each other name                 | The key that `docs/architecture/telemetry.md` gives for the event    |
+
+The record of a pause or a resume of the worker no longer carries `Where`, and the record of a
+failed reporter no longer carries `Unreported`. The TypeScript record has no key for these values,
+so only the message states them. `{OriginalFormat}` is the template with the keys, such as
+`Task {workhorse.task.id} of type {workhorse.task.type} ...`.
+
 ### The handler span records the handler error and the error of a failed settlement
 
 If a handler fails and a statement of the settlement then fails, the `workhorse.handler` span kept

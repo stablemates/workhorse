@@ -10,6 +10,23 @@ adds.
 
 ## Unreleased
 
+### A lost lease after the shutdown abort is not a failed settlement
+
+The shutdown abort ends a handler, and the worker releases its task. PostgreSQL answers with a lost
+lease, for example because it refused the acknowledgement of a `cancel_requested` answer. The worker
+logged `workhorse.worker.shutdown_settlement_failed`, although no write failed, and the attempt
+had no outcome. The worker now writes no record for a lost lease, and the attempt reports
+`lease_expired`, as after the release of a task without a handler (SM-2074). A release that fails
+for another reason still writes the record and ends the run.
+
+### A handler that raises after a suspension gets the swallowed signal warning
+
+A handler catches the suspension of a durable call and raises another error. The task still
+suspends. The Go, Rust, Ruby, JVM, and .NET workers then warned with
+`workhorse.handler.signal_swallowed`, and the Python worker wrote nothing. The worker now writes
+the warning in this case too, with the attributes of the return case. The record holds no part of
+the raised error (SM-2066).
+
 ### A lost lease is not an error of the handler span
 
 A heartbeat delivers a cancellation, and PostgreSQL then refuses `acknowledge_cancel_v1`. Or the

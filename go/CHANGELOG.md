@@ -10,6 +10,14 @@ adds.
 
 ## Unreleased
 
+### A lost lease after the stop is not a failed settlement
+
+A handler returns after the stop of the run, and the worker settles its task. PostgreSQL answers
+the settlement with a lost lease, for example because an expiry or a cancellation won the fence.
+The worker logged `workhorse.worker.shutdown_settlement_failed`, although no write failed. `Run`
+already returned no error, and the outcome was already `lease_lost`. The worker now writes the
+record only for a write that fails for another reason, as TypeScript and Python do (SM-2074).
+
 ### A provider that another package registers first gets the worker telemetry
 
 An application can register its OpenTelemetry providers in the `init` function of a package that

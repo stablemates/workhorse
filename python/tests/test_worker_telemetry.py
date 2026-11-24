@@ -398,6 +398,47 @@ def test_worker_warns_when_a_handler_swallows_a_suspension_signal(database_url: 
     )
 
 
+def test_worker_warns_when_a_handler_raises_after_it_swallows_a_suspension(
+    database_url: str,
+) -> None:
+    LOG_EXPORTER.clear()
+
+    with (
+        psycopg.connect(database_url) as enqueue_connection,
+        psycopg.connect(database_url, autocommit=True) as worker_connection,
+    ):
+        task_id = Queue(enqueue_connection).enqueue("approval-raises", {})
+        enqueue_connection.commit()
+
+        def swallow_and_raise(_payload: object, context: HandlerContext) -> None:
+            try:
+                context.wait_for_signal("approval")
+            except BaseException as error:
+                raise RuntimeError("replacement handler error") from error
+
+        worker = Worker(worker_pool, worker_id="python-swallowed-signal-raises")
+        worker.handle("approval-raises", swallow_and_raise)
+        assert worker.run_once() is True
+        assert worker_connection.execute(
+            "SELECT state FROM workhorse.task_runtime WHERE task_id = %s", (task_id,)
+        ).fetchone() == ("scheduled",)
+
+    # SM-2066: a raised error also swallows the suspension, so the worker warns, as in the other
+    # five SDKs. The record holds no part of the raised error.
+    (warning,) = _log_records("workhorse.handler.signal_swallowed")
+    assert warning.severity_text == "WARN"
+    assert warning.body == "Task handler swallowed its abort signal"
+    assert dict(warning.attributes or {}) == {
+        "workhorse.task.id": task_id,
+        "workhorse.task.type": "approval-raises",
+        "workhorse.task.attempt": 1,
+        "workhorse.queue.name": "default",
+        "workhorse.worker.id": "python-swallowed-signal-raises",
+        "workhorse.handler.outcome": "suspended",
+    }
+    assert "replacement handler error" not in str(LOG_EXPORTER.get_finished_logs())
+
+
 def _counter_values(name: str) -> dict[tuple[tuple[str, Any], ...], float]:
     """The cumulative value of each attribute set of the counter `name`. Empty before any data."""
     if METRIC_READER.get_metrics_data() is None:
@@ -2071,3 +2112,107 @@ def test_a_disabled_logger_gets_no_record_from_the_queue(
         connection.commit()
 
     assert logger.calls == 0
+
+
+# SM-2074: a release after the shutdown abort that finds the lease lost is not a failed write. The
+# worker logs workhorse.worker.shutdown_settlement_failed only for a release that fails for another
+# reason. A lost lease ends the attempt only, and the attempt reports lease_expired.
+
+_SHUTDOWN_TASK = workhorse.ClaimedTask(
+    id="00000000-0000-0000-0000-000000002074",
+    queue="billing",
+    type="send-invoice",
+    priority=0,
+    payload=None,
+    contract_version=None,
+    result_max_bytes=1_048_576,
+    redact_error_details=False,
+    trace_context=None,
+    attempt=2,
+    max_attempts=3,
+    retry_policy=None,
+    deadline_at=None,
+    execution_timeout_ms=None,
+    attempt_timeout_at=None,
+    fence_token=7,
+    lease_expires_at=datetime.fromtimestamp(0, UTC),
+)
+
+
+class _ScriptedSettlementExecutor:
+    """Answer the release and the statements that settle its answer from a script."""
+
+    def __init__(self, answers: dict[object, list[dict[str, object]] | Exception]) -> None:
+        self._answers = answers
+
+    def rows(self, statement: Any, _parameters: Any = ()) -> list[dict[str, object]]:
+        answer = self._answers.get(statement)
+        if answer is None:
+            raise AssertionError(f"unexpected statement {statement}")
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _shutdown_settlement_worker(answers: dict[object, Any]) -> Worker:
+    return Worker(
+        ScriptedPool(),  # type: ignore[arg-type]
+        queues=["billing"],
+        worker_id="python-shutdown-settlement",
+        _executor=_ScriptedSettlementExecutor(answers),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        pytest.param(
+            {
+                workhorse.worker._STATEMENTS.release_owned: [{"status": "cancel_requested"}],
+                workhorse.worker._STATEMENTS.acknowledge_cancel: [{"accepted": False}],
+            },
+            id="refused-acknowledgement",
+        ),
+        pytest.param(
+            {
+                workhorse.worker._STATEMENTS.release_owned: [{"status": "stale"}],
+                workhorse.worker._STATEMENTS.expire_owned: [
+                    {"status": "stale", "retry_state": None}
+                ],
+            },
+            id="stale-release",
+        ),
+    ],
+)
+def test_a_lost_lease_after_the_shutdown_abort_writes_no_settlement_failure(
+    answers: dict[object, Any],
+) -> None:
+    worker = _shutdown_settlement_worker(answers)
+    arbiter = workhorse.worker._AttemptOutcomeArbiter()
+    LOG_EXPORTER.clear()
+
+    with pytest.raises(workhorse.StaleLeaseError):
+        worker._release_after_shutdown(_SHUTDOWN_TASK, arbiter, {})
+
+    assert arbiter.outcome == "lease_expired"
+    # The release record proves that the exporter receives the records of this worker.
+    assert len(_log_records("workhorse.task.release_processed")) == 1
+    assert _log_records("workhorse.worker.shutdown_settlement_failed") == []
+
+
+def test_a_failed_release_after_the_shutdown_abort_logs_once() -> None:
+    worker = _shutdown_settlement_worker(
+        {workhorse.worker._STATEMENTS.release_owned: RuntimeError("never-log-this")}
+    )
+    LOG_EXPORTER.clear()
+
+    with pytest.raises(RuntimeError, match="never-log-this"):
+        worker._release_after_shutdown(
+            _SHUTDOWN_TASK, workhorse.worker._AttemptOutcomeArbiter(), {}
+        )
+
+    severity, body, attributes = _log_record("workhorse.worker.shutdown_settlement_failed")
+    assert (severity, body) == ("WARN", "Worker could not settle a task after the shutdown abort")
+    assert attributes["workhorse.worker.id"] == "python-shutdown-settlement"
+    assert attributes["error.type"] == "RuntimeError"
+    assert "never-log-this" not in str(LOG_EXPORTER.get_finished_logs())

@@ -11,6 +11,22 @@ adds.
 
 ## Unreleased
 
+### A lost lease after the shutdown is not a failed settlement
+
+A handler ends after the shutdown cancellation, and the worker completes or releases its task.
+PostgreSQL refuses the write, and the reconciliation finds a lost lease. The worker logged
+`workhorse.worker.shutdown_settlement_failed`, although no write failed. The run already ended
+without an error, and the outcome was already `lease_lost`. The worker now writes the record only
+for a write that fails for another reason, as the other six SDKs do (SM-2074).
+
+### A failed expiry request after the handler returned gets its record
+
+A handler returns while the `expire_owned_v1` request of its deadline is in flight, and the worker
+waits for the answer. If that request failed, the worker wrote no record, and the operator had no
+sign of the failure. The worker now writes `workhorse.worker.expiration_request_failed` for it, as
+the other six SDKs do. The record carries the task identity, the worker identity, and `error.type`,
+and no error text (SM-2067).
+
 ### The handler span gets the error status only for an error
 
 An operator alerts on `workhorse.handler` spans with the error status. A heartbeat delivers a

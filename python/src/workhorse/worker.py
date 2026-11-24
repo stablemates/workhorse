@@ -4245,6 +4245,10 @@ class Worker:
             raise RuntimeError("Durable wait suspension was not accepted by the arbiter") from None
         except Exception as error:
             if finish_ownership_lifecycle(error):
+                if arbiter.outcome in {"suspended_for_wait", "suspended_for_child"}:
+                    # The handler caught the suspension and raised another error. The task still
+                    # suspends, and the warning is the only record of the defect (SM-2066).
+                    self._log_signal_swallowed(task)
                 return
             if stopped_at_return:
                 # The process runner stopped the handler at the end of its shutdown grace. The stop
@@ -4269,17 +4273,7 @@ class Worker:
             return
         if finish_ownership_lifecycle():
             if arbiter.outcome in {"suspended_for_wait", "suspended_for_child"}:
-                _emit_log(
-                    "WARN",
-                    "workhorse.handler.signal_swallowed",
-                    "Task handler swallowed its abort signal",
-                    {
-                        **_task_span_attributes(task),
-                        "workhorse.queue.name": task.queue,
-                        "workhorse.worker.id": self.worker_id,
-                        "workhorse.handler.outcome": "suspended",
-                    },
-                )
+                self._log_signal_swallowed(task)
             return
         # After the shutdown abort, the completion goes alone through complete_v1, as Go
         # settleAfterShutdown does. A batched completion could wait behind a statement in flight.
@@ -4430,6 +4424,11 @@ class Worker:
         }
         try:
             outcome, status = self._release_owned(task, attributes)
+        except StaleLeaseError:
+            # A lost lease is not a failed write, so the worker does not log it (SM-2074). The
+            # worker settled nothing, so the attempt reports the lost lease.
+            arbiter.submit("lease_expired")
+            raise
         except Exception as error:
             self._log_shutdown_settlement_failure(task, error)
             raise
@@ -4462,6 +4461,23 @@ class Worker:
             return isinstance(cancellation.reason, _WorkerShutdownError)
         with self._state_lock:
             return self._shutdown_aborted
+
+    def _log_signal_swallowed(self, task: ClaimedTask) -> None:
+        """A handler caught the suspension of a durable call and then returned or raised.
+
+        The task still suspends. The record carries no part of the value or the error.
+        """
+        _emit_log(
+            "WARN",
+            "workhorse.handler.signal_swallowed",
+            "Task handler swallowed its abort signal",
+            {
+                **_task_span_attributes(task),
+                "workhorse.queue.name": task.queue,
+                "workhorse.worker.id": self.worker_id,
+                "workhorse.handler.outcome": "suspended",
+            },
+        )
 
     def _log_expiration_request_failure(self, task: ClaimedTask, error: Exception) -> None:
         """An expiry request failed while the handler runs. The worker asks again."""

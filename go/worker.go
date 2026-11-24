@@ -4120,10 +4120,11 @@ func (worker *Worker) settleAfterShutdown(
 		})
 	}
 	if err != nil {
-		worker.logShutdownSettlementFailure(ctx, task, err)
 		// A write that failed settled nothing, so the attempt has no outcome, as in TypeScript. A
-		// stale answer already showed a lost lease, which needs no write, so that outcome stays.
+		// stale answer already showed a lost lease, which needs no write, so that outcome stays. A
+		// lost lease is not a failed write, so the worker does not log it (SM-2074).
 		if shutdownSettlementError(err) != nil {
+			worker.logShutdownSettlementFailure(ctx, task, err)
 			outcome = handlerOutcomeUnknown
 		} else {
 			outcome = handlerOutcomeLeaseLost
@@ -4203,10 +4204,10 @@ func (worker *Worker) failAfterShutdown(
 	settleContext = context.WithValue(settleContext, shutdownSettlementLoggedKey{}, true)
 	outcome, err := worker.failAttempt(settleContext, executor, task, handlerError)
 	if err != nil {
-		worker.logShutdownSettlementFailure(ctx, task, err)
 		// A write that failed settled nothing, so the attempt has no outcome, as in TypeScript. A
-		// stale answer lost the lease, as in settleAfterShutdown.
+		// stale answer lost the lease, as in settleAfterShutdown, and the worker does not log it.
 		if shutdownSettlementError(err) != nil {
+			worker.logShutdownSettlementFailure(ctx, task, err)
 			return handlerOutcomeUnknown, err
 		}
 		return handlerOutcomeLeaseLost, err

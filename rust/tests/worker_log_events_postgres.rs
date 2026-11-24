@@ -159,6 +159,122 @@ async fn a_failed_expiry_request_logs_its_event() {
     }
     // docs/architecture/telemetry.md, "Log content limits": a record never holds the error message.
     assert!(!record.contains(" error="), "{record}");
+    assert!(!log.text().contains("injected expiry request failure"), "{}", log.text());
+}
+
+/// SM-2067: the handler returns while the expiry request of its deadline is in flight, and that
+/// request then fails. The worker waits for the answer, and it must write the record, as the other
+/// six SDKs do. The completion that follows meets the deadline, so the task fails.
+///
+/// An advisory lock that the test holds keeps the first request in flight. The handler returns only
+/// when the request waits for that lock, and the test releases the lock only after the handler
+/// returned. Thus the request fails during the wait after the handler, also on a slow runner.
+#[tokio::test]
+async fn a_failed_expiry_request_after_the_handler_returned_logs_its_event() {
+    const LOCK: i64 = 2067;
+    let Some(database) = scratch_database("worker_late_expiry_request_log").await else { return };
+    let (client, connection) = tokio_postgres::connect(database.url(), NoTls).await.unwrap();
+    tokio::spawn(connection);
+    client
+        .batch_execute(
+            r"
+            CREATE SEQUENCE workhorse.test_expiry_calls;
+            DO $copy$ BEGIN EXECUTE replace(
+              pg_get_functiondef('workhorse.expire_owned_telemetry_v1(uuid,text,bigint)'::regprocedure),
+              'FUNCTION workhorse.expire_owned_telemetry_v1(',
+              'FUNCTION workhorse.test_original_expire_owned_telemetry_v1('); END $copy$;
+            CREATE OR REPLACE FUNCTION workhorse.expire_owned_telemetry_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint)
+              RETURNS TABLE (status text, retry_state text) LANGUAGE plpgsql AS $body$
+              BEGIN
+                IF nextval('workhorse.test_expiry_calls') = 1 THEN
+                  PERFORM pg_advisory_xact_lock(2067);
+                  RAISE EXCEPTION 'injected late expiry request failure' USING ERRCODE = '55P03';
+                END IF;
+                RETURN QUERY SELECT * FROM workhorse.test_original_expire_owned_telemetry_v1(
+                  p_task_id, p_worker_id, p_fence_token);
+              END $body$;
+            ",
+        )
+        .await
+        .unwrap();
+    client.execute("SELECT pg_advisory_lock($1)", &[&LOCK]).await.unwrap();
+    let queue_name = "rust-late-expiry-request-log";
+    let queue = Queue::connect(database.url(), queue_name).await.unwrap();
+    let mut options = EnqueueOptions::default();
+    options.max_attempts = 1;
+    options.deadline = Some(chrono::Utc::now() + chrono::Duration::milliseconds(300));
+    let task_id = queue.enqueue("deadline", &json!({}), options).await.unwrap().task_id;
+    let worker = worker_on(database.url(), queue_name);
+    let (returned, mut handler_returned) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let url = database.url().to_owned();
+    worker.handle("deadline", move |_: Value, _context: HandlerContext| {
+        let returned = returned.clone();
+        let url = url.clone();
+        async move {
+            // The handler ignores its token, and it returns once the first request waits for the lock.
+            let (observer, connection) = tokio_postgres::connect(&url, NoTls).await.unwrap();
+            tokio::spawn(connection);
+            let waiting = async {
+                loop {
+                    let row = observer
+                        .query_one(
+                            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND NOT granted",
+                            &[&(LOCK as i32 as u32)],
+                        )
+                        .await
+                        .unwrap();
+                    if row.get::<_, i64>(0) > 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(20), waiting).await.expect("no expiry request waited for the lock");
+            let _ = returned.send(());
+            Ok::<Value, HandlerError>(json!({"late": true}))
+        }
+    });
+    let log = CapturedLog::default();
+    let _subscriber = log.install();
+
+    let run = tokio::spawn(async move { worker.run_once().await });
+    tokio::time::timeout(Duration::from_secs(30), handler_returned.recv())
+        .await
+        .expect("the handler did not return")
+        .expect("the handler channel closed");
+    // The worker reads the end of the handler at its next poll. The request cannot answer before the
+    // lock goes, so the worker is in its wait after the handler when the request fails.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client.execute("SELECT pg_advisory_unlock($1)", &[&LOCK]).await.unwrap();
+    let worked = tokio::time::timeout(Duration::from_secs(30), run).await;
+    assert!(worked.unwrap().unwrap().unwrap(), "the worker claimed no task");
+
+    let row = client
+        .query_one(
+            "SELECT state, coalesce(error->>'name', '') FROM workhorse.task_outcome WHERE task_id = $1",
+            &[&task_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (row.get::<_, String>(0), row.get::<_, String>(1)),
+        ("failed".to_owned(), "DeadlineExceeded".to_owned())
+    );
+    let records = log.records("workhorse.worker.expiration_request_failed");
+    assert_eq!(records.len(), 1, "{}", log.text());
+    let record = &records[0];
+    for field in [
+        " WARN ".to_owned(),
+        "Worker settles a task without the answer of its expiry request".to_owned(),
+        format!("workhorse.task.id={task_id}"),
+        format!("workhorse.queue.name={queue_name}"),
+        format!("workhorse.worker.id={queue_name}"),
+        "error.type=Postgres".to_owned(),
+    ] {
+        assert!(record.contains(&field), "{field} in {record}");
+    }
+    assert!(!log.text().contains("injected late expiry request failure"), "{}", log.text());
 }
 
 /// SM-2016: a handler can catch the suspension of a durable call and return. The task still
@@ -997,6 +1113,78 @@ async fn a_failed_settlement_after_shutdown_logs_its_event() {
         Level::DEBUG,
         &[("workhorse.task.id", text(task_id)), ("workhorse.queue.name", text(queue_name))],
     );
+}
+
+/// SM-2074: PostgreSQL refuses the completion after the shutdown cancellation, and the
+/// reconciliation finds a lost lease. A lost lease is not a failed write, so the worker writes no
+/// `workhorse.worker.shutdown_settlement_failed`, as the TypeScript, Python, Go, Ruby, JVM, and
+/// .NET workers do. The attempt has the outcome `lease_lost`, and the run ends without an error.
+#[tokio::test]
+async fn a_lost_lease_after_shutdown_logs_no_settlement_failure() {
+    let Some(database) = scratch_database("shutdown_lost_lease_log").await else { return };
+    let (client, connection) = tokio_postgres::connect(database.url(), NoTls).await.unwrap();
+    tokio::spawn(connection);
+    client
+        .batch_execute(
+            r"
+            CREATE OR REPLACE FUNCTION workhorse.complete_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint,
+              p_result jsonb DEFAULT 'null'::jsonb)
+              RETURNS boolean LANGUAGE plpgsql AS $body$ BEGIN RETURN false; END $body$;
+            CREATE OR REPLACE FUNCTION workhorse.expire_owned_telemetry_v1(
+              p_task_id uuid, p_worker_id text, p_fence_token bigint)
+              RETURNS TABLE (status text, retry_state text) LANGUAGE plpgsql AS $body$
+              BEGIN RETURN QUERY SELECT 'stale'::text, NULL::text; END $body$;
+            ",
+        )
+        .await
+        .unwrap();
+    let queue_name = "rust-log-shutdown-lost-lease";
+    let queue = Queue::connect(database.url(), queue_name).await.unwrap();
+    let task_id =
+        queue.enqueue("drains", &json!({}), EnqueueOptions::default()).await.unwrap().task_id;
+    let worker = Worker::new(pool_on(database.url()), {
+        let mut options = WorkerOptions::default();
+        options.queues = vec![queue_name.into()];
+        options.worker_id = Some(queue_name.into());
+        options.polling_only = true;
+        options.disable_registry = true;
+        options.maintenance_interval = Duration::from_secs(3600);
+        options.shutdown_grace_period = Duration::from_millis(50);
+        options
+    })
+    .unwrap();
+    let (claimed, started) = tokio::sync::oneshot::channel::<()>();
+    let claimed = Arc::new(Mutex::new(Some(claimed)));
+    worker.handle("drains", move |_: Value, context: HandlerContext| {
+        let claimed = Arc::clone(&claimed);
+        async move {
+            if let Some(claimed) = claimed.lock().unwrap().take() {
+                let _ = claimed.send(());
+            }
+            context.cancellation().cancelled().await;
+            Ok::<_, HandlerError>(json!("finished after the shutdown"))
+        }
+    });
+    let events = Events::default();
+    let _subscriber = events.install();
+    let run = worker.run(async {
+        let _ = started.await;
+    });
+    let ran = tokio::time::timeout(Duration::from_secs(30), run).await.unwrap();
+    assert!(ran.is_ok(), "a lost lease must not end the run with an error: {ran:?}");
+
+    let failures = events.named("workhorse.worker.shutdown_settlement_failed");
+    assert!(failures.is_empty(), "a lost lease is not a failed settlement: {failures:?}");
+    events
+        .one_with("workhorse.task.execution_finished", "workhorse.task.id", &task_id.to_string())
+        .expect(
+            Level::INFO,
+            &[
+                ("workhorse.task.id", text(task_id)),
+                ("workhorse.handler.outcome", text("lease_lost")),
+            ],
+        );
 }
 
 /// A heartbeat delivers a cancellation, and `acknowledge_cancel_v1` refuses it. The attempt settled

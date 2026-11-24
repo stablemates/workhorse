@@ -272,9 +272,9 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
         // SM-2016: the warning is the only record that the handler swallowed its suspension.
         var swallowed = Assert.Single(logs.Records, record => record.Event == "workhorse.handler.signal_swallowed");
         Assert.Equal(LogLevel.Warning, swallowed.Level);
-        Assert.Equal("suspended", swallowed.Values["HandlerOutcome"]);
-        Assert.Equal(taskId, swallowed.Values["TaskId"]);
-        Assert.Equal("dotnet-durable-worker", swallowed.Values["WorkerId"]);
+        Assert.Equal("suspended", swallowed.Values["workhorse.handler.outcome"]);
+        Assert.Equal(taskId, swallowed.Values["workhorse.task.id"]);
+        Assert.Equal("dotnet-durable-worker", swallowed.Values["workhorse.worker.id"]);
     }
 
     /// <summary>
@@ -324,9 +324,13 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
             Assert.True(await worker.RunOnceAsync(Token));
             var failed = Assert.Single(logs.Records, record => record.Event == "workhorse.worker.expiration_request_failed");
             Assert.Equal(LogLevel.Warning, failed.Level);
-            Assert.Equal(taskId, failed.Values["TaskId"]);
-            Assert.Equal("dotnet-durable-worker", failed.Values["WorkerId"]);
-            Assert.Equal("Workhorse.DatabaseException", failed.Values["ErrorType"]);
+            Assert.Equal(taskId, failed.Values["workhorse.task.id"]);
+            Assert.Equal("dotnet-durable-worker", failed.Values["workhorse.worker.id"]);
+            Assert.Equal("Workhorse.DatabaseException", failed.Values["error.type"]);
+            // SM-2065: the record holds no part of the error text.
+            Assert.Null(failed.Exception);
+            Assert.DoesNotContain("injected expiry request failure", failed.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(failed.Values.Values, value => value?.ToString()?.Contains("injected expiry request failure", StringComparison.Ordinal) == true);
             Assert.Equal("failed", (await TaskAsync(DataSource, taskId)).Text("state"));
         }
         finally
@@ -999,11 +1003,11 @@ public sealed class DurableContextTests(ScratchDatabase database) : IClassFixtur
             var values = state is IEnumerable<KeyValuePair<string, object?>> pairs
                 ? pairs.ToDictionary(pair => pair.Key, pair => pair.Value)
                 : new Dictionary<string, object?>();
-            Records.Enqueue(new LogRecord(logLevel, eventId.Name, values));
+            Records.Enqueue(new LogRecord(logLevel, eventId.Name, values, exception, formatter(state, exception)));
         }
     }
 
-    private sealed record LogRecord(LogLevel Level, string? Event, Dictionary<string, object?> Values);
+    private sealed record LogRecord(LogLevel Level, string? Event, Dictionary<string, object?> Values, Exception? Exception, string Message);
 
     /// <summary>A logger factory whose loggers throw for the named events.</summary>
     private sealed class FailingLoggerFactory(params string[] events) : ILoggerFactory, ILogger

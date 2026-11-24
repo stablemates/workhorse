@@ -255,6 +255,11 @@ export class TaskAttempt {
     throw reason;
   }
 
+  /** Whether `value` is the signal that {@link suspend} throws, not an error that wraps it. */
+  isSuspensionSignal(value: unknown): boolean {
+    return value === DURABLE_WAIT_SUSPENSION || value === CHILD_TASK_SUSPENSION;
+  }
+
   /** Stop renewing the lease and cancel the local expiration timer. */
   stop(): void {
     this.stopHeartbeat();

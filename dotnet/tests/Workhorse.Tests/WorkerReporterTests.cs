@@ -53,10 +53,11 @@ public sealed class WorkerReporterTests
         Assert.Equal(3, calls);
         var record = Assert.Single(log.Records);
         Assert.Equal(LogLevel.Error, record.Level);
-        Assert.Equal("reporter-worker", record.Values["WorkerId"]);
-        Assert.Equal(reporter, record.Values["Reporter"]);
-        Assert.Equal(typeof(InvalidOperationException).FullName, record.Values["ErrorType"]);
-        Assert.Equal(0L, record.Values["Unreported"]);
+        Assert.Equal("reporter-worker", record.Values["workhorse.worker.id"]);
+        Assert.Equal(reporter, record.Values["workhorse.worker.reporter"]);
+        Assert.Equal(typeof(InvalidOperationException).FullName, record.Values["error.type"]);
+        // As in the TypeScript body, only the message states the count of unreported failures.
+        Assert.Contains("after 0 unreported failures", record.Message, StringComparison.Ordinal);
         Assert.Null(record.Error);
         Assert.DoesNotContain("alert client is offline", record.Message, StringComparison.Ordinal);
 
@@ -66,7 +67,7 @@ public sealed class WorkerReporterTests
         Raise(worker, method, new TimeoutException("registry is offline"));
 
         Assert.Equal(2, log.Records.Count);
-        Assert.Equal(2L, log.Records.Last().Values["Unreported"]);
+        Assert.Contains("after 2 unreported failures", log.Records.Last().Message, StringComparison.Ordinal);
     }
 
     [Fact]

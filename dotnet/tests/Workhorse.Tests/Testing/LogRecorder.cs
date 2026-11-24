@@ -5,8 +5,8 @@ using Microsoft.Extensions.Logging;
 namespace Workhorse.Tests.Testing;
 
 /// <summary>
-/// A logger factory whose loggers keep each record with its event name, its level, its named
-/// template values, and the name of the activity that was current where the SDK wrote it. A test
+/// A logger factory whose loggers keep each record with its event name, its level, its values under
+/// their keys, its message, and the name of the activity that was current where the SDK wrote it. A test
 /// reads the records of one event with <see cref="Of"/>.
 /// </summary>
 internal sealed class LogRecorder : ILoggerFactory, ILogger
@@ -40,19 +40,22 @@ internal sealed class LogRecorder : ILoggerFactory, ILogger
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        var values = state is IEnumerable<KeyValuePair<string, object?>> pairs
-            ? pairs.Where(pair => pair.Key != "{OriginalFormat}").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
-            : new Dictionary<string, object?>(StringComparer.Ordinal);
-        _records.Enqueue(new LogRecord(logLevel, eventId.Name, values, exception, Activity.Current?.OperationName));
+        var pairs = state as IEnumerable<KeyValuePair<string, object?>> ?? [];
+        var values = pairs.Where(pair => pair.Key != "{OriginalFormat}").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var template = pairs.FirstOrDefault(pair => pair.Key == "{OriginalFormat}").Value as string;
+        _records.Enqueue(new LogRecord(logLevel, eventId, values, exception, Activity.Current?.OperationName, formatter(state, exception), template));
     }
 }
 
 /// <summary>
-/// One log record: its level, its event name, its named template values, its exception, and the
-/// name of the current activity.
+/// One log record: its level, its event ID, its values under their keys, its exception, the name of
+/// the current activity, its rendered message, and its template (<c>{OriginalFormat}</c>).
 /// </summary>
-internal sealed record LogRecord(LogLevel Level, string? Event, IReadOnlyDictionary<string, object?> Values, Exception? Exception, string? Span)
+internal sealed record LogRecord(LogLevel Level, EventId EventId, IReadOnlyDictionary<string, object?> Values, Exception? Exception, string? Span, string Message, string? Template)
 {
-    /// <summary>The value of the template name <paramref name="key"/>.</summary>
+    /// <summary>The event name of the record.</summary>
+    internal string? Event => EventId.Name;
+
+    /// <summary>The value under <paramref name="key"/>.</summary>
     internal object? this[string key] => Values.TryGetValue(key, out var value) ? value : throw new KeyNotFoundException($"{Event} has no value {key}");
 }

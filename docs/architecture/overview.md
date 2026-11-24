@@ -427,7 +427,7 @@ notification subscription logs the event. A run under the polling-only option of
 it. A one-pass run logs nothing. The body is "Worker has no notification listener and dispatches by
 polling". The record carries `workhorse.worker.id`, `workhorse.worker.queues`, and
 `workhorse.worker.pool_max_size`, the size that the worker found or `unknown`. The .NET record
-names these values `WorkerId`, `Queues`, and `PoolMaxSize` in its template.
+uses the same keys.
 
 With a Workhorse `Queue`, the TypeScript pool always has room for the listener, so the TypeScript
 event comes from a custom `WorkerQueueApi` that returns no subscription. Go also logs "PostgreSQL
