@@ -4,7 +4,7 @@
 # Alpine keeps only the newest build of a package in its repository. When it publishes a Python
 # fix, `apk add` can no longer find this version and the build stops; update the pin as
 # typescript/demo/DEPLOYMENT.md describes.
-ARG ALPINE_PYTHON_VERSION=3.14.10-r1
+ARG ALPINE_PYTHON_VERSION=3.14.10-r2
 
 FROM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS go-build
 
