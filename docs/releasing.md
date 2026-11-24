@@ -321,6 +321,30 @@ attribute. For 0.4.0, `importlib.metadata.version("stablemates-workhorse")` is t
 
 ## Go module
 
+The Go stage runs on the machine of the maintainer, not in CI. Each run of `scripts/release-go.sh`
+starts these programs:
+
+- A POSIX `sh`, `dirname`, `awk`, `sed`, and `wc`. The script uses them to find the checkout and to
+  read the tags and the origin URL.
+- `git`. The script reads the tags of origin, and the release check writes the module zip with
+  `git archive`.
+- `pnpm` and Node.js at the `mise.toml` pins. The script runs each check through `pnpm`.
+- `go` at the `mise.toml` pin. The rehearsal, `pnpm go:test`, and `pnpm go:vuln` use it.
+- A PostgreSQL server at `DATABASE_URL_TEST`. The script resets that database before the checks.
+- `gh`, logged in to github.com. This program is optional. Without it, the script runs the full
+  `pnpm check`.
+
+The release check removes the directory entries from the module zip in Node.js, so the stage needs
+no `zip` or `unzip` program.
+
+If the script runs the full `pnpm check`, the machine also needs these programs and services:
+
+- Each toolchain that `mise.toml` pins.
+- The POSIX `env`, `mktemp`, `rm`, and `tar`.
+- `docker` and a Docker daemon. The packed package test builds and starts the dashboard image.
+- A PostgreSQL server at `DATABASE_URL_TEST_PACKED`. The script resets that database before the
+  full check.
+
 1. Add the intended version to `go/CHANGELOG.md`. Then re-pin the Go API baseline:
    1. Fetch the tags with `git fetch origin --tags`.
    2. Run `pnpm go-api:generate`. It pins `api/go.txt` to the newest `go/v*` tag and lists only
