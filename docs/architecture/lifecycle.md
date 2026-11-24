@@ -1357,9 +1357,10 @@ loop counts the freed slot at once and applies the rules above, without the wait
 `RunOnce` claims nothing while those handlers hold every slot. A claim asks only for slots that are
 free now, so the loop never waits for a slot, and its stop stays inside its deadline.
 
-A claim counts as empty if it returns no row, or only rows of unhandled types that it releases
-through `release_owned_v1`. After an empty claim, the loop starts no claim until the poll deadline
-or until a dispatch wake that is newer than that claim.
+A claim counts as empty if it returns no row. After an empty claim, the loop starts no claim until
+the poll deadline or until a dispatch wake that is newer than that claim. A claim that returns only
+rows of unhandled types, which it releases through `release_owned_v1`, starts a release run. When
+the run ends, it counts as one empty claim, as [Continuous loop](#continuous-loop) states.
 
 The TypeScript worker measures the poll deadline, the `maintenanceIntervalMs` and
 `maintenanceRoutinePollMs` cadences, and the `registryIntervalMs` refresh on `monotonicNow()`.
@@ -3439,29 +3440,54 @@ released task.
 
 Each SDK releases a task of an unregistered type through `release_owned_v1` and records the
 `released` handler outcome. If the release loses its lease, the worker records `lease_lost` and
-continues, as [A stale failure or release](#a-stale-failure-or-release) states. A claim whose tasks were all released counts as empty. The release also
-sends a notification, so the continuous loop starts a release wait that a notification does not end.
+continues, as [A stale failure or release](#a-stale-failure-or-release) states. A claim whose tasks
+were all released made no progress. The continuous loop then claims again at once in a release run,
+and starts a release wait that a notification does not end when the run ends
+([ADR 0126](../decisions/0126-claim-past-the-tasks-that-no-handler-serves-before-the-release-wait.md)).
 
 ##### Continuous loop
 
 The continuous loop is TypeScript `Worker.run()`, Python `Worker.run()` and `AsyncWorker.run()`, Go
 `Worker.Run`, Rust `Worker::run`, Ruby `Worker#run`, JVM `Worker.run()`, and .NET
-`Worker.RunAsync`. All seven do the same steps:
+`Worker.RunAsync`. All seven keep a release run: the claims in a row that released every task that
+they claimed, and the ids of those tasks. They do the same steps:
 
-1. The worker claims a task that it has no handler for. The claim counts as empty.
-2. The loop starts a release wait. Its deadline is the next empty wait: the base poll interval
-   while the listener is active, or the poll backoff without a listener.
-3. The worker releases the task. `release_owned_v1` sets the task to `ready` and calls
-   `pg_notify('workhorse_tasks', queue_name)`.
-4. The worker's own listener gets the notification and wakes dispatch. The wake does not end the
-   release wait. The wait ends only at its deadline, on stop, or on pause.
-5. After the deadline, the worker claims again. If the task is first in its queue, the worker gets
-   it and releases it again.
+1. The worker claims a task that it has no handler for. The claim adds the task to the run.
+2. The worker releases the task. `release_owned_v1` sets the task to `ready` with a new `sequence`
+   and calls `pg_notify('workhorse_tasks', queue_name)`. `fast_release_owned_v1` also sets a new
+   `run_at`. Thus the task is behind the other ready tasks of its priority.
+3. The run claims again at once. The claim reaches the next ready task. With one slot, it starts
+   after the release before it.
+4. The run ends at the first of these claims: a claim that returns a task that the run already
+   released, the tenth claim of the run, or a claim that returns no task.
+5. The loop then starts a release wait, which counts as one empty claim. Its deadline is the next
+   empty wait: the base poll interval while the listener is active, or the poll backoff without a
+   listener. The worker's own release notification wakes dispatch, but the wake does not end the
+   wait. The wait ends only at its deadline, on stop, or on pause.
 
-Thus a worker that has no handler for a ready task claims it at most once in each empty wait. With
-the default 5,000 ms poll interval and an active listener, a fleet of N such workers claims the task
-at most N times in about 5 s. The [Polling cadence](operations.md#polling-cadence) table gives the
-wait.
+A claim that ran a handler ends the run and starts no wait. An empty claim outside a run starts the
+empty wait. An empty claim inside a run starts the release wait, because it can have found only the
+tasks whose release is still in flight. With more than one slot, a claim can run before the release
+before it commits.
+
+The run limit is 10 claims. The SDKs name it `RELEASE_RUN_LIMIT` (TypeScript, Rust, and Ruby),
+`_RELEASE_RUN_LIMIT` (Python), `releaseRunLimit` (Go), `ReleaseRun.LIMIT` (the JVM), and
+`ReleaseRun.Limit` (.NET). The JVM and .NET keep the run in a `ReleaseRun` object.
+
+Thus a worker reaches a task that it can run behind up to 9 claims of tasks that it cannot run
+without a wait, because the 10th such claim ends the run. A worker that has no handler for any
+ready task makes at most 10 released-only claims between two release waits. If such a task is the
+only ready task, the worker claims it at most twice in each wait. With one slot, it claims it
+exactly twice: the second claim gets back the task that the first released. With more slots, the
+second claim can find no task while the release is in flight, and then it starts the wait. With the
+default 5,000 ms poll interval and an active listener, a fleet of N such workers claims that task at
+most 2N times in about 5 s. The [Polling cadence](operations.md#polling-cadence) table gives the wait.
+
+A release keeps the priority of its task. If a task that the worker cannot run has a higher priority
+than the tasks that it can run, each claim returns that task first. The run ends at the second
+claim, and the worker does not reach the lower-priority tasks until a worker with the handler claims
+the task. Only a claim with a task-type filter can change this, and that needs a schema change
+(SM-2085).
 
 The release wait replaces an empty wait that a notification could end. Thus the notification of the
 release cannot end the wait early. While the release wait is active, a notification for new work
@@ -3477,15 +3503,21 @@ time from 0 through 50 ms. The SDKs name that delay `NOTIFICATION_CLAIM_DELAY_MS
 
 The SDKs mark the release wait in the empty-wait state of the loop. TypeScript and Go set a
 `release` flag on `emptyWait`. Python, Rust, and Ruby store no wake version (`None` or `nil`) in
-`empty_wait`. .NET stores a `null` `Version` in its `EmptyWait` record.
+`empty_wait`. The JVM stores a `null` `version` and .NET a `null` `Version` in its `EmptyWait`
+record.
 
 The shared runtime fixture
-`a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval` runs a listening
-worker with a 1,000 ms poll interval for 2,500 ms. It requires 2 or 3 releases, at least 800 ms
-apart. The shortest wait is 900 ms. Each worker starts the release wait when its claim returns,
-and releases the task later on a handler thread or task. The release statement stamps
-`occurred_at`, so a late release makes the next gap shorter than the wait. The 100 ms margin is
-for this measurement.
+`a-listening-worker-claims-a-task-it-cannot-run-at-most-twice-in-each-poll-interval` runs a
+listening worker with one slot and a 1,000 ms poll interval for 2,500 ms. It splits the releases at
+each gap of at least 800 ms, and requires 2 or 3 groups of 2 releases. The window can cut the last
+group short. The shortest wait is 900 ms. The release statement stamps `occurred_at`, so a late
+release makes the next gap shorter than the wait. The 100 ms margin is for this measurement.
+
+The shared runtime fixture `a-listening-worker-claims-past-the-tasks-it-cannot-run-before-it-waits`
+enqueues 11 tasks that the worker cannot run and then one task that it can run. The worker has one
+slot and a 1,000 ms poll interval. Before the handled task succeeds, the worker releases each of
+the 11 tasks once. The gaps between the first 10 releases are below 500 ms, and the gap before the
+eleventh release is at least 800 ms. Each released task stays `ready` with its attempt.
 
 Each runner also requires a session in `pg_stat_activity` whose last query is
 `LISTEN workhorse_tasks`, because the fixture proves nothing without a listener.

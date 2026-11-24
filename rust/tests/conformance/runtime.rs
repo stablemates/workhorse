@@ -78,6 +78,7 @@ pub async fn run_runtime(fixture: &Value) -> Outcome {
             "budget-admission-race" => budget_admission_race(database, fixture).await,
             "missing-handler" => missing_handler(database, fixture).await,
             "release-wait" => release_wait(database, fixture).await,
+            "release-run" => release_run(database, fixture).await,
             "json-round-trip" => json_round_trip(database, fixture).await,
             "checkpoint-no-value" => checkpoint_no_value(database, fixture).await,
             "durable-script" => {
@@ -1463,15 +1464,7 @@ async fn release_wait(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .await
         .map_err(driver)?
         .task_id;
-    let worker = worker(database, 4, {
-        let mut worker_options = options(fixture);
-        worker_options.polling_only = false;
-        worker_options.listen_config = Some(database.url().parse().map_err(sql)?);
-        worker_options.lease_duration = millis(fixture, "leaseMs");
-        worker_options.poll_interval = Some(millis(fixture, "pollMs"));
-        worker_options
-    })?;
-    worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
+    let worker = release_worker(database, fixture)?;
     let (stop, running) = run(&worker);
     tokio::time::sleep(millis(fixture, "runMs")).await;
     // Without a listener, the worker gets no notification, and the fixture proves nothing.
@@ -1498,20 +1491,123 @@ async fn release_wait(database: &ScratchDatabase, fixture: &Value) -> Checked {
         .iter()
         .map(|row| row.get(0))
         .collect();
-    let releases = i64::try_from(times.len()).unwrap_or(i64::MAX);
-    let (least, most) =
-        (number(fixture, "expectedMinimumReleases"), number(fixture, "expectedMaximumReleases"));
-    check((least..=most).contains(&releases), || {
-        format!("the worker released the task {releases} times while it ran")
-    })?;
+    // A gap of at least the least wait is a release wait. The releases between two waits are one
+    // release run: the claim that released the task and the claim that got it back.
     let least_gap = fixture["expectedMinimumReleaseGapMs"].as_f64().unwrap_or(f64::MAX);
-    for pair in times.windows(2) {
-        let gap = pair[1] - pair[0];
-        check(gap >= least_gap, || {
-            format!("the worker released the task again after {gap:.0} ms")
+    let mut runs: Vec<Vec<f64>> = Vec::new();
+    for (index, time) in times.iter().enumerate() {
+        if index == 0 || time - times[index - 1] >= least_gap {
+            runs.push(Vec::new());
+        }
+        runs.last_mut().expect("a run").push(*time);
+    }
+    let waits = i64::try_from(runs.len()).unwrap_or(i64::MAX);
+    let (least, most) =
+        (number(fixture, "expectedMinimumWaits"), number(fixture, "expectedMaximumWaits"));
+    check((least..=most).contains(&waits), || {
+        format!("the worker made {waits} release runs while it ran: {runs:?}")
+    })?;
+    // The end of the window can cut the last run short.
+    let per_wait = usize::try_from(number(fixture, "expectedReleasesPerWait")).unwrap_or(0);
+    for (index, run) in runs.iter().enumerate() {
+        check(run.len() == per_wait || (index + 1 == runs.len() && run.len() < per_wait), || {
+            format!("release run {index} has {} releases: {runs:?}", run.len())
         })?;
     }
     Ok(())
+}
+
+/// A listening worker with the slots of the fixture and a handler only for `registeredTaskType`.
+fn release_worker(database: &ScratchDatabase, fixture: &Value) -> Checked<Worker> {
+    let worker = worker(database, 4, {
+        let mut worker_options = options(fixture);
+        worker_options.polling_only = false;
+        worker_options.listen_config = Some(database.url().parse().map_err(sql)?);
+        worker_options.concurrency =
+            usize::try_from(number(fixture, "concurrency")).expect("a positive concurrency");
+        worker_options.lease_duration = millis(fixture, "leaseMs");
+        worker_options.poll_interval = Some(millis(fixture, "pollMs"));
+        worker_options
+    })?;
+    worker.handle(text(fixture, "registeredTaskType"), |_: Value, _| async { Ok(Value::Null) });
+    Ok(worker)
+}
+
+/// A worker with one slot reaches a task that it can run behind tasks that it cannot run. Each
+/// release puts its task behind the others, so the worker claims again at once until the release
+/// run reaches its limit.
+async fn release_run(database: &ScratchDatabase, fixture: &Value) -> Checked {
+    let client = database.connect().await;
+    let queue = queue(database, fixture).await?;
+    let mut unhandled = Vec::new();
+    for index in 0..number(fixture, "unhandledTasks") {
+        let task = queue
+            .enqueue(text(fixture, "taskType"), &json!({ "index": index }), Default::default())
+            .await
+            .map_err(driver)?
+            .task_id;
+        unhandled.push(task);
+    }
+    let handled = queue
+        .enqueue(text(fixture, "registeredTaskType"), &json!({}), Default::default())
+        .await
+        .map_err(driver)?
+        .task_id;
+    let worker = release_worker(database, fixture)?;
+    let (stop, running) = run(&worker);
+    let want = text(&fixture["expectedAfterHandled"], "state").to_owned();
+    let succeeded =
+        eventually_within(Duration::from_secs(10), "the handled task did not succeed", || {
+            let (client, want) = (&client, &want);
+            async move { Ok(task_state(client, handled).await?.0 == *want) }
+        })
+        .await;
+    let _ = stop.send(());
+    running.await.map_err(|error| error.to_string())?.map_err(driver)?;
+    succeeded?;
+    // The releases before the handled task succeeded. The worker claims again after it, and the
+    // runner ignores those releases.
+    let releases: Vec<(Uuid, f64)> = client
+        .query(
+            "SELECT event.task_id, (extract(epoch FROM event.occurred_at) * 1000)::float8
+               FROM workhorse.task_event event
+              WHERE event.task_id = ANY($1) AND event.event_type = 'released'
+                AND event.occurred_at < (
+                  SELECT succeeded.occurred_at FROM workhorse.task_event succeeded
+                   WHERE succeeded.task_id = $2 AND succeeded.event_type = 'succeeded'
+                )
+              ORDER BY event.occurred_at, event.task_id",
+            &[&unhandled, &handled],
+        )
+        .await
+        .map_err(sql)?
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    // Each release put its task behind the others, so the worker released each task once.
+    let mut released: Vec<Uuid> = releases.iter().map(|(task, _)| *task).collect();
+    released.sort();
+    let mut expected = unhandled.clone();
+    expected.sort();
+    check(released == expected, || {
+        format!("the worker released {released:?} before the handled task, want each of {expected:?} once")
+    })?;
+    let limit = usize::try_from(number(fixture, "expectedReleasesBeforeWait")).unwrap_or(0);
+    let most_run_gap = fixture["expectedMaximumRunGapMs"].as_f64().unwrap_or(0.0);
+    let least_gap = fixture["expectedMinimumReleaseGapMs"].as_f64().unwrap_or(f64::MAX);
+    for index in 1..releases.len() {
+        let gap = releases[index].1 - releases[index - 1].1;
+        check(index >= limit || gap < most_run_gap, || {
+            format!("release {} of the run came {gap:.0} ms after the one before", index + 1)
+        })?;
+        check(index != limit || gap >= least_gap, || {
+            format!("the release wait after the run lasted only {gap:.0} ms")
+        })?;
+    }
+    for task in &unhandled {
+        assert_state(&client, *task, &fixture["expectedAfterRelease"]).await?;
+    }
+    assert_state(&client, handled, &fixture["expectedAfterHandled"]).await
 }
 
 async fn json_round_trip(database: &ScratchDatabase, fixture: &Value) -> Checked {

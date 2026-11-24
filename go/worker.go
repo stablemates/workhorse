@@ -55,6 +55,10 @@ const (
 	expirationRetryMaximum     = time.Second
 	maximumEmptyPollInterval   = 5 * time.Second
 	notificationClaimDelay     = 50 * time.Millisecond
+	// Claims in a row that only release their tasks before Run starts a release wait. A release
+	// gives the task a new place behind the other ready tasks of its priority, so each claim of the
+	// run reaches the next task (ADR 0126).
+	releaseRunLimit = 10
 	// How long a cancelled handler has to unwind before Run stops waiting for it. A handler that
 	// honours its context returns well inside this window, so abandonment reports a handler that
 	// ignored cancellation rather than one that was about to finish.
@@ -1200,6 +1204,14 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		wakeVersion int
 		release     bool
 	}
+	// The release run: the claims in a row that released every task they claimed, and the ids of
+	// those tasks. A claim that ran a handler, an empty claim, or a release wait ends it (ADR 0126).
+	releaseRunClaims := 0
+	releaseRunTasks := map[string]struct{}{}
+	endReleaseRun := func() {
+		releaseRunClaims = 0
+		clear(releaseRunTasks)
+	}
 	maintenanceErrors := environment.maintenanceErrors
 	claimable := environment.claimable
 	if claimable == nil {
@@ -1398,9 +1410,31 @@ func (worker *Worker) dispatch(ctx context.Context, environment dispatchEnvironm
 		if progressed {
 			consecutiveEmptyClaims = 0
 			emptyWait = nil
+			endReleaseRun()
 			return
 		}
-		setEmptyWait(settlement.wakeVersion, len(settlement.tasks) > 0)
+		// An empty claim inside a run can find only the tasks whose release is still in flight. It
+		// starts the release wait too, so the notification of that release does not end the wait.
+		releasing := len(settlement.tasks) > 0 || releaseRunClaims > 0
+		if len(settlement.tasks) > 0 {
+			// Each release moved its task behind the other ready tasks of its priority. The next
+			// claim reaches the next task, so the run claims again at once. A task that comes back,
+			// or a long run, starts the release wait: claiming again then would spin on a task no
+			// handler here can run.
+			repeated := false
+			for _, task := range settlement.tasks {
+				if _, released := releaseRunTasks[task.ID]; released {
+					repeated = true
+				}
+				releaseRunTasks[task.ID] = struct{}{}
+			}
+			releaseRunClaims++
+			if !repeated && releaseRunClaims < releaseRunLimit {
+				return
+			}
+		}
+		endReleaseRun()
+		setEmptyWait(settlement.wakeVersion, releasing)
 	}
 	// The refill-batch rule applies to a fused claim as well: while a plain claim that can fill the
 	// completing task's cohort is in flight, a completion claims only when that would fill at least

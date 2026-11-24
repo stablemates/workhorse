@@ -25,6 +25,66 @@ RSpec.describe W::Worker do
 
   define_method(:claims) { pool.statements.count { |sql, _| claim_statements.include?(sql) } }
 
+  # SM-1905 (ADR 0126): each release puts its task behind the other ready tasks, so the continuous
+  # loop claims again at once until a task comes back or the release run reaches its limit.
+  describe "the release run" do
+    claimed_task = Struct.new(:id, :type)
+    let(:subject) { worker.handle("handled") { nil } }
+
+    def run_slots(continuous: true)
+      W::Worker.const_get(:DispatchSlots).new(1, 1, nil, 0, [], nil, nil).tap { |slots| slots.continuous = continuous }
+    end
+
+    define_method(:settle) do |slots, *ids|
+      tasks = ids.map { |id| [claimed_task.new(id, (id == "handled") ? "handled" : "unhandled"), 0.0] }
+      subject.send(:settle_claim_progress, slots, tasks, 7, nil)
+    end
+
+    it "claims again after a released-only claim, and waits when a task comes back" do
+      slots = run_slots
+      settle(slots, "a")
+      expect(slots.empty_wait).to be_nil
+      settle(slots, "a")
+      # A nil wake version marks a release wait, which a notification does not end.
+      expect(slots.empty_wait[1]).to be_nil
+      expect(slots.release_run_claims).to eq(0)
+    end
+
+    it "starts the release wait after the release run limit" do
+      slots = run_slots
+      (W::Worker.const_get(:RELEASE_RUN_LIMIT) - 1).times { |index| settle(slots, "task-#{index}") }
+      expect(slots.empty_wait).to be_nil
+      settle(slots, "last")
+      expect(slots.empty_wait[1]).to be_nil
+    end
+
+    it "starts the release wait after an empty claim inside a run, and an empty wait outside one" do
+      slots = run_slots
+      settle(slots, "a")
+      settle(slots)
+      expect(slots.empty_wait[1]).to be_nil
+      outside = run_slots
+      settle(outside)
+      expect(outside.empty_wait[1]).to eq(7)
+    end
+
+    it "ends the run at a claim that runs a handler" do
+      slots = run_slots
+      settle(slots, "a")
+      settle(slots, "handled")
+      settle(slots, "a")
+      expect(slots.empty_wait).to be_nil
+      expect(slots.release_run_claims).to eq(1)
+    end
+
+    it "ends a single pass at its first released-only claim" do
+      slots = run_slots(continuous: false)
+      settle(slots, "a")
+      expect(slots.pass_ended).to be(true)
+      expect(slots.empty_wait[1]).to be_nil
+    end
+  end
+
   it "validates its options before it touches PostgreSQL" do
     expect { worker(queues: []) }.to raise_error(ArgumentError, /queues/)
     expect { worker(concurrency: 0) }.to raise_error(ArgumentError, /concurrency/)

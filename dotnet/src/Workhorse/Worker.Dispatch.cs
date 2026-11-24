@@ -393,15 +393,21 @@ public sealed partial class Worker
             run.Empty = 0;
             run.ClaimedAny = true;
             run.EmptyWait = null;
+            run.ReleaseRun.End();
             return;
         }
 
-        // A claim that only handed its tasks back made no progress, so it backs off as an empty claim
-        // does instead of spinning on a task that no handler here runs.
-        run.Empty++;
+        // A claim that only handed its tasks back made no progress, so a single pass ends.
         run.PassEnded = true;
+        var step = run.ReleaseRun.Settle([.. claimed.Select(task => task.Task.Id)], run.Continuous);
+        if (step == ReleaseRunStep.ClaimAgain)
+        {
+            return;
+        }
+
+        run.Empty++;
         var deadline = Monotonic.Now() + DispatchWait(run);
-        if (claimed.Count == 0)
+        if (step == ReleaseRunStep.EmptyWait)
         {
             run.EmptyWait ??= new EmptyWait(deadline, wakeVersion);
         }

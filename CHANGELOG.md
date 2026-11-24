@@ -32,6 +32,28 @@ writes the warning in this case too, with the attributes of the return case. The
 the thrown value itself, so an error that holds the suspension in its `cause` also gives the
 warning. The record holds no part of the thrown error (SM-2066).
 
+### A worker reaches a task that it can run behind tasks that it cannot run
+
+A worker with one slot claimed a ready task that it had no handler for. It released the task and
+waited one poll interval before it claimed again. Each release put the task behind the other ready
+tasks, but the worker waited again for each such task. Thus a task behind four such tasks waited
+about 20 s with the default poll interval (SM-1905).
+
+The TypeScript worker now claims again at once after a claim that released every task, in
+`Worker.run()`. This release run ends at a claim that gets back a task that the run released, at its
+tenth claim, or at a claim that returns no task. Then the worker starts the release wait, as before.
+All seven SDKs do the same (ADR 0126).
+
+- A worker that has no handler for its only ready task now releases that task at most twice in each
+  poll interval, not once. With one slot, the second claim gets the task back and ends the run.
+- `runOnce()` does not change.
+- A task without a handler at a higher priority still keeps the worker from the lower-priority
+  tasks, because the release keeps the priority. SM-2085 records the schema change for this case.
+- The shared runtime fixture
+  `a-listening-worker-claims-a-task-it-cannot-run-at-most-twice-in-each-poll-interval` replaces
+  `a-listening-worker-claims-a-released-task-again-only-after-its-poll-interval`. The new fixture
+  `a-listening-worker-claims-past-the-tasks-it-cannot-run-before-it-waits` pins the run limit.
+
 ### A refused completion is not a handler error
 
 PostgreSQL refuses a `complete_v1` call, for example because the lease expired or a deadline is

@@ -74,6 +74,7 @@ ASYNC_RUNTIME_FIXTURE_KINDS = frozenset(
         "json-round-trip",
         "maintenance-phase-error",
         "missing-handler",
+        "release-run",
         "release-wait",
         "subscription-recovery",
     }
@@ -187,6 +188,7 @@ def execute_runtime_fixture(
         ),
         "missing-handler": execute_missing_handler_fixture,
         "release-wait": execute_release_wait_fixture,
+        "release-run": execute_release_run_fixture,
         "replay-conflict": execute_replay_conflict_fixture,
         "json-round-trip": execute_json_round_trip_fixture,
         "checkpoint-no-value": execute_checkpoint_no_value_fixture,
@@ -1810,11 +1812,105 @@ def release_window(
 
 
 def assert_release_wait(times: list[float], fixture: Mapping[str, Any]) -> None:
-    assert fixture["expectedMinimumReleases"] <= len(times) <= fixture["expectedMaximumReleases"], (
-        f"{len(times)} releases while the worker ran"
+    # A gap of at least the least wait is a release wait. The releases between two waits are one
+    # release run: the claim that released the task and the claim that got it back.
+    runs: list[list[float]] = []
+    for index, time in enumerate(times):
+        if index == 0 or time - times[index - 1] >= fixture["expectedMinimumReleaseGapMs"]:
+            runs.append([])
+        runs[-1].append(time)
+    assert fixture["expectedMinimumWaits"] <= len(runs) <= fixture["expectedMaximumWaits"], (
+        f"release runs {runs}"
     )
+    # The end of the window can cut the last run short.
+    sizes = [len(run) for run in runs]
+    assert sizes[:-1] == [fixture["expectedReleasesPerWait"]] * (len(sizes) - 1), f"runs {runs}"
+    assert sizes[-1] <= fixture["expectedReleasesPerWait"], f"release runs {runs}"
+
+
+def enqueue_release_run(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> tuple[list[str], str]:
+    """Enqueues the tasks that no handler serves, and then the one task that a handler serves."""
+    queue = Queue(connection)
+    options = EnqueueOptions(queue=runtime_queue(fixture))
+    unhandled = [
+        queue.enqueue(fixture["taskType"], {"index": index}, options)
+        for index in range(fixture["unhandledTasks"])
+    ]
+    return unhandled, queue.enqueue(fixture["registeredTaskType"], {}, options)
+
+
+def wait_for_handled(
+    connection: psycopg.Connection[Any], task_id: str, fixture: Mapping[str, Any]
+) -> None:
+    deadline = monotonic() + 10
+    while task_state(connection, task_id)["state"] != fixture["expectedAfterHandled"]["state"]:
+        assert monotonic() < deadline, "the handled task did not succeed"
+        sleep(0.02)
+
+
+def assert_release_run(
+    connection: psycopg.Connection[Any],
+    unhandled: list[str],
+    handled: str,
+    fixture: Mapping[str, Any],
+) -> None:
+    # The releases before the handled task succeeded. The worker claims again after it, and the
+    # runner ignores those releases.
+    rows = connection.execute(
+        "SELECT event.task_id::text, extract(epoch FROM event.occurred_at) * 1000 "
+        "FROM workhorse.task_event event "
+        "WHERE event.task_id = ANY(%s::uuid[]) AND event.event_type = 'released' "
+        "AND event.occurred_at < (SELECT succeeded.occurred_at FROM workhorse.task_event succeeded "
+        "WHERE succeeded.task_id = %s AND succeeded.event_type = 'succeeded') "
+        "ORDER BY event.occurred_at, event.task_id",
+        (unhandled, handled),
+    ).fetchall()
+    # Each release put its task behind the others, so the worker released each task once.
+    assert sorted(str(row[0]) for row in rows) == sorted(unhandled)
+    times = [float(row[1]) for row in rows]
     gaps = [later - earlier for earlier, later in zip(times, times[1:])]
-    assert min(gaps) >= fixture["expectedMinimumReleaseGapMs"], f"release gaps {gaps}"
+    limit = fixture["expectedReleasesBeforeWait"]
+    assert max(gaps[: limit - 1]) < fixture["expectedMaximumRunGapMs"], f"release gaps {gaps}"
+    assert gaps[limit - 1] >= fixture["expectedMinimumReleaseGapMs"], f"release gaps {gaps}"
+    assert_task_states(
+        connection,
+        {
+            **{f"unhandled-{index}": task_id for index, task_id in enumerate(unhandled)},
+            "handled": handled,
+        },
+        {
+            **{
+                f"unhandled-{index}": fixture["expectedAfterRelease"]
+                for index in range(len(unhandled))
+            },
+            "handled": fixture["expectedAfterHandled"],
+        },
+    )
+
+
+def execute_release_run_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any]
+) -> None:
+    unhandled, handled = enqueue_release_run(connection, fixture)
+    worker = Worker(
+        worker_pool,
+        queue=runtime_queue(fixture),
+        worker_id=f"python-{fixture['id']}",
+        concurrency=fixture["concurrency"],
+        lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
+    ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
+    errors: list[BaseException] = []
+    thread = run_in_thread(worker.run, errors)
+    try:
+        wait_for_handled(connection, handled, fixture)
+    finally:
+        worker.stop()
+        join(thread)
+    assert errors == []
+    assert_release_run(connection, unhandled, handled, fixture)
 
 
 def execute_release_wait_fixture(
@@ -1827,6 +1923,7 @@ def execute_release_wait_fixture(
         worker_pool,
         queue=queue_name,
         worker_id=f"python-{fixture['id']}",
+        concurrency=fixture["concurrency"],
         lease_ms=fixture["leaseMs"],
         poll_ms=fixture["pollMs"],
     ).handle(fixture["registeredTaskType"], lambda _payload, _context: None)
@@ -2426,6 +2523,7 @@ async def execute_async_runtime_fixture(
         "maintenance-phase-error": execute_async_maintenance_phase_error_fixture,
         "missing-handler": execute_async_missing_handler_fixture,
         "release-wait": execute_async_release_wait_fixture,
+        "release-run": execute_async_release_run_fixture,
         "subscription-recovery": execute_async_subscription_recovery_fixture,
     }
     await executors[fixture["kind"]](connection, fixture, database_url)
@@ -2859,7 +2957,11 @@ async def execute_async_release_wait_fixture(
         return None
 
     async with async_worker(
-        database_url, fixture, lease_ms=fixture["leaseMs"], poll_ms=fixture["pollMs"]
+        database_url,
+        fixture,
+        concurrency=fixture["concurrency"],
+        lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
     ) as worker:
         worker.handle(fixture["registeredTaskType"], registered)
         running = asyncio.create_task(worker.run())
@@ -2871,6 +2973,31 @@ async def execute_async_release_wait_fixture(
             await returned(running)
     assert listeners > 0, "no session listened while the worker ran"
     assert_release_wait(times, fixture)
+
+
+async def execute_async_release_run_fixture(
+    connection: psycopg.Connection[Any], fixture: Mapping[str, Any], database_url: str
+) -> None:
+    unhandled, handled = enqueue_release_run(connection, fixture)
+
+    async def registered(_payload: object, _context: AsyncHandlerContext) -> None:
+        return None
+
+    async with async_worker(
+        database_url,
+        fixture,
+        concurrency=fixture["concurrency"],
+        lease_ms=fixture["leaseMs"],
+        poll_ms=fixture["pollMs"],
+    ) as worker:
+        worker.handle(fixture["registeredTaskType"], registered)
+        running = asyncio.create_task(worker.run())
+        try:
+            await asyncio.to_thread(wait_for_handled, connection, handled, fixture)
+        finally:
+            worker.stop()
+            await returned(running)
+    assert_release_run(connection, unhandled, handled, fixture)
 
 
 async def execute_async_maintenance_phase_error_fixture(

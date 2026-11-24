@@ -107,6 +107,12 @@ const DEFAULT_POLL_MS = 250;
 const DEFAULT_NOTIFICATION_FALLBACK_POLL_MS = 5_000;
 const MAX_EMPTY_POLL_MS = 5_000;
 const NOTIFICATION_CLAIM_DELAY_MS = 50;
+/**
+ * Claims in a row that only release their tasks before the run loop starts a release wait. A
+ * release gives the task a new place behind the other ready tasks of its priority, so each claim
+ * of the run reaches the next task (ADR 0126).
+ */
+const RELEASE_RUN_LIMIT = 10;
 
 /**
  * Free slots that let a second claim start while one is in flight: a quarter of the concurrency,
@@ -2733,6 +2739,9 @@ export class Worker {
     // release notifies the queue, so a wake does not end that wait: only its deadline, a stop, or a
     // pause does.
     let emptyWait: { deadline: number; wakeVersion: number; release?: true } | undefined;
+    // The release run: the claims in a row that released every task they claimed, and the ids of
+    // those tasks. A claim that ran a handler, an empty claim, or a release wait ends it (ADR 0126).
+    const releaseRun = { claims: 0, taskIds: new Set<string>() };
 
     const cohortFree = (cohort: number): number =>
       cohortCapacity[cohort]! -
@@ -2831,15 +2840,30 @@ export class Worker {
         claimError ??= { error: attempt.error };
         return;
       }
-      // A claim that only handed its tasks back made no progress, so it backs off like an empty
-      // one. Claiming again at once would spin on a task no handler here can run.
       if (attempt.claimed.some((task) => this.handlers.has(task.type))) {
         this.consecutiveEmptyClaims = 0;
         emptyWait = undefined;
+        releaseRun.claims = 0;
+        releaseRun.taskIds.clear();
         return;
       }
+      // An empty claim inside a run can find only the tasks whose release is still in flight. It
+      // starts the release wait too, so the notification of that release does not end the wait.
+      const releasing = attempt.claimed.length > 0 || releaseRun.claims > 0;
+      if (attempt.claimed.length > 0) {
+        // A claim that only handed its tasks back moved each of them behind the other ready
+        // tasks of its priority. The next claim reaches the next task, so the run claims again at
+        // once. A task that comes back, or a long run, starts the release wait: claiming again
+        // then would spin on a task no handler here can run.
+        const repeated = attempt.claimed.some((task) => releaseRun.taskIds.has(task.id));
+        for (const task of attempt.claimed) releaseRun.taskIds.add(task.id);
+        releaseRun.claims += 1;
+        if (!repeated && releaseRun.claims < RELEASE_RUN_LIMIT) return;
+      }
+      releaseRun.claims = 0;
+      releaseRun.taskIds.clear();
       this.consecutiveEmptyClaims += 1;
-      if (attempt.claimed.length === 0) {
+      if (!releasing) {
         emptyWait ??= { deadline: monotonicNow() + this.nextDispatchPollMs(), wakeVersion };
       } else if (!emptyWait?.release) {
         emptyWait = {

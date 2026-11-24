@@ -373,12 +373,29 @@ func TestDispatchDelaysANotifiedClaimOnlyAfterAClaimThatFoundNothing(t *testing.
 	}
 }
 
-func TestDispatchTreatsAClaimOfOnlyUnhandledTasksAsEmpty(t *testing.T) {
-	harness := startDispatch(t, WorkerOptions{Concurrency: 2, PollInterval: 300 * time.Millisecond}, false)
-	harness.expectClaim(2).respond <- fakeClaimResponse{tasks: harness.tasks(1, "dispatch.unhandled")}
-	// The unhandled task is handed back once, and the loop backs off instead of claiming again.
-	release := harness.expectExecutions(1)
-	release[0].finish <- nil
+// SM-1905: each release puts its task behind the other ready tasks, so the next claim reaches the
+// next task. The loop claims again at once until the release run reaches its limit.
+func TestDispatchClaimsAgainAfterAClaimOfOnlyUnhandledTasksUpToTheReleaseRunLimit(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 1, PollInterval: 300 * time.Millisecond}, false)
+	for range releaseRunLimit {
+		harness.expectClaim(1).respond <- fakeClaimResponse{tasks: harness.tasks(1, "dispatch.unhandled")}
+		harness.expectExecutions(1)[0].finish <- nil
+	}
+	// The run reached its limit, so the loop backs off instead of claiming again.
+	harness.expectNoClaim(150 * time.Millisecond)
+	if err := harness.stop(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDispatchTreatsAClaimThatReturnsATaskOfTheReleaseRunAsEmpty(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 1, PollInterval: 300 * time.Millisecond}, false)
+	unhandled := harness.tasks(1, "dispatch.unhandled")
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: unhandled}
+	harness.expectExecutions(1)[0].finish <- nil
+	// The task comes back, so the loop backs off instead of claiming again.
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: unhandled}
+	harness.expectExecutions(1)[0].finish <- nil
 	harness.expectNoClaim(150 * time.Millisecond)
 	select {
 	case execution := <-harness.executions:
@@ -386,6 +403,37 @@ func TestDispatchTreatsAClaimOfOnlyUnhandledTasksAsEmpty(t *testing.T) {
 	default:
 	}
 	if err := harness.stop(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With more than one slot, the claim after a release can run before the release commits and find
+// no task. If its wait were an empty wait, the notification of that release would end it.
+func TestDispatchStartsTheReleaseWaitAfterAnEmptyClaimInsideAReleaseRun(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 1, PollInterval: time.Minute}, false)
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: harness.tasks(1, "dispatch.unhandled")}
+	harness.expectExecutions(1)[0].finish <- nil
+	harness.expectClaim(1).respond <- fakeClaimResponse{}
+	harness.expectNoClaim(50 * time.Millisecond)
+	harness.notification <- struct{}{}
+	harness.expectNoClaim(150 * time.Millisecond)
+	if err := harness.stop(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDispatchEndsTheReleaseRunAtAClaimThatRunsAHandler(t *testing.T) {
+	harness := startDispatch(t, WorkerOptions{Concurrency: 1, PollInterval: 300 * time.Millisecond}, false)
+	unhandled := harness.tasks(1, "dispatch.unhandled")
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: unhandled}
+	harness.expectExecutions(1)[0].finish <- nil
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: harness.tasks(1, dispatchTaskType)}
+	harness.expectExecutions(1)[0].finish <- nil
+	// The handler ended the run, so the same task starts a new run.
+	harness.expectClaim(1).respond <- fakeClaimResponse{tasks: unhandled}
+	harness.expectExecutions(1)[0].finish <- nil
+	call := harness.expectClaim(1)
+	if err := harness.stop([]fakeClaimCall{call}, nil); err != nil {
 		t.Fatal(err)
 	}
 }

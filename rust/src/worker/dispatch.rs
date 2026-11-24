@@ -13,7 +13,7 @@
 //! While the pool identity holds no heartbeat connection, the gate is closed: no claim starts, and
 //! a completion claims nothing (ADR 0071, rule 6). When the connection comes back, the loop claims
 //! at once.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,7 +80,14 @@ pub(super) trait Dispatch: Send + Sync + 'static {
         task: Self::Task,
         ticket: Ticket<Self::Task>,
     ) -> bool;
+    /// The identity of a claimed task, which stays the same across its claims.
+    fn task_id(task: &Self::Task) -> u128;
 }
+
+/// Claims in a row that only release their tasks before the loop starts a release wait. A release
+/// gives the task a new place behind the other ready tasks of its priority, so each claim of the
+/// run reaches the next task (ADR 0126).
+pub(super) const RELEASE_RUN_LIMIT: usize = 10;
 
 /// Reads how many claims are in flight: plain claims and reserved fused claims.
 pub(super) type ClaimsInFlight = Box<dyn Fn() -> usize + Send + Sync>;
@@ -337,6 +344,11 @@ struct Dispatcher<D: Dispatch> {
     /// which follows a claim that released every task it claimed. Each release notifies the queue,
     /// so a notification does not end that wait: only its deadline, a stop, or a pause does.
     empty_wait: Option<(Instant, Option<u64>)>,
+    /// The release run: the claims in a row that released every task they claimed, and the ids of
+    /// those tasks. A claim that ran a handler, an empty claim, or a release wait ends it
+    /// (ADR 0126).
+    release_run_claims: usize,
+    release_run_tasks: HashSet<u128>,
     stopping: Arc<AtomicBool>,
 }
 
@@ -389,6 +401,8 @@ impl<D: Dispatch> Dispatcher<D> {
             wake_version: 0,
             notification_delay_pending: false,
             empty_wait: None,
+            release_run_claims: 0,
+            release_run_tasks: HashSet::new(),
             stopping: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -516,20 +530,45 @@ impl<D: Dispatch> Dispatcher<D> {
         });
         let Some(Claimed { wake_version, tasks }) = claimed else { return };
         let Some(tasks) = tasks else { return };
-        let released = !tasks.is_empty();
+        let ids: Vec<u128> = tasks.iter().map(D::task_id).collect();
         // A claimed task holds a lease, so it runs even when the loop is stopping.
         if self.launch(tasks, cohort, executions) {
             self.consecutive_empty = 0;
             self.set_empty_wait(None);
+            self.end_release_run();
             return;
         }
-        // A claim that only handed its tasks back made no progress, so it backs off like an empty
-        // one. Claiming again at once would spin on a task no handler here can run.
-        if released {
-            self.release_wait();
-        } else {
-            self.back_off(wake_version);
+        // An empty claim inside a run can find only the tasks whose release is still in flight. It
+        // starts the release wait too, so the notification of that release does not end the wait.
+        if ids.is_empty() {
+            let releasing = self.release_run_claims > 0;
+            self.end_release_run();
+            if releasing {
+                self.release_wait();
+            } else {
+                self.back_off(wake_version);
+            }
+            return;
         }
+        // A claim that only handed its tasks back moved each of them behind the other ready tasks
+        // of its priority. The next claim reaches the next task, so the run claims again at once.
+        // A task that comes back, or a long run, starts the release wait: claiming again then
+        // would spin on a task no handler here can run.
+        let mut repeated = false;
+        for id in ids {
+            repeated |= !self.release_run_tasks.insert(id);
+        }
+        self.release_run_claims += 1;
+        if !repeated && self.release_run_claims < RELEASE_RUN_LIMIT {
+            return;
+        }
+        self.end_release_run();
+        self.release_wait();
+    }
+
+    fn end_release_run(&mut self) {
+        self.release_run_claims = 0;
+        self.release_run_tasks.clear();
     }
 
     /// Launches the tasks a fused claim handed over.
@@ -705,6 +744,8 @@ mod tests {
     /// A claimed task. `gate` holds its handler until the test finishes it. A `fuse` task then
     /// completes on the fast tier and asks for a fused claim.
     struct FakeTask {
+        /// The identity of the task. Tasks that a test makes with `ready` share one.
+        id: u128,
         handled: bool,
         fuse: bool,
         gate: Option<oneshot::Receiver<()>>,
@@ -712,7 +753,11 @@ mod tests {
 
     impl FakeTask {
         fn ready() -> Self {
-            Self { handled: true, fuse: false, gate: None }
+            Self { id: 0, handled: true, fuse: false, gate: None }
+        }
+
+        fn unhandled(id: u128) -> Self {
+            Self { id, handled: false, ..Self::ready() }
         }
     }
 
@@ -839,6 +884,10 @@ mod tests {
             });
             true
         }
+
+        fn task_id(task: &FakeTask) -> u128 {
+            task.id
+        }
     }
 
     type ClaimRequest = (usize, usize, oneshot::Sender<Vec<FakeTask>>);
@@ -946,6 +995,15 @@ mod tests {
                 .expect("the loop dropped its claim channel")
         }
 
+        /// Answers two claims with the same task that no handler serves. The second claim gets back
+        /// the task that the first one released, so the loop starts a release wait.
+        async fn release_twice(&mut self) {
+            for _ in 0..2 {
+                let (_, _, answer) = self.next_claim().await;
+                let _ = answer.send(vec![FakeTask::unhandled(1)]);
+            }
+        }
+
         async fn next_fused(&mut self) -> FusedRequest {
             tokio::time::timeout(WAIT, self.fused.recv())
                 .await
@@ -976,7 +1034,7 @@ mod tests {
         (0..count)
             .map(|_| {
                 let (finish, gate) = oneshot::channel();
-                (FakeTask { handled: true, fuse, gate: Some(gate) }, finish)
+                (FakeTask { handled: true, fuse, gate: Some(gate), ..FakeTask::ready() }, finish)
             })
             .unzip()
     }
@@ -1272,26 +1330,72 @@ mod tests {
         harness.stop().await;
     }
 
+    // SM-1905: each release puts its task behind the other ready tasks, so the next claim reaches
+    // the next task. The loop claims again at once until the release run reaches its limit.
     #[tokio::test]
-    async fn a_claim_of_only_unhandled_tasks_counts_as_empty() {
+    async fn a_claim_of_only_unhandled_tasks_claims_again_up_to_the_release_run_limit() {
         let poll = Duration::from_millis(300);
-        let mut harness = Harness::start_plain(4, poll, false);
-        let (_, _, answer) = harness.next_claim().await;
-        let _ = answer.send(vec![FakeTask { handled: false, ..FakeTask::ready() }]);
+        let mut harness = Harness::start_plain(1, poll, false);
+        for id in 0..RELEASE_RUN_LIMIT as u128 {
+            let (_, _, answer) = harness.next_claim().await;
+            let _ = answer.send(vec![FakeTask::unhandled(id)]);
+        }
         tokio::time::sleep(poll / 2).await;
-        assert!(harness.claims.try_recv().is_err(), "an unhandled claim claimed again at once");
+        assert!(harness.claims.try_recv().is_err(), "the run claimed past its limit");
         let worker = harness.stop().await;
-        assert_eq!(worker.released.load(Ordering::SeqCst), 1);
+        assert_eq!(worker.released.load(Ordering::SeqCst), RELEASE_RUN_LIMIT);
         assert_eq!(worker.started.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_returns_a_task_of_the_release_run_counts_as_empty() {
+        let poll = Duration::from_millis(300);
+        let mut harness = Harness::start_plain(1, poll, false);
+        harness.release_twice().await;
+        tokio::time::sleep(poll / 2).await;
+        assert!(harness.claims.try_recv().is_err(), "a returned task claimed again at once");
+        let worker = harness.stop().await;
+        assert_eq!(worker.released.load(Ordering::SeqCst), 2);
+        assert_eq!(worker.started.load(Ordering::SeqCst), 0);
+    }
+
+    // With more than one slot, the claim after a release can run before the release commits and
+    // find no task. If its wait were an empty wait, the notification of that release would end it.
+    #[tokio::test]
+    async fn an_empty_claim_inside_a_release_run_starts_the_release_wait() {
+        let mut harness = Harness::start_plain(1, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask::unhandled(1)]);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        settled().await;
+        harness.notification.notify_one();
+        tokio::time::sleep(NOTIFICATION_DELAY * 2).await;
+        assert!(harness.claims.try_recv().is_err(), "a notification ended the release wait");
+        harness.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_runs_a_handler_ends_the_release_run() {
+        let mut harness = Harness::start_plain(1, Duration::from_secs(60), false);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask::unhandled(1)]);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask::ready()]);
+        // The handler ended the run, so the same task starts a new run.
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(vec![FakeTask::unhandled(1)]);
+        let (_, _, answer) = harness.next_claim().await;
+        let _ = answer.send(Vec::new());
+        harness.stop().await;
     }
 
     // SM-1247: each release notifies the queue. If that notification ended the wait, the worker
     // claimed and released the same task again after the notification delay only.
     #[tokio::test]
     async fn a_notification_does_not_end_a_release_wait() {
-        let mut harness = Harness::start_plain(2, Duration::from_secs(60), false);
-        let (_, _, answer) = harness.next_claim().await;
-        let _ = answer.send(vec![FakeTask { handled: false, ..FakeTask::ready() }]);
+        let mut harness = Harness::start_plain(1, Duration::from_secs(60), false);
+        harness.release_twice().await;
         settled().await;
         harness.notification.notify_one();
         tokio::time::sleep(NOTIFICATION_DELAY * 2).await;
@@ -1301,9 +1405,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_pause_ends_a_release_wait() {
-        let mut harness = Harness::start_plain(2, Duration::from_secs(60), false);
-        let (_, _, answer) = harness.next_claim().await;
-        let _ = answer.send(vec![FakeTask { handled: false, ..FakeTask::ready() }]);
+        let mut harness = Harness::start_plain(1, Duration::from_secs(60), false);
+        harness.release_twice().await;
         settled().await;
         harness.worker.paused.store(true, Ordering::SeqCst);
         harness.notification.notify_one();

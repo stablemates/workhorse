@@ -1107,6 +1107,10 @@ impl dispatch::Dispatch for WorkerDispatch {
         self.inner.spawn_execution(executions, task, handler, ticket, self.shutdown.clone());
         handled
     }
+
+    fn task_id(task: &ClaimedTask) -> u128 {
+        task.id.as_u128()
+    }
 }
 
 fn record(

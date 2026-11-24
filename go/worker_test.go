@@ -107,8 +107,12 @@ type workerRuntimeFixture struct {
 	ExpectedReleaseEventsAfterNextPass   int                               `json:"expectedReleaseEventsAfterNextPass"`
 	ExpectedAfterHandled                 workerFixtureTaskState            `json:"expectedAfterHandled"`
 	RunMS                                int                               `json:"runMs"`
-	ExpectedMinimumReleases              int                               `json:"expectedMinimumReleases"`
-	ExpectedMaximumReleases              int                               `json:"expectedMaximumReleases"`
+	ExpectedMinimumWaits                 int                               `json:"expectedMinimumWaits"`
+	ExpectedMaximumWaits                 int                               `json:"expectedMaximumWaits"`
+	ExpectedReleasesPerWait              int                               `json:"expectedReleasesPerWait"`
+	UnhandledTasks                       int                               `json:"unhandledTasks"`
+	ExpectedReleasesBeforeWait           int                               `json:"expectedReleasesBeforeWait"`
+	ExpectedMaximumRunGapMS              float64                           `json:"expectedMaximumRunGapMs"`
 	ExpectedMinimumReleaseGapMS          float64                           `json:"expectedMinimumReleaseGapMs"`
 	Payload                              any                               `json:"payload"`
 	Injection                            workerFixtureInjection            `json:"injection"`

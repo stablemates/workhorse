@@ -34,6 +34,10 @@ module Stablemates
       MAX_EMPTY_POLL_MS = 5_000
       NOTIFICATION_POLL_MS = 5_000
       NOTIFICATION_CLAIM_DELAY = 0.05
+      # Claims in a row that only release their tasks before the run loop starts a release wait. A
+      # release gives the task a new place behind the other ready tasks of its priority, so each
+      # claim of the run reaches the next task (ADR 0126).
+      RELEASE_RUN_LIMIT = 10
       UNWIND_WINDOW = 0.25
       THREAD_RETURN_WAIT = 0.001
       EXPIRATION_RETRY = 0.005
@@ -80,7 +84,7 @@ module Stablemates
       # with \ud or \uD. JSON.generate writes non-ASCII text raw, so ordinary text matches neither.
       UNSTORABLE_ESCAPE_START = /\\u(?:0000|[dD])/
       JSON_ESCAPE = /\\(?:u(\h{4})|.)/m
-      private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :UNWIND_WINDOW,
+      private_constant :MAX_EMPTY_POLL_MS, :NOTIFICATION_POLL_MS, :NOTIFICATION_CLAIM_DELAY, :RELEASE_RUN_LIMIT, :UNWIND_WINDOW,
         :THREAD_RETURN_WAIT, :EXPIRATION_RETRY, :EXPIRATION_RETRY_MAX, :REDACTED_NAME, :REDACTED_MESSAGE, :PROTOCOL, :LANGUAGE, :MIN_POOL_SIZE,
         :STARTUP_BUDGET_FLOOR, :STARTUP_STOP_CHECK, :COMPLETION_BATCH_LIMIT, :TIER_PROBE_INTERVAL, :DATABASE_NOW,
         :STATUS_OUTCOMES, :TELEMETRY_OUTCOMES, :SPAN_OUTCOMES, :CANCEL_REASONS, :EXPONENT_NUMBER,
@@ -160,10 +164,17 @@ module Stablemates
         attr_reader :concurrency, :refill_batch, :cohort_capacity, :listener, :version, :run_errors, :handlers, :gate,
           :cohort_active, :cohort_handed_over, :cohort_reserved, :cohort_claims, :handed_over, :thread_cohorts
         attr_accessor :whole_claims, :reserved, :empty, :empty_wait, :pass_ended, :claimed_any, :claim_error, :open,
-          :listened_at_last_wait
+          :listened_at_last_wait, :continuous, :release_run_claims, :release_run_task_ids
 
         def initialize(concurrency, cohorts, listener, version, run_errors, handlers, gate)
           @concurrency = concurrency
+          # Whether the loop is the continuous loop. Only that loop claims again in a release run.
+          @continuous = false
+          # The release run: the claims in a row that released every task they claimed, and the ids
+          # of those tasks. A claim that ran a handler, an empty claim, or a release wait ends it
+          # (ADR 0126).
+          @release_run_claims = 0
+          @release_run_task_ids = Set.new
           # The claim gate of this run. Every claim and fused completion of the run reads it.
           @gate = gate
           # A claim waits for a quarter of the slots, so at most four claims are in flight.
@@ -779,6 +790,7 @@ module Stablemates
       # holds it and the pool holds a usable heartbeat connection. A busy or rejected lease does not close it.
       def dispatch(continuous, version, handlers, listener, startup, run_errors, maintenance_errors, gate)
         slots = DispatchSlots.new(@concurrency, @cohorts, listener, version, run_errors, handlers, gate)
+        slots.continuous = continuous
         @state_lock.synchronize { @dispatch_slots = slots }
         # Each claim in flight, with its limit, its cohort (nil for the whole worker), and the
         # slots it reserved in that cohort.
@@ -887,13 +899,19 @@ module Stablemates
           slots.empty = 0
           slots.claimed_any = true
           slots.empty_wait = nil
+          end_release_run(slots)
         else
-          # A claim that only handed its tasks back made no progress, so it backs off as an
-          # empty claim does instead of spinning on a task no handler here runs.
-          slots.empty += 1
+          # A claim that only handed its tasks back made no progress, so a single pass ends.
           slots.pass_ended = true
+          return if continue_release_run?(slots, claimed)
+
+          # An empty claim inside a run can find only the tasks whose release is still in flight.
+          # It starts the release wait too, so the notification of that release does not end it.
+          releasing = !claimed.empty? || slots.release_run_claims.positive?
+          end_release_run(slots)
+          slots.empty += 1
           deadline = monotonic + dispatch_wait(slots)
-          if claimed.empty?
+          if !releasing
             slots.empty_wait ||= [deadline, claimed_version]
           elsif slots.empty_wait.nil? || !slots.empty_wait[1].nil?
             # A release wait. Each release notifies the queue, so a wake does not end this wait:
@@ -901,6 +919,25 @@ module Stablemates
             slots.empty_wait = [deadline, nil]
           end
         end
+      end
+
+      # Each release moved its task behind the other ready tasks of its priority. The next claim
+      # reaches the next task, so the continuous loop claims again at once. A task that comes back,
+      # or a long run, starts the release wait: claiming again then would spin on a task no handler
+      # here can run. The caller holds the state lock.
+      def continue_release_run?(slots, claimed)
+        return false if claimed.empty? || !slots.continuous
+
+        task_ids = claimed.map { |task, _| task.id }
+        repeated = task_ids.any? { |id| slots.release_run_task_ids.include?(id) }
+        slots.release_run_task_ids.merge(task_ids)
+        slots.release_run_claims += 1
+        !repeated && slots.release_run_claims < RELEASE_RUN_LIMIT
+      end
+
+      def end_release_run(slots)
+        slots.release_run_claims = 0
+        slots.release_run_task_ids.clear
       end
 
       def plan_claim(slots, claims) = @state_lock.synchronize { claim_plan(slots, claims) }

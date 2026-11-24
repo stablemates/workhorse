@@ -405,16 +405,67 @@ def test_empty_claim_waits_for_the_poll_interval() -> None:
     assert claims.claimed_at[1] - claims.claimed_at[0] >= 0.18
 
 
-def test_claim_of_only_unhandled_tasks_backs_off_like_an_empty_claim() -> None:
+def test_claim_of_only_unhandled_tasks_claims_again_up_to_the_release_run_limit() -> None:
+    # SM-1905: each release puts its task behind the other ready tasks, so the next claim reaches
+    # the next task. Each released task comes back as a new one here.
     claims = ScriptedClaims([task_row(0, UNHANDLED)])
     executions = Executions(claims)
-    worker = scripted_worker(claims, concurrency=4, poll_ms=300)
+    worker = scripted_worker(claims, concurrency=1, poll_ms=300)
     with running(worker, executions) as errors:
-        wait_for(lambda: len(executions.released) == 1, "the worker did not release the task")
-        # The released task is claimable again at once, but the worker waits out the interval.
+        wait_for(lambda: len(executions.released) == 10, "the worker did not release ten tasks")
+        # The run reached its limit, so the worker waits out the interval.
         sleep(0.15)
-        assert claims.claims() == 1
-        assert len(executions.released) == 1
+        assert claims.claims() == 10
+        assert len(executions.released) == 10
+    assert errors == []
+
+
+class GoneTaskExecutions(Executions):
+    """Gives no released task back, as if the next claim ran before the release committed."""
+
+    def execute(self, task: ClaimedTask, _claim_sent_at: float) -> None:
+        with self._lock:
+            self.released.append(task.id)
+
+
+def test_empty_claim_inside_a_release_run_starts_the_release_wait() -> None:
+    claims = ScriptedClaims([task_row(0, UNHANDLED)])
+    executions = GoneTaskExecutions(claims)
+    worker = scripted_worker(claims, concurrency=1, poll_ms=60_000)
+    with running(worker, executions) as errors:
+        wait_for(lambda: claims.claims() == 2, "the run did not claim again")
+        wait_for(
+            lambda: (
+                worker._dispatch_slots is not None and worker._dispatch_slots.empty_wait is not None
+            ),
+            "no wait",
+        )
+        slots = worker._dispatch_slots
+        assert slots is not None and slots.empty_wait is not None
+        # A wake version of None marks a release wait, which a notification does not end.
+        assert slots.empty_wait[1] is None
+    assert errors == []
+
+
+class SameTaskExecutions(Executions):
+    """Gives each released task back with its own identity, as the only ready task of its queue."""
+
+    def execute(self, task: ClaimedTask, _claim_sent_at: float) -> None:
+        with self._lock:
+            self.released.append(task.id)
+        self._claims.give_back(task_row(0, task.type))
+
+
+def test_claim_that_returns_a_task_of_the_release_run_backs_off_like_an_empty_claim() -> None:
+    claims = ScriptedClaims([task_row(0, UNHANDLED)])
+    executions = SameTaskExecutions(claims)
+    worker = scripted_worker(claims, concurrency=1, poll_ms=300)
+    with running(worker, executions) as errors:
+        wait_for(lambda: len(executions.released) == 2, "the worker did not claim the task again")
+        # The task came back, so the worker waits out the interval.
+        sleep(0.15)
+        assert claims.claims() == 2
+        assert executions.released == [task_row(0, UNHANDLED)["task_id"]] * 2
     assert errors == []
 
 

@@ -93,6 +93,7 @@ public final class Worker implements AutoCloseable {
   private static final long NOTIFICATION_POLL_MS = 5_000;
   private static final long DEFAULT_POLL_MS = 250;
   private static final long NOTIFICATION_CLAIM_DELAY_MS = 50;
+
   private static final long UNWIND_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
   private static final long IDLE_CHECK_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
   private static final long EXPIRATION_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
@@ -763,6 +764,10 @@ public final class Worker implements AutoCloseable {
     // Whether the subscription was live when the run chose its last wait.
     boolean listenedAtLastWait;
     @Nullable EmptyWait emptyWait;
+    // Whether the run is the continuous loop. Only that loop claims again in a release run.
+    boolean continuous;
+    // The claims in a row that released every task they claimed (ADR 0126).
+    final ReleaseRun releaseRun = new ReleaseRun();
     boolean passEnded;
     boolean claimedAny;
     @Nullable RuntimeException claimError;
@@ -1053,6 +1058,7 @@ public final class Worker implements AutoCloseable {
       stopDeadline.set(NEVER);
     }
     RunState run = startRun(version);
+    run.continuous = continuous;
     // As in TypeScript, a run writes its start record first: before the readiness check and before
     // the first registration. A one-pass call is not a run, so it writes no start and no stop
     // record.
@@ -1761,14 +1767,22 @@ public final class Worker implements AutoCloseable {
       run.empty = 0;
       run.claimedAny = true;
       run.emptyWait = null;
+      run.releaseRun.end();
       return;
     }
-    // A claim that only handed its tasks back made no progress, so it backs off as an empty claim
-    // does instead of spinning on a task that no handler here runs.
-    run.empty++;
+    // A claim that only handed its tasks back made no progress, so a single pass ends.
     run.passEnded = true;
+    List<UUID> released = new ArrayList<>(claimed.size());
+    for (Claimed task : claimed) {
+      released.add(task.task.id());
+    }
+    ReleaseRun.Step step = run.releaseRun.settle(released, run.continuous);
+    if (step == ReleaseRun.Step.CLAIM_AGAIN) {
+      return;
+    }
+    run.empty++;
     long deadline = System.nanoTime() + dispatchWait(run);
-    if (claimed.isEmpty()) {
+    if (step == ReleaseRun.Step.EMPTY_WAIT) {
       if (run.emptyWait == null) {
         run.emptyWait = new EmptyWait(deadline, wakeVersion);
       }
