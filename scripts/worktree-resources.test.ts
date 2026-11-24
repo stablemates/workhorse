@@ -15,6 +15,8 @@ const worktreeCommandModules = [
   "scripts/worktree-resources.ts",
   "scripts/environment-file.ts",
   "scripts/worktree-identity.ts",
+  "scripts/worktree-python.ts",
+  "scripts/verify-toolchain.ts",
 ];
 
 describe("worktree resource commands", () => {

@@ -4,6 +4,7 @@ import {
   writeCheckoutDatabaseEnvironment,
 } from "./checkout-databases.js";
 import { describeUnscopedDatabases, unscopedDatabases } from "./worktree-identity.js";
+import { syncPythonEnvironment } from "./worktree-python.js";
 import {
   copyIgnoredEnvironmentFiles,
   createWorktreeResources,
@@ -55,7 +56,7 @@ if (unscoped.length > 0) {
 }
 
 await writeResourceRegistry(context.commonGitDirectory, resources);
-await run("uv", ["sync", "--project", "python", "--frozen"], { cwd: context.worktreeRoot });
+await syncPythonEnvironment(context.worktreeRoot);
 await run("go", ["-C", "go", "mod", "download"], { cwd: context.worktreeRoot });
 await provisionCheckoutDatabases(generatedEnvironment, { resetExisting: true });
 

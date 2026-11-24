@@ -7,16 +7,18 @@
  * module cannot satisfy fails here instead of after `go/v*` is pushed.
  *
  * The zip drops directory entries because the module zip format has none; with them, `go mod
- * verify` reports the extracted module as modified.
+ * verify` reports the extracted module as modified. Node removes them, so the check needs no
+ * external `zip` program (SM-2082).
  *
  * Usage: pnpm go:release-check X.Y.Z, or `pnpm go:package-check` for the module zip alone.
  */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkRelease } from "./check-release.js";
 import { verifyRelease } from "./verify-release.js";
+import { withoutDirectoryEntries } from "./zip-directory-entries.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const goModule = "github.com/stablemates/workhorse/go";
@@ -64,7 +66,7 @@ async function stageProxy(proxy: string, version: string): Promise<void> {
     archive,
     "HEAD:go",
   ]);
-  await run("zip", ["--delete", "--quiet", archive, "*/"]);
+  await writeFile(archive, withoutDirectoryEntries(await readFile(archive)));
 }
 
 /**
