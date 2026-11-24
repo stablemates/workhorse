@@ -9,7 +9,56 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.17.0 — 2026-11-24
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99**, .NET **10** or newer, and PostgreSQL **15** or newer.
+
+### Upgrade from 0.16.x to 0.17.0
+
+**Roll out the new processes. The schema does not change.** 0.17.0 adds no migration. The schema
+stays at version **106**, and the SDK compatibility floor stays at **99**. A 0.16.0 database needs
+no `workhorse schema migrate`. 0.16 and 0.17 processes can run on one database at the same time, so
+the upgrade is a rolling deployment.
+
+**Telemetry changes in every SDK.** In each SDK, 0.17.0 aligns the signals below with the TypeScript
+records. Thus an alert or a dashboard that you built on 0.16.0 numbers can move after the upgrade.
+Examine each alert and dashboard that reads these signals. Some differences between the SDKs stay,
+such as the `error.type` value of each language. [`docs/parity.md`](../docs/parity.md) lists them:
+
+- The error status of the `workhorse.handler` span. The span now records the handler error and then
+  the error of a failed settlement statement. A refused acknowledgement gives the span the outcome
+  `stale`, not `unknown`.
+- `workhorse.tasks.retried`. The .NET count does not change. The TypeScript worker now also counts a
+  retry that an attempt timeout schedules after a refused completion.
+- The redrive and cancellation counts. The admin now counts `workhorse.tasks.redrive`, and the queue
+  now counts `workhorse.tasks.cancellation`. Before, the .NET SDK counted neither.
+- `workhorse.handler.executions`. An attempt without an outcome is no longer counted with the
+  outcome `unknown`.
+- Log events. The worker, the queue, and the admin client now write the TypeScript log events, such
+  as the enqueue events at debug. `workhorse.worker.registered` comes only when the registration
+  changes.
+
+**The log records use new keys.** This is a breaking change for each query of .NET log records. Each
+record of the `Workhorse` package now carries its values under the `workhorse.*` keys of the
+TypeScript record and under `error.type`. Before, it carried them under the names of its log
+template, such as `WorkerId` and `ErrorType`. A query, filter, or alert that reads a template name
+finds no record after the upgrade. Change each one before you roll out 0.17.0. The section "Each log
+record carries the keys of the other SDKs" below gives each old and new key.
+
+**Fast-tier dispatch changes for a worker with a concurrency of 5 or more.** ADR 0076 changes two
+rules for the worker of each SDK (SM-1833). At a concurrency of 5 or more, the refill batch is 2 or
+more. Rule 13: while a plain claim is in flight, a fused completion below the refill batch now
+claims the slot of its own task. Before, it claimed 0 tasks, and the worker could stay in plain
+claims. Rule 17: a worker with more than one queue skips one fused refill when another queue had no
+claim for one fairness interval. The interval is `PollInterval`, but at least 250 ms. Thus the
+number of plain claims and of fused claims for each completion changes, and a claim rate on a
+dashboard can move. A worker with more than one queue now claims from its other queues during a
+fast-tier backlog.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-016x-to-0170) give each step.
 
 ### Each log record carries the keys of the other SDKs
 
@@ -155,39 +204,45 @@ the handler after the claim.
   subscription, which is the case under `PollingOnly`, as in TypeScript. A listener that does not
   listen yet gives no warning.
 - `workhorse.worker.notification_failed` and `workhorse.task.release_failed` now carry
-  `ErrorType`, not the exception.
+  `error.type`, not the exception.
 
 ### The worker log records carry the values of the TypeScript records
 
 A worker log record must carry the same values in each SDK, so that one alert reads the workers of
-all seven SDKs. A .NET record names each value by its message template.
+all seven SDKs. Each key below is the key of the TypeScript record, as the section "Each log record
+carries the keys of the other SDKs" states.
 
-- Each task record now carries `TaskId`, `TaskType`, `Attempt`, `Queue`, and `WorkerId`. This
-  changes `workhorse.task.completed`, `workhorse.task.completion_rejected`,
+- Each task record now carries `workhorse.task.id`, `workhorse.task.type`,
+  `workhorse.task.attempt`, `workhorse.queue.name`, and `workhorse.worker.id`. This changes
+  `workhorse.task.completed`, `workhorse.task.completion_rejected`,
   `workhorse.task.release_processed`, `workhorse.task.failure_processed`,
   `workhorse.task.ownership_expired`, `workhorse.task.cancellation_acknowledged`,
   `workhorse.handler.missing`, `workhorse.handler.signal_swallowed`, and
   `workhorse.worker.expiration_request_failed`. `workhorse.task.heartbeat_rejected` and the
-  checkpoint, progress, and wait records add `TaskType`, `Attempt`, and `WorkerId`.
-- The completion records carry `Accepted`. `workhorse.task.failure_processed` no longer carries
-  `ErrorType`.
-- The worker life-cycle records carry `WorkerId`, and `Queues` is now a list value.
-  `workhorse.worker.stop_requested` carries `ActiveSlots`. `workhorse.worker.polling_only` carries
-  `Queues` and `PoolMaxSize`.
+  checkpoint, progress, and wait records add `workhorse.task.type`, `workhorse.task.attempt`, and
+  `workhorse.worker.id`.
+- The completion records carry `workhorse.complete.accepted`. `workhorse.task.failure_processed`
+  no longer carries `error.type`.
+- The worker life-cycle records carry `workhorse.worker.id`, and `workhorse.worker.queues` is now a
+  list value. `workhorse.worker.stop_requested` carries `workhorse.worker.active_slots`.
+  `workhorse.worker.polling_only` carries `workhorse.worker.queues` and
+  `workhorse.worker.pool_max_size`.
 - `workhorse.worker.registration_failed`, `workhorse.handler.batch_evidence_failed`, and
-  `workhorse.worker.expiration_request_failed` carry `ErrorType` and no longer attach the
+  `workhorse.worker.expiration_request_failed` carry `error.type` and no longer attach the
   exception, which holds the error message.
-- `workhorse.handler.batch_dispatched` carries `WorkerId`. `workhorse.handler.batch_evidence_failed`
-  carries `Queue`, `Full`, and `WorkerId`.
-- The child records carry `WorkerId`. A child set writes `ChildCount` instead of the child name
-  `child set`.
+- `workhorse.handler.batch_dispatched` carries `workhorse.worker.id`.
+  `workhorse.handler.batch_evidence_failed` carries `workhorse.queue.name`,
+  `workhorse.handler.batch.full`, and `workhorse.worker.id`.
+- The child records carry `workhorse.worker.id`. A child set writes `workhorse.child.count`
+  instead of the child name `child set`.
 - `Admin.SetWorkerPausedAsync` now writes `workhorse.worker.paused` or `workhorse.worker.resumed`
   when it finds the worker.
 
 ### The worker, the queue, and the admin client write the log events of TypeScript
 
 The .NET SDK now writes the worker log events of the TypeScript `WorkhorseLogEvent` union, with
-the same name, severity, and attributes. Each record names its attributes by its message template.
+the same name, severity, and attributes. Each record carries its attributes under the keys of the
+TypeScript record.
 
 - `Queue` and `Admin` get a logger from the new optional `QueueOptions.LoggerFactory` and
   `AdminOptions.LoggerFactory`. If the value is `null`, they log nothing. `Workhorse.Hosting` gives

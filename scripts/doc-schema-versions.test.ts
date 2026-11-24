@@ -23,7 +23,10 @@ import { repositoryRoot } from "./packages.js";
 // The check reads only the sentences below. It does not read a historical number, such as the
 // version that added a feature or the version a 0.7 database starts at.
 
-/** The upgrade section of the newest release. The release that adds the next section moves this. */
+/**
+ * The upgrade section of the newest release that ships a migration. 0.17.0 ships none, so its
+ * section names no migration. The next release with a migration moves this.
+ */
 const upgradeHeading = "## Upgrade from 0.15.x to 0.16.0";
 
 function read(relativePath: string): string {

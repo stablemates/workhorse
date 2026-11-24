@@ -35,7 +35,7 @@ pip install stablemates-workhorse "psycopg[binary]"
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.16.0 workhorse schema install
+npx --package @stablemates/workhorse@0.17.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

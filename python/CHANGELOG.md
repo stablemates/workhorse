@@ -8,7 +8,54 @@ Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.
 upgrades in place: every release ships ordered migrations, and inside a major line a migration only
 adds.
 
-## Unreleased
+## 0.17.0 — 2026-11-24
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99** and Python **3.12** or newer.
+
+### Upgrade from 0.16.x to 0.17.0
+
+**Roll out the new processes. The schema does not change.** 0.17.0 adds no migration. The schema
+stays at version **106**, and the SDK compatibility floor stays at **99**. A 0.16.0 database needs
+no `workhorse schema migrate`. 0.16 and 0.17 processes can run on one database at the same time, so
+the upgrade is a rolling deployment.
+
+**Telemetry changes in every SDK.** In each SDK, 0.17.0 aligns the signals below with the TypeScript
+records. Thus an alert or a dashboard that you built on 0.16.0 numbers can move after the upgrade.
+Examine each alert and dashboard that reads these signals. Some differences between the SDKs stay,
+such as the `error.type` value of each language. [`docs/parity.md`](../docs/parity.md) lists them:
+
+- The error status of the `workhorse.handler` span. A lost lease alone no longer gives the span the
+  error status with the type `StaleLeaseError`. A handler error keeps the error status.
+- `workhorse.tasks.retried`. The Python count does not change. The TypeScript worker now also counts
+  a retry that an attempt timeout schedules after a refused completion.
+- The redrive and cancellation counts. The admin now counts `workhorse.tasks.redrive`, and the queue
+  now counts `workhorse.tasks.cancellation`. Before, the Python SDK counted neither.
+- `workhorse.handler.executions`. An attempt without an outcome is no longer counted with the
+  outcome `unknown`.
+- Log events. The SDK now writes the TypeScript log events, such as the enqueue events at debug.
+  `workhorse.worker.registered` comes only when the registration changes, and `Worker.run_once` no
+  longer writes `workhorse.worker.started` and `workhorse.worker.stopped`.
+
+**The .NET log records use new keys.** This is a breaking change for each query of .NET log records.
+Each record of the .NET `Workhorse` package now carries its values under the `workhorse.*` keys of
+the TypeScript record and under `error.type`. Before, it carried them under the names of its log
+template, such as `WorkerId` and `ErrorType`. A query that reads a template name finds no .NET
+record after the upgrade. [`dotnet/CHANGELOG.md`](../dotnet/CHANGELOG.md) gives each old and new
+key. A query that reads only Python records does not change for this reason.
+
+**Fast-tier dispatch changes for a worker with a concurrency of 5 or more.** ADR 0076 changes two
+rules for the worker of each SDK (SM-1833). At a concurrency of 5 or more, the refill batch is 2 or
+more. Rule 13: while a plain claim is in flight, a fused completion below the refill batch now
+claims the slot of its own task. Before, it claimed 0 tasks, and the worker could stay in plain
+claims. Rule 17: a worker with more than one queue skips one fused refill when another queue had no
+claim for one fairness interval. The interval is `poll_ms`, but at least 250 ms. Thus the number of
+plain claims and of fused claims for each completion changes, and a claim rate on a dashboard can
+move. A worker with more than one queue now claims from its other queues during a fast-tier backlog.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-016x-to-0170) give each step.
 
 ### A lost lease after the shutdown abort is not a failed settlement
 

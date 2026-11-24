@@ -13,9 +13,9 @@ import {
 } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on every registry from one commit. */
-const releaseVersion = "0.16.0";
-const releaseDate = "2026-11-22";
-const corePeerRange = ">=0.16.0 <0.17.0";
+const releaseVersion = "0.17.0";
+const releaseDate = "2026-11-24";
+const corePeerRange = ">=0.17.0 <0.18.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -49,7 +49,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.16.0 release", () => {
+describe("the 0.17.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -109,7 +109,7 @@ describe("the 0.16.0 release", () => {
       ],
       ["python/CHANGELOG.md", [`Python **${manifest.support.python.minimum}** or newer`]],
       // 0.14.0 shipped with the Go 1.25 floor, 0.15.0 raises it to 1.26 (ADR 0058), and 0.16.0
-      // keeps it. The number is written here because a published entry is immutable.
+      // and 0.17.0 keep it. The number is written here because a published entry is immutable.
       ["go/CHANGELOG.md", ["Go **1.26** or newer"]],
       [
         "rust/CHANGELOG.md",
@@ -137,8 +137,8 @@ describe("the 0.16.0 release", () => {
       // 0.6.1 keep it. 0.7.0 states v54, the floor migration 0055 reaches, and 0.7.1 keeps it. 0.8.0
       // states v69, the floor migration 0070 reaches. 0.9.0 states v73, the floor migration 0074
       // reaches. 0.10.0 states v76, the floor migration 0077 reaches, and 0.11.0 and 0.12.0 keep
-      // it. 0.14.0 states v99, the floor migration 0100 reaches, and 0.15.0 and 0.16.0 keep it. The
-      // project published no 0.13.0.
+      // it. 0.14.0 states v99, the floor migration 0100 reaches, and 0.15.0, 0.16.0, and 0.17.0 keep
+      // it. The project published no 0.13.0.
       // The number is written here rather than read from the manifest, because a published entry
       // is immutable and a later release moving the floor must not rewrite it.
       expect(entry).toContain("**schema v99**");
