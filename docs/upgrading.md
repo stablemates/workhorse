@@ -7,6 +7,53 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
+## Upgrade from 0.16.x to 0.17.0
+
+0.17.0 aligns the spans, metrics, and log records that this section lists with the TypeScript
+records in each SDK, and it changes the fast-tier dispatch of a worker. The upgrade is a rolling deployment, and a mixed fleet is supported
+while it runs.
+
+1. Do not run a migration. 0.17.0 adds no migration, so a 0.16.0 database stays at schema version
+   106, and the SDK compatibility floor stays at 99.
+2. Before the rollout, examine each alert, dashboard, and log query that reads Workhorse telemetry,
+   as the steps below describe.
+3. Roll out the new processes in any order.
+
+**Telemetry changes in every SDK.** In each SDK, 0.17.0 aligns the signals below with the TypeScript
+records. An alert or a dashboard that you built on 0.16.0 numbers can move after the upgrade. Some
+differences between the SDKs stay, such as the `error.type` value of each language.
+[`docs/parity.md`](parity.md) lists them:
+
+- The error status of the `workhorse.handler` span. A lost lease alone no longer gives the span the
+  error status in TypeScript, Python, Ruby, and the JVM, and on the Go release of a task without a
+  handler. The Rust span gets the error status only for a handler error and a failed statement.
+  Thus an alert on spans with the error status can fire less often.
+- `workhorse.tasks.retried`. The TypeScript worker now also counts a retry that an attempt timeout
+  schedules after a refused completion.
+- `workhorse.tasks.redrive` and `workhorse.tasks.cancellation`. Python, Go, Rust, Ruby, the JVM,
+  and .NET now count them, as TypeScript did. A chart of all processes goes up when those processes
+  upgrade.
+- `workhorse.handler.executions`. An attempt without an outcome is no longer counted with the
+  outcome `unknown`.
+- Log events. The six SDKs other than TypeScript now write the TypeScript log events, such as the
+  enqueue events at debug, and they write `workhorse.worker.registered` only when the registration
+  changes. Log volume and the number of records of each event can change.
+
+**The .NET log records use new keys.** This is a breaking change for each query of .NET log
+records. Each record of the .NET `Workhorse` package now carries its values under the `workhorse.*`
+keys of the TypeScript record and under `error.type`, not under the names of its log template, such
+as `WorkerId` and `ErrorType`. Change each query, filter, and alert that reads a template name
+before you roll out the .NET processes. [`dotnet/CHANGELOG.md`](../dotnet/CHANGELOG.md) gives each
+old and new key.
+
+**Fast-tier dispatch changes for a worker with a concurrency of 5 or more.** The
+[ADR 0076](decisions/0076-keep-overlapping-batched-claims-in-flight-to-fill-worker-slots.md)
+amendment for SM-1833 changes two rules for each SDK worker. While a plain claim is in flight, a
+fused completion below the refill batch now claims the slot of its own task, not 0 tasks (rule 13).
+A worker with more than one queue skips one fused refill when another queue had no claim for one
+fairness interval: the poll interval, but at least 250 ms (rule 17). Thus the number of plain claims
+and of fused claims for each completion changes, and a claim rate on a dashboard can move.
+
 ## Upgrade from 0.15.x to 0.16.0
 
 0.16.0 makes each task filter of the dashboard read its own list. It also stops the worker list

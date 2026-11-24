@@ -31,7 +31,7 @@ The adapter declares these peer dependencies:
 
 - `@opentelemetry/api >=1.9.0 <2`
 - `@opentelemetry/api-logs >=0.200.0 <0.300.0`
-- `@stablemates/workhorse >=0.16.0 <0.17.0`
+- `@stablemates/workhorse >=0.17.0 <0.18.0`
 
 The adapter resolves tracer, meter, logger, context, and propagation state from those host-owned API
 copies. Its synchronous metric and log wrappers read the OpenTelemetry global provider again each

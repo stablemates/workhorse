@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.17.0 — 2026-11-24
+
+- No code changes. The peer range on `@stablemates/workhorse` is `>=0.17.0 <0.18.0`, so the
+  adapter installs beside the 0.17.0 core. The npm packages, Python distribution, Go module,
+  Rust crate, Ruby gem, JVM artifacts, and .NET packages release from one source commit. The core
+  requires **schema v99**. 0.17.0 adds no migration, so the schema stays at version **106**. Its
+  0.17.0 entry in [`CHANGELOG.md`](../../CHANGELOG.md) gives the upgrade steps of the core and the
+  telemetry changes.
+
+### Upgrade from 0.16.x to 0.17.0
+
+**Roll out the new processes. The schema does not change.** 0.17.0 adds no migration. The schema
+stays at version **106**, and the SDK compatibility floor stays at **99**. The adapter has no code
+changes.
+
+**Telemetry changes in every SDK.** In each SDK, 0.17.0 aligns the error status of the
+`workhorse.handler` span, `workhorse.tasks.retried`, the redrive and cancellation counts, the
+execution count, and the log events with the TypeScript records. Thus an alert or a dashboard that
+you built on 0.16.0 numbers can move after the upgrade.
+
+**The .NET log records use new keys.** This is a breaking change for each query of .NET log records.
+They now carry the `workhorse.*` and `error.type` keys of the TypeScript records. A query that reads
+only TypeScript records does not change for this reason.
+
+**Fast-tier dispatch changes for a worker with a concurrency of 5 or more** (ADR 0076, SM-1833). The
+number of plain claims and of fused claims for each completion changes, and a claim rate on a
+dashboard can move.
+
+[The 0.17.0 entry of `CHANGELOG.md`](../../CHANGELOG.md) and
+[the upgrade notes](../../docs/upgrading.md#upgrade-from-016x-to-0170) give each change.
+
 ## 0.16.0 — 2026-11-22
 
 - No code changes. The peer range on `@stablemates/workhorse` is `>=0.16.0 <0.17.0`, so the
