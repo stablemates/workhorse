@@ -23,6 +23,15 @@ upgrade steps.
 
 ## Unreleased
 
+### A handler that throws after a suspension gets the swallowed signal warning
+
+A handler catches the suspension of a durable call and throws another error. The task still
+suspends. The Go, Rust, Ruby, JVM, and .NET workers then warned with
+`workhorse.handler.signal_swallowed`, and the TypeScript worker wrote nothing. The worker now
+writes the warning in this case too, with the attributes of the return case. The worker compares
+the thrown value itself, so an error that holds the suspension in its `cause` also gives the
+warning. The record holds no part of the thrown error (SM-2066).
+
 ### A refused completion is not a handler error
 
 PostgreSQL refuses a `complete_v1` call, for example because the lease expired or a deadline is

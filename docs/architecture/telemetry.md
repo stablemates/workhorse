@@ -861,9 +861,9 @@ debounce, and throttle events, `workhorse.task.cancellation_processed`,
 
 The .NET worker logs through `ILogger` from `Microsoft.Extensions.Logging.Abstractions`. It gets its
 logger from `WorkerOptions.LoggerFactory`. Without a factory, it logs nothing. The internal types
-`WorkerLog` and `DurableLog` declare each record with `LoggerMessage`. The `EventId` name of a
-record is its Workhorse event name, such as `workhorse.task.heartbeat_rejected`. The
-`Workhorse.Hosting` package logs its own `workhorse.hosting.*` events in the same way.
+`WorkerLog`, `DurableLog`, and `ClientLog` declare each record. The `EventId` name of a record is
+its Workhorse event name, such as `workhorse.task.heartbeat_rejected`. The `Workhorse.Hosting`
+package logs its own `workhorse.hosting.*` events with `LoggerMessage`.
 
 The .NET `Queue` and `Admin` log in the same way through `QueueOptions.LoggerFactory` and
 `AdminOptions.LoggerFactory`. Without a factory, they log nothing. `Workhorse.Hosting` gives the
@@ -871,10 +871,17 @@ worker, the queue, and `Admin` the logger factory of the container. A queue opti
 names a factory keeps it. The worker writes `workhorse.leases.recovered` from the `recover` phase
 of its maintenance tick, as the workers of the other six SDKs do.
 
-Each .NET template carries the values of the TypeScript record. A task record carries `TaskId`,
-`TaskType`, `Attempt`, `Queue`, and `WorkerId`. `Queues` is a list value. A record of the
-`Workhorse` package never carries an exception, because the exception holds the error message. A
-diagnostic record carries `ErrorType`, the full name of the exception type. Two packages give the
+Each record of the `Workhorse` package carries the values of the TypeScript record under the
+TypeScript keys, as the other six SDKs do (SM-2064). A task record carries `workhorse.task.id`,
+`workhorse.task.type`, `workhorse.task.attempt`, `workhorse.queue.name`, and
+`workhorse.worker.id`. `workhorse.worker.queues` is a list value. The rendered text of the record
+states the values, and `{OriginalFormat}` is the template with one hole for each key. A value that
+only the TypeScript body states, such as the place of a worker pause, is in the rendered text only.
+A record
+of the `Workhorse` package never carries an exception, because the exception holds the error
+message. A diagnostic record carries `error.type`, the full name of the exception type. The
+[ADR 0107 amendment of 2026-11-23](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#amendment-a-log-record-carries-the-keys-of-the-other-sdks-2026-11-23)
+states the rule. Two packages give the
 exception to `ILogger` by design. `Workhorse.Hosting` gives it in `workhorse.hosting.worker_failed`,
 because that record is the only place where an operator sees why the host stopped. The
 `Workhorse.AspNetCore` dashboard host gives it for a failed authorizer, compatibility check, or
@@ -891,11 +898,11 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 
 #### Severity coverage
 
-| Severity | Records cover                                                                                                                                                                                                                                                                                                                                                                             |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                                                                                                                                                                             |
-| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error.                                                                                                                                                 |
-| Warning  | Handlers that catch a durable-wait suspension signal and return normally, a claimed task that has no handler, batch evidence that the worker cannot record, a worker that polls without a notification listener, a reporter callback that fails, a completion or a release after the shutdown abort that fails, and a maintenance pass or a claim that waits longer than the stop budget. |
+| Severity | Records cover                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Debug    | Enqueue acceptance and replay, claims, accepted heartbeats, handler registration and execution boundaries, checkpoints, progress, schedule replay, and worker deregistration.                                                                                                                                                                                                                                |
+| Info     | Queue and worker lifecycle, final execution outcomes, rejected heartbeats, completion and failure, cancellation, durable waits, promotion and recovery, schedule changes, redrive, and maintenance that changes rows or returns an error.                                                                                                                                                                    |
+| Warning  | Handlers that catch a durable-wait suspension signal and then return or throw another error, a claimed task that has no handler, batch evidence that the worker cannot record, a worker that polls without a notification listener, a reporter callback that fails, a completion or a release after the shutdown abort that fails, and a maintenance pass or a claim that waits longer than the stop budget. |
 
 #### Debug event names
 
@@ -964,9 +971,9 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 
 - `workhorse.handler.signal_swallowed` carries bounded task and worker identity plus
   `workhorse.handler.outcome`, which is `suspended`. It never carries the swallowed value or error.
-  Each of the seven workers emits it when a handler returns a value after a durable call suspended
-  it ([Worker suspension](lifecycle.md#worker-suspension)). The .NET record names the values
-  `TaskId`, `TaskType`, `Attempt`, `Queue`, `WorkerId`, and `HandlerOutcome` by its log template.
+  Each of the seven workers emits it when a handler returns a value, or throws an error other than
+  the suspension, after a durable call suspended it
+  ([Worker suspension](lifecycle.md#worker-suspension)).
 - `workhorse.handler.missing` carries `workhorse.task.id`, `workhorse.task.type`,
   `workhorse.task.attempt`, `workhorse.queue.name`, and `workhorse.worker.id`. The worker emits it
   when it claims a task of a type that it has no handler for. The worker then returns the task to
@@ -987,14 +994,14 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
   (`maintenance` or `claim`), and `workhorse.worker.elapsed_ms`, the milliseconds that the statement
   waited at the moment of the warning. A maintenance pass or a claim that waits longer than the stop
   budget emits it once, and the statement can continue to wait after it.
-  [Statement bounds](lifecycle.md#statement-bounds) states the stop budget of each SDK. The .NET
-  record names the three values `WorkerId`, `Statement`, and `ElapsedMs` by its log template
-  ([ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry)).
+  [Statement bounds](lifecycle.md#statement-bounds) states the stop budget of each SDK.
 
 - `workhorse.worker.shutdown_settlement_failed` carries bounded task and worker identity and
   `error.type`. Each of the seven workers emits it when the completion or the release
   after the shutdown abort fails. The run then ends with that error, and lease recovery settles the
-  task ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)).
+  task ([Shutdown deadline and failure](operations.md#shutdown-deadline-and-failure)). A lost lease
+  is not a failed write. If PostgreSQL answers that settlement with a lost lease, no worker emits
+  the record, and the outcome is `lease_lost` (SM-2074).
 
 - `workhorse.worker.expiration_request_failed` carries bounded task and worker identity and
   `error.type`. Each of the seven workers emits it once for each expiry request that fails while the
@@ -1002,18 +1009,18 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
   timers](lifecycle.md#local-timers)). `error.type` is the type of the error. It is the error name
   in TypeScript and the type name in Python. It is the full type name in Ruby and Java, and the `%T`
   type in Go. In Rust, it is the variant of `workhorse::Error`, such as `Postgres`. The .NET worker
-  logs the event name through `ILogger` without the exception, and its template names the values
-  `TaskId`, `TaskType`, `Attempt`, `Queue`, `WorkerId`, and `ErrorType`. No record carries the
-  error text. A heartbeat answer can report the expiry while no request of the local timer is in
-  flight. Then the TypeScript worker sends its own request. It does not ask again after a failed
-  request, and the record comes at settlement. A handler can end while a request of the local timer
-  is in flight. Each worker then waits for its answer. If that request fails, the TypeScript,
-  Python, Go, Ruby, JVM, and .NET workers emit the record. The Rust worker emits no record in that
-  case. In Go and Rust, the wait also ends when the lease watchdog ends the attempt. The Go worker
-  then emits no record. Only the TypeScript worker gives the wait a fixed limit, 1,000 ms. If no
-  answer comes in that time, it emits the record with `error.type` `timeout`. In TypeScript, either
-  result proves nothing about the expiry, so `fail_v1` then settles the attempt. The Go and .NET
-  workers write no record for a request that fails after the stop of the run cancels it. [Worker log
+  logs the event name through `ILogger` without the exception. No record carries the error text. A
+  heartbeat answer can report the expiry while no request of the local timer is in flight. Then the
+  TypeScript worker sends its own request. It does not ask again after a failed request, and the
+  record comes at settlement. A handler can end while a request of the local timer is in flight.
+  Each worker then waits for its answer. If that request fails, each worker emits the record
+  (SM-2067). The TypeScript and Rust records of this case have the body "Worker settles a task
+  without the answer of its expiry request". In Go and Rust, the wait also ends when the lease
+  watchdog ends the attempt. The worker then cancels the request and emits no record for it. Only
+  the TypeScript worker gives the wait a fixed limit, 1,000 ms. If no answer comes in that time, it
+  emits the record with `error.type` `timeout`. In TypeScript, either result proves nothing about
+  the expiry, so `fail_v1` then settles the attempt. The Go and .NET workers write no record for a
+  request that fails after the stop of the run cancels it. [Worker log
   differences](../parity.md#worker-log-differences) states which of these differences stay.
 
 - `workhorse.worker.reporter_failed` carries `workhorse.worker.id`, `workhorse.worker.reporter`,
@@ -1028,8 +1035,7 @@ The .NET SDK has no OpenTelemetry logs dependency. It emits no OpenTelemetry log
 
   Go, Python, Ruby, Rust, the JVM, and .NET write the record to their logger at error. The
   TypeScript worker writes it with `console.error`. The TypeScript, Python, and JVM OpenTelemetry
-  records use warn. The .NET record names the values `WorkerId`, `Reporter`, `ErrorType`, and
-  `Unreported` by its log template.
+  records use warn.
 
 #### Log record attributes
 

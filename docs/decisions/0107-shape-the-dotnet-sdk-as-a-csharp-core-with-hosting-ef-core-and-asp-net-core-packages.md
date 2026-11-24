@@ -1652,3 +1652,32 @@ The `Json` properties stay public for code. The change narrows a 0.x surface bef
 nothing. `AddWorkhorse` gives both the logger factory of the container, as it does for the worker.
 The queue options are read at registration, so `AddWorkhorse` refuses a
 `Workhorse:Queue:LoggerFactory` section at once, and not at the first read as for the worker.
+
+## Amendment: a log record carries the keys of the other SDKs (2026-11-23)
+
+[Telemetry](#telemetry) states that the worker and the queue log through `ILogger`. Before this
+amendment, each record of the `Workhorse` package came from a `LoggerMessage` template. A template
+takes the name of a method parameter, so each value had a template name, such as `WorkerId`. The
+other six SDKs write the same value under the key of `docs/architecture/telemetry.md`, such as
+`workhorse.worker.id`. Thus a query on a key did not match a .NET record (SM-2064).
+
+The rules:
+
+1. Each record of the `Workhorse` package carries each value under the key that
+   `docs/architecture/telemetry.md` gives for its event. That key is the attribute name of the
+   TypeScript record. The three events that only the JVM and .NET write use the keys of the JVM
+   record.
+2. A record carries no value that the TypeScript record does not have, apart from the bounded
+   identity attributes that `docs/parity.md` lists, such as `workhorse.queue.name` on a task record.
+   If the TypeScript body states a value, such as the place of a worker pause, only the message of
+   the .NET record states it.
+3. The message of a record states its values. `{OriginalFormat}` is the template, with one hole for
+   each key, as in a `LoggerMessage` state.
+4. The event ID of each event stays the ID that the source generator gave it: the FNV-1a hash of the
+   event name.
+5. A record carries no exception. The `Workhorse.Hosting` and `Workhorse.AspNetCore` records keep
+   their exception, as [.NET logs](../architecture/telemetry.md#net-logs) states.
+
+A key has a dot, and a parameter name cannot have one, so the records no longer use the source
+generator. The internal type `SdkLog` writes each record. It checks `IsEnabled` before it makes the
+state, so a disabled logger costs no work, as before.

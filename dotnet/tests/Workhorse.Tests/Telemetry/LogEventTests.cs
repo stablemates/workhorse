@@ -10,12 +10,13 @@ namespace Workhorse.Tests.Telemetry;
 /// <summary>
 /// The log records of the worker, the queue, and the admin client against PostgreSQL. Each record
 /// has the event name, the severity, and the attributes of the TypeScript <c>WorkhorseLogEvent</c>
-/// (docs/architecture/telemetry.md, "Structured logs"). A .NET record names each attribute by its
-/// message template, so each test checks the template names of the record.
+/// (docs/architecture/telemetry.md, "Structured logs"). A .NET record carries each attribute under
+/// the TypeScript key, such as <c>workhorse.task.id</c> (SM-2064), so each test checks the keys of
+/// the record.
 /// </summary>
 public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<ScratchDatabase>, IDisposable
 {
-    private static readonly string[] TaskAttributes = ["Attempt", "Queue", "TaskId", "TaskType", "WorkerId"];
+    private static readonly string[] TaskAttributes = ["workhorse.task.attempt", "workhorse.queue.name", "workhorse.task.id", "workhorse.task.type", "workhorse.worker.id"];
 
     private readonly LogRecorder _log = new();
 
@@ -79,10 +80,10 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
                      ("workhorse.task.debounce_rejected", rejected),
                  })
         {
-            var record = _log.Single(name, record => Equals(record["TaskId"], result.TaskId));
-            AssertRecord(record, LogLevel.Debug, "Queue", "TaskId", "TaskType");
-            Assert.Equal("mail", record["TaskType"]);
-            Assert.Equal(_queue, record["Queue"]);
+            var record = _log.Single(name, record => Equals(record["workhorse.task.id"], result.TaskId));
+            AssertRecord(record, LogLevel.Debug, "workhorse.queue.name", "workhorse.task.id", "workhorse.task.type");
+            Assert.Equal("mail", record["workhorse.task.type"]);
+            Assert.Equal(_queue, record["workhorse.queue.name"]);
         }
 
         Assert.Equal(3, _log.Of("workhorse.task.enqueued").Count);
@@ -96,10 +97,10 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         var member = Assert.Single(await queue.AddToTaskGroupAsync(group.Id, [new EnqueueRequest { TaskType = "member", Options = new EnqueueOptions { Queue = "members" } }], Token));
 
         var record = _log.Single("workhorse.task.enqueued");
-        AssertRecord(record, LogLevel.Debug, "Queue", "TaskId", "TaskType");
-        Assert.Equal(member.TaskId, record["TaskId"]);
-        Assert.Equal("member", record["TaskType"]);
-        Assert.Equal("members", record["Queue"]);
+        AssertRecord(record, LogLevel.Debug, "workhorse.queue.name", "workhorse.task.id", "workhorse.task.type");
+        Assert.Equal(member.TaskId, record["workhorse.task.id"]);
+        Assert.Equal("member", record["workhorse.task.type"]);
+        Assert.Equal("members", record["workhorse.queue.name"]);
     }
 
     [Fact]
@@ -111,13 +112,13 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         var missing = Guid.NewGuid();
         var unknown = await queue.CancelAsync(missing, new CancelOptions(), Token);
 
-        var record = _log.Single("workhorse.task.cancellation_processed", record => Equals(record["TaskId"], taskId));
-        AssertRecord(record, LogLevel.Information, "State", "Status", "TaskId");
-        Assert.Equal(Wire.Text(canceled.State!.Value), record["State"]);
-        Assert.Equal(Wire.Text(canceled.Status), record["Status"]);
-        var notFound = _log.Single("workhorse.task.cancellation_processed", record => Equals(record["TaskId"], missing));
-        Assert.Equal("not_found", notFound["State"]);
-        Assert.Equal(Wire.Text(unknown.Status), notFound["Status"]);
+        var record = _log.Single("workhorse.task.cancellation_processed", record => Equals(record["workhorse.task.id"], taskId));
+        AssertRecord(record, LogLevel.Information, "workhorse.task.state", "workhorse.operation.status", "workhorse.task.id");
+        Assert.Equal(Wire.Text(canceled.State!.Value), record["workhorse.task.state"]);
+        Assert.Equal(Wire.Text(canceled.Status), record["workhorse.operation.status"]);
+        var notFound = _log.Single("workhorse.task.cancellation_processed", record => Equals(record["workhorse.task.id"], missing));
+        Assert.Equal("not_found", notFound["workhorse.task.state"]);
+        Assert.Equal(Wire.Text(unknown.Status), notFound["workhorse.operation.status"]);
     }
 
     [Fact]
@@ -129,16 +130,16 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         var decision = await queue.CompleteHumanWaitAsync(taskId, "review", new { secret = "result" }, "decision-key", "tester", Token);
 
         var signalRecord = _log.Single("workhorse.task.signal_processed");
-        AssertRecord(signalRecord, LogLevel.Information, "SignalName", "Status", "TaskId");
-        Assert.Equal(taskId, signalRecord["TaskId"]);
-        Assert.Equal("approved", signalRecord["SignalName"]);
-        Assert.Equal(Wire.Text(signal.Status), signalRecord["Status"]);
+        AssertRecord(signalRecord, LogLevel.Information, "workhorse.signal.name", "workhorse.signal.status", "workhorse.task.id");
+        Assert.Equal(taskId, signalRecord["workhorse.task.id"]);
+        Assert.Equal("approved", signalRecord["workhorse.signal.name"]);
+        Assert.Equal(Wire.Text(signal.Status), signalRecord["workhorse.signal.status"]);
 
         var decisionRecord = _log.Single("workhorse.task.human_wait_processed");
-        AssertRecord(decisionRecord, LogLevel.Information, "Status", "TaskId", "WaitName");
-        Assert.Equal(taskId, decisionRecord["TaskId"]);
-        Assert.Equal("review", decisionRecord["WaitName"]);
-        Assert.Equal(Wire.Text(decision.Status), decisionRecord["Status"]);
+        AssertRecord(decisionRecord, LogLevel.Information, "workhorse.human_wait.status", "workhorse.task.id", "workhorse.human_wait.name");
+        Assert.Equal(taskId, decisionRecord["workhorse.task.id"]);
+        Assert.Equal("review", decisionRecord["workhorse.human_wait.name"]);
+        Assert.Equal(Wire.Text(decision.Status), decisionRecord["workhorse.human_wait.status"]);
     }
 
     [Fact]
@@ -154,9 +155,9 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
             Token);
 
         var record = _log.Single("workhorse.schedules.synchronized");
-        AssertRecord(record, LogLevel.Information, "Count", "Namespace");
-        Assert.Equal(@namespace, record["Namespace"]);
-        Assert.Equal(2, record["Count"]);
+        AssertRecord(record, LogLevel.Information, "workhorse.schedule.count", "workhorse.schedule.namespace");
+        Assert.Equal(@namespace, record["workhorse.schedule.namespace"]);
+        Assert.Equal(2, record["workhorse.schedule.count"]);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -174,19 +175,19 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         var purged = await admin.PurgeQueueAsync(_queue, Audit(), Token);
         var tier = await admin.SetQueueTierAsync(_queue, QueueTier.Fast, Audit(), Token);
 
-        AssertRecord(_log.Single("workhorse.queue.paused"), LogLevel.Information, "Queue");
-        Assert.Equal(_queue, _log.Single("workhorse.queue.paused")["Queue"]);
-        AssertRecord(_log.Single("workhorse.queue.resumed"), LogLevel.Information, "Queue");
-        Assert.Equal(_queue, _log.Single("workhorse.queue.resumed")["Queue"]);
+        AssertRecord(_log.Single("workhorse.queue.paused"), LogLevel.Information, "workhorse.queue.name");
+        Assert.Equal(_queue, _log.Single("workhorse.queue.paused")["workhorse.queue.name"]);
+        AssertRecord(_log.Single("workhorse.queue.resumed"), LogLevel.Information, "workhorse.queue.name");
+        Assert.Equal(_queue, _log.Single("workhorse.queue.resumed")["workhorse.queue.name"]);
         var purge = _log.Single("workhorse.queue.purged");
-        AssertRecord(purge, LogLevel.Information, "Count", "Queue");
-        Assert.Equal(_queue, purge["Queue"]);
+        AssertRecord(purge, LogLevel.Information, "workhorse.task.count", "workhorse.queue.name");
+        Assert.Equal(_queue, purge["workhorse.queue.name"]);
         Assert.Equal(2L, purged);
-        Assert.Equal(purged, purge["Count"]);
+        Assert.Equal(purged, purge["workhorse.task.count"]);
         var tierRecord = _log.Single("workhorse.queue.tier_set");
-        AssertRecord(tierRecord, LogLevel.Information, "Queue", "Tier");
-        Assert.Equal(_queue, tierRecord["Queue"]);
-        Assert.Equal(Wire.Text(tier), tierRecord["Tier"]);
+        AssertRecord(tierRecord, LogLevel.Information, "workhorse.queue.name", "workhorse.queue.tier");
+        Assert.Equal(_queue, tierRecord["workhorse.queue.name"]);
+        Assert.Equal(Wire.Text(tier), tierRecord["workhorse.queue.tier"]);
     }
 
     [Fact]
@@ -205,14 +206,14 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         var page = await admin.RedriveManyAsync(new RedriveFilter { Queue = _queue, DryRun = true }, Audit(), Token);
 
         var record = _log.Single("workhorse.task.redrive_processed");
-        AssertRecord(record, LogLevel.Information, "Status", "TargetTaskId", "TaskId");
-        Assert.Equal(taskId, record["TaskId"]);
-        Assert.Equal(redriven.TargetTaskId!.Value.ToString(), record["TargetTaskId"]);
-        Assert.Equal(Wire.Text(redriven.Status), record["Status"]);
+        AssertRecord(record, LogLevel.Information, "workhorse.operation.status", "workhorse.redrive.target_task_id", "workhorse.task.id");
+        Assert.Equal(taskId, record["workhorse.task.id"]);
+        Assert.Equal(redriven.TargetTaskId!.Value.ToString(), record["workhorse.redrive.target_task_id"]);
+        Assert.Equal(Wire.Text(redriven.Status), record["workhorse.operation.status"]);
         var batch = _log.Single("workhorse.tasks.redrive_processed");
-        AssertRecord(batch, LogLevel.Information, "Count", "DryRun");
-        Assert.Equal(page.Results.Count, batch["Count"]);
-        Assert.Equal(true, batch["DryRun"]);
+        AssertRecord(batch, LogLevel.Information, "workhorse.task.count", "workhorse.redrive.dry_run");
+        Assert.Equal(page.Results.Count, batch["workhorse.task.count"]);
+        Assert.Equal(true, batch["workhorse.redrive.dry_run"]);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -227,9 +228,9 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         Assert.True(await worker.RunOnceAsync(Token));
 
         var registered = _log.Single("workhorse.handler.registered");
-        AssertRecord(registered, LogLevel.Debug, "TaskType", "WorkerId");
-        Assert.Equal("mail", registered["TaskType"]);
-        Assert.Equal(worker.WorkerId, registered["WorkerId"]);
+        AssertRecord(registered, LogLevel.Debug, "workhorse.task.type", "workhorse.worker.id");
+        Assert.Equal("mail", registered["workhorse.task.type"]);
+        Assert.Equal(worker.WorkerId, registered["workhorse.worker.id"]);
 
         foreach (var name in new[] { "workhorse.task.claimed", "workhorse.handler.started" })
         {
@@ -239,14 +240,14 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         }
 
         var finished = _log.Single("workhorse.handler.finished");
-        AssertRecord(finished, LogLevel.Debug, [.. TaskAttributes, "DurationMs"]);
+        AssertRecord(finished, LogLevel.Debug, [.. TaskAttributes, "workhorse.handler.duration_ms"]);
         AssertTask(finished, taskId, worker.WorkerId);
-        Assert.True(Assert.IsType<double>(finished["DurationMs"]) >= 0);
+        Assert.True(Assert.IsType<double>(finished["workhorse.handler.duration_ms"]) >= 0);
 
         var execution = _log.Single("workhorse.task.execution_finished");
-        AssertRecord(execution, LogLevel.Information, [.. TaskAttributes, "Outcome"]);
+        AssertRecord(execution, LogLevel.Information, [.. TaskAttributes, "workhorse.handler.outcome"]);
         AssertTask(execution, taskId, worker.WorkerId);
-        Assert.Equal("succeeded", execution["Outcome"]);
+        Assert.Equal("succeeded", execution["workhorse.handler.outcome"]);
     }
 
     [Fact]
@@ -259,11 +260,11 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
             (items, _) => Task.FromResult<IReadOnlyList<BatchHandlerOutcome>>([]));
 
         var record = _log.Single("workhorse.handler.registered");
-        AssertRecord(record, LogLevel.Debug, "LingerMs", "MaxSize", "TaskType", "WorkerId");
-        Assert.Equal("batched", record["TaskType"]);
-        Assert.Equal(3, record["MaxSize"]);
-        Assert.Equal(25L, record["LingerMs"]);
-        Assert.Equal(worker.WorkerId, record["WorkerId"]);
+        AssertRecord(record, LogLevel.Debug, "workhorse.handler.batch.linger_ms", "workhorse.handler.batch.max_size", "workhorse.task.type", "workhorse.worker.id");
+        Assert.Equal("batched", record["workhorse.task.type"]);
+        Assert.Equal(3, record["workhorse.handler.batch.max_size"]);
+        Assert.Equal(25L, record["workhorse.handler.batch.linger_ms"]);
+        Assert.Equal(worker.WorkerId, record["workhorse.worker.id"]);
     }
 
     [Fact]
@@ -279,11 +280,11 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         Assert.True(await worker.RunOnceAsync(Token));
 
         var record = _log.Of("workhorse.task.heartbeat_accepted")[0];
-        AssertRecord(record, LogLevel.Debug, "Attempt", "TaskId", "TaskType", "WorkerId");
-        Assert.Equal(taskId, record["TaskId"]);
-        Assert.Equal("slow", record["TaskType"]);
-        Assert.Equal(1, record["Attempt"]);
-        Assert.Equal(worker.WorkerId, record["WorkerId"]);
+        AssertRecord(record, LogLevel.Debug, "workhorse.task.attempt", "workhorse.task.id", "workhorse.task.type", "workhorse.worker.id");
+        Assert.Equal(taskId, record["workhorse.task.id"]);
+        Assert.Equal("slow", record["workhorse.task.type"]);
+        Assert.Equal(1, record["workhorse.task.attempt"]);
+        Assert.Equal(worker.WorkerId, record["workhorse.worker.id"]);
     }
 
     /// <summary>
@@ -383,27 +384,27 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
             "the worker refreshes its registration three times");
 
         var first = _log.Single("workhorse.worker.registered");
-        AssertRecord(first, LogLevel.Debug, "ActiveSlots", "Concurrency", "Draining", "Paused", "Queues", "WorkerId");
-        Assert.Equal(worker.WorkerId, first["WorkerId"]);
-        Assert.Equal<IEnumerable<string>>([_queue], Assert.IsAssignableFrom<IReadOnlyList<string>>(first["Queues"]));
-        Assert.Equal(worker.Concurrency, first["Concurrency"]);
-        Assert.Equal(0, first["ActiveSlots"]);
-        Assert.Equal(false, first["Draining"]);
-        Assert.Equal(false, first["Paused"]);
+        AssertRecord(first, LogLevel.Debug, "workhorse.worker.active_slots", "workhorse.worker.concurrency", "workhorse.worker.draining", "workhorse.worker.paused", "workhorse.worker.queues", "workhorse.worker.id");
+        Assert.Equal(worker.WorkerId, first["workhorse.worker.id"]);
+        Assert.Equal<IEnumerable<string>>([_queue], Assert.IsAssignableFrom<IReadOnlyList<string>>(first["workhorse.worker.queues"]));
+        Assert.Equal(worker.Concurrency, first["workhorse.worker.concurrency"]);
+        Assert.Equal(0, first["workhorse.worker.active_slots"]);
+        Assert.Equal(false, first["workhorse.worker.draining"]);
+        Assert.Equal(false, first["workhorse.worker.paused"]);
 
         // An operator pause changes the answer of the next refresh.
         Assert.NotNull(await new Admin(DataSource).SetWorkerPausedAsync(worker.WorkerId, true, Audit(), Token));
         await EventuallyAsync(() => _log.Of("workhorse.worker.registered").Count == 2, "the paused registration is logged");
-        Assert.Equal(true, _log.Of("workhorse.worker.registered")[1]["Paused"]);
+        Assert.Equal(true, _log.Of("workhorse.worker.registered")[1]["workhorse.worker.paused"]);
 
         await running.StopAsync();
         var registrations = _log.Of("workhorse.worker.registered");
         Assert.Equal(3, registrations.Count);
-        Assert.Equal(true, registrations[2]["Draining"]);
+        Assert.Equal(true, registrations[2]["workhorse.worker.draining"]);
         var deregistered = _log.Single("workhorse.worker.deregistered");
-        AssertRecord(deregistered, LogLevel.Debug, "Deregistered", "WorkerId");
-        Assert.Equal(worker.WorkerId, deregistered["WorkerId"]);
-        Assert.Equal(true, deregistered["Deregistered"]);
+        AssertRecord(deregistered, LogLevel.Debug, "workhorse.worker.deregistered", "workhorse.worker.id");
+        Assert.Equal(worker.WorkerId, deregistered["workhorse.worker.id"]);
+        Assert.Equal(true, deregistered["workhorse.worker.deregistered"]);
     }
 
     /// <summary>
@@ -467,31 +468,32 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
 
         IEnumerable<string> queues = [_queue];
         var started = _log.Single("workhorse.worker.started");
-        AssertRecord(started, LogLevel.Information, "Concurrency", "Queues", "WorkerId");
-        Assert.Equal(worker.WorkerId, started["WorkerId"]);
-        Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(started["Queues"]));
+        AssertRecord(started, LogLevel.Information, "workhorse.worker.concurrency", "workhorse.worker.queues", "workhorse.worker.id");
+        Assert.Equal(worker.WorkerId, started["workhorse.worker.id"]);
+        Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(started["workhorse.worker.queues"]));
         foreach (var name in new[] { "workhorse.worker.paused", "workhorse.worker.resumed" })
         {
             foreach (var where in new[] { "locally", "remotely" })
             {
-                var record = _log.Single(name, record => record.Values.TryGetValue("Where", out var value) && Equals(value, where));
-                AssertRecord(record, LogLevel.Information, "Queues", "Where", "WorkerId");
-                Assert.Equal(worker.WorkerId, record["WorkerId"]);
-                Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(record["Queues"]));
+                // The TypeScript record has no key for the place of the pause, so only the message states it.
+                var record = _log.Single(name, record => record.Values.ContainsKey("workhorse.worker.queues") && record.Message.Contains($" {where} ", StringComparison.Ordinal));
+                AssertRecord(record, LogLevel.Information, "workhorse.worker.queues", "workhorse.worker.id");
+                Assert.Equal(worker.WorkerId, record["workhorse.worker.id"]);
+                Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(record["workhorse.worker.queues"]));
             }
 
-            var byAdmin = _log.Single(name, record => !record.Values.ContainsKey("Where"));
-            AssertRecord(byAdmin, LogLevel.Information, "WorkerId");
-            Assert.Equal(worker.WorkerId, byAdmin["WorkerId"]);
+            var byAdmin = _log.Single(name, record => !record.Values.ContainsKey("workhorse.worker.queues"));
+            AssertRecord(byAdmin, LogLevel.Information, "workhorse.worker.id");
+            Assert.Equal(worker.WorkerId, byAdmin["workhorse.worker.id"]);
         }
 
         foreach (var name in new[] { "workhorse.worker.stop_requested", "workhorse.worker.stopped" })
         {
             var record = _log.Single(name);
-            AssertRecord(record, LogLevel.Information, "ActiveSlots", "Queues", "WorkerId");
-            Assert.Equal(worker.WorkerId, record["WorkerId"]);
-            Assert.Equal(0, record["ActiveSlots"]);
-            Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(record["Queues"]));
+            AssertRecord(record, LogLevel.Information, "workhorse.worker.active_slots", "workhorse.worker.queues", "workhorse.worker.id");
+            Assert.Equal(worker.WorkerId, record["workhorse.worker.id"]);
+            Assert.Equal(0, record["workhorse.worker.active_slots"]);
+            Assert.Equal(queues, Assert.IsAssignableFrom<IReadOnlyList<string>>(record["workhorse.worker.queues"]));
         }
     }
 
@@ -516,26 +518,26 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
             await worker.RunOnceAsync(Token);
         }
 
-        var completed = _log.Single("workhorse.task.completed", record => Equals(record["TaskId"], succeeds));
-        AssertRecord(completed, LogLevel.Information, [.. TaskAttributes, "Accepted"]);
+        var completed = _log.Single("workhorse.task.completed", record => Equals(record["workhorse.task.id"], succeeds));
+        AssertRecord(completed, LogLevel.Information, [.. TaskAttributes, "workhorse.complete.accepted"]);
         AssertTask(completed, succeeds, worker.WorkerId);
-        Assert.Equal(true, completed["Accepted"]);
+        Assert.Equal(true, completed["workhorse.complete.accepted"]);
         var failure = _log.Single("workhorse.task.failure_processed");
-        AssertRecord(failure, LogLevel.Information, [.. TaskAttributes, "State"]);
+        AssertRecord(failure, LogLevel.Information, [.. TaskAttributes, "workhorse.attempt.outcome"]);
         AssertTask(failure, fails, worker.WorkerId);
-        Assert.Equal("failed", failure["State"]);
+        Assert.Equal("failed", failure["workhorse.attempt.outcome"]);
         // Each run claims and releases the task again, so it has a record for each run.
         var missing = _log.Of("workhorse.handler.missing")[0];
         AssertRecord(missing, LogLevel.Warning, TaskAttributes);
         AssertTask(missing, unknown, worker.WorkerId);
         var released = _log.Of("workhorse.task.release_processed")[0];
-        AssertRecord(released, LogLevel.Information, [.. TaskAttributes, "Status"]);
+        AssertRecord(released, LogLevel.Information, [.. TaskAttributes, "workhorse.release.status"]);
         AssertTask(released, unknown, worker.WorkerId);
-        Assert.Equal("released", released["Status"]);
+        Assert.Equal("released", released["workhorse.release.status"]);
         var batch = _log.Single("workhorse.handler.batch_dispatched");
-        AssertRecord(batch, LogLevel.Information, "Full", "LingerMs", "Queue", "Size", "TaskType", "WorkerId");
-        Assert.Equal(worker.WorkerId, batch["WorkerId"]);
-        Assert.Equal(_queue, batch["Queue"]);
+        AssertRecord(batch, LogLevel.Information, "workhorse.handler.batch.full", "workhorse.handler.batch.linger_ms", "workhorse.queue.name", "workhorse.handler.batch.size", "workhorse.task.type", "workhorse.worker.id");
+        Assert.Equal(worker.WorkerId, batch["workhorse.worker.id"]);
+        Assert.Equal(_queue, batch["workhorse.queue.name"]);
     }
 
     [Fact]
@@ -559,18 +561,18 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         await worker.RunOnceAsync(Token);
 
         var recovered = _log.Single("workhorse.leases.recovered");
-        AssertRecord(recovered, LogLevel.Information, "ExpiredLeases", "Retried", "RowsAffected");
-        Assert.True(Assert.IsType<long>(recovered["RowsAffected"]) >= 1);
-        Assert.True(Assert.IsType<long>(recovered["ExpiredLeases"]) >= 1);
-        Assert.IsType<long>(recovered["Retried"]);
+        AssertRecord(recovered, LogLevel.Information, "workhorse.recovery.expired_leases", "workhorse.recovery.retried", "workhorse.recovery.rows_affected");
+        Assert.True(Assert.IsType<long>(recovered["workhorse.recovery.rows_affected"]) >= 1);
+        Assert.True(Assert.IsType<long>(recovered["workhorse.recovery.expired_leases"]) >= 1);
+        Assert.IsType<long>(recovered["workhorse.recovery.retried"]);
 
-        var phase = _log.Single("workhorse.maintenance.completed", record => Equals(record["Phase"], "recover"));
-        AssertRecord(phase, LogLevel.Information, "Operation", "Phase", "RowsAffected", "SkippedLock");
-        Assert.Equal("tick", phase["Operation"]);
-        Assert.Equal(recovered["RowsAffected"], phase["RowsAffected"]);
-        Assert.Equal(false, phase["SkippedLock"]);
+        var phase = _log.Single("workhorse.maintenance.completed", record => Equals(record["workhorse.maintenance.phase"], "recover"));
+        AssertRecord(phase, LogLevel.Information, "workhorse.maintenance.operation", "workhorse.maintenance.phase", "workhorse.maintenance.rows_affected", "workhorse.maintenance.skipped_lock");
+        Assert.Equal("tick", phase["workhorse.maintenance.operation"]);
+        Assert.Equal(recovered["workhorse.recovery.rows_affected"], phase["workhorse.maintenance.rows_affected"]);
+        Assert.Equal(false, phase["workhorse.maintenance.skipped_lock"]);
         // A phase that changed no row and returned no error writes no record.
-        Assert.All(_log.Of("workhorse.maintenance.completed"), record => Assert.NotEqual(0L, record["RowsAffected"]));
+        Assert.All(_log.Of("workhorse.maintenance.completed"), record => Assert.NotEqual(0L, record["workhorse.maintenance.rows_affected"]));
     }
 
     /// <summary>
@@ -603,9 +605,9 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
 
         Assert.Empty(_log.Of("workhorse.schedule.fired"));
         var record = _log.Of("workhorse.schedule.fire_replayed")[0];
-        AssertRecord(record, LogLevel.Debug, "Namespace", "Schedule");
-        Assert.Equal(@namespace, record["Namespace"]);
-        Assert.Equal("every-minute", record["Schedule"]);
+        AssertRecord(record, LogLevel.Debug, "workhorse.schedule.namespace", "workhorse.schedule.name");
+        Assert.Equal(@namespace, record["workhorse.schedule.namespace"]);
+        Assert.Equal("every-minute", record["workhorse.schedule.name"]);
     }
 
     /// <summary>
@@ -639,10 +641,10 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
             await Assert.ThrowsAnyAsync<Exception>(running.StopAsync);
 
             var record = _log.Single("workhorse.worker.shutdown_settlement_failed");
-            AssertRecord(record, LogLevel.Warning, [.. TaskAttributes, "ErrorType"]);
+            AssertRecord(record, LogLevel.Warning, [.. TaskAttributes, "error.type"]);
             AssertTask(record, taskId, worker.WorkerId);
             // The worker wraps the error of PostgreSQL, and the record holds no message.
-            Assert.Equal(typeof(DatabaseException).FullName, record["ErrorType"]);
+            Assert.Equal(typeof(DatabaseException).FullName, record["error.type"]);
             Assert.Null(record.Exception);
         }
         finally
@@ -699,7 +701,7 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
 
         foreach (var name in new[] { "workhorse.handler.started", "workhorse.task.execution_finished", "workhorse.handler.finished" })
         {
-            var record = _log.Single(name, record => Equals(record.Values.GetValueOrDefault("TaskId"), taskId));
+            var record = _log.Single(name, record => Equals(record.Values.GetValueOrDefault("workhorse.task.id"), taskId));
             Assert.Equal("workhorse.handler", record.Span);
         }
     }
@@ -731,8 +733,8 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
         await running.StopAsync();
 
         var record = _log.Single("workhorse.worker.polling_only");
-        AssertRecord(record, LogLevel.Warning, "PoolMaxSize", "Queues", "WorkerId");
-        Assert.Equal(worker.WorkerId, record["WorkerId"]);
+        AssertRecord(record, LogLevel.Warning, "workhorse.worker.pool_max_size", "workhorse.worker.queues", "workhorse.worker.id");
+        Assert.Equal(worker.WorkerId, record["workhorse.worker.id"]);
         _log.Single("workhorse.worker.stopped");
     }
 
@@ -767,10 +769,10 @@ public sealed class LogEventTests(ScratchDatabase database) : IClassFixture<Scra
 
     private void AssertTask(LogRecord record, Guid taskId, string workerId)
     {
-        Assert.Equal(taskId, record["TaskId"]);
-        Assert.Equal(_queue, record["Queue"]);
-        Assert.Equal(1, record["Attempt"]);
-        Assert.Equal(workerId, record["WorkerId"]);
-        Assert.IsType<string>(record["TaskType"]);
+        Assert.Equal(taskId, record["workhorse.task.id"]);
+        Assert.Equal(_queue, record["workhorse.queue.name"]);
+        Assert.Equal(1, record["workhorse.task.attempt"]);
+        Assert.Equal(workerId, record["workhorse.worker.id"]);
+        Assert.IsType<string>(record["workhorse.task.type"]);
     }
 }

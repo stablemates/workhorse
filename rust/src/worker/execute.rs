@@ -196,6 +196,23 @@ impl Inner {
             loop {
                 tokio::select! {
                     answer = &mut request => {
+                        // A failed request gets its record here too, as in the other six SDKs
+                        // (SM-2067). The handler ended, so the worker does not ask again. The body is
+                        // the TypeScript body of this case.
+                        if let Err(error) = &answer {
+                            crate::telemetry::log_event!(
+                                warn,
+                                parent: &span,
+                                event.name = "workhorse.worker.expiration_request_failed",
+                                workhorse.task.id = %task.id,
+                                workhorse.task.type = %task.task_type,
+                                workhorse.task.attempt = task.attempt,
+                                workhorse.queue.name = %task.queue,
+                                workhorse.worker.id = %self.worker_id,
+                                error.r#type = %error.type_name(),
+                                "Worker settles a task without the answer of its expiry request"
+                            );
+                        }
                         match answer {
                             Ok(status) if decides(status) => expired = Some(Ok(status)),
                             _ if stale_beat => {
@@ -420,14 +437,16 @@ impl Inner {
     }
 
     /// Logs a completion or a release after the shutdown cancellation that failed. The error then
-    /// ends the run, and lease recovery settles the task.
+    /// ends the run, and lease recovery settles the task. A lost lease is not a failed write, so it
+    /// gets no record, and the caller makes it the outcome `lease_lost` (SM-2074).
     fn after_shutdown(
         &self,
         task: &ClaimedTask,
         settled: Result<Outcome, Error>,
     ) -> Result<Outcome, Error> {
-        if let Err(error) = &settled {
-            crate::telemetry::log_event!(
+        match &settled {
+            Ok(_) | Err(Error::LeaseLost { .. }) => {}
+            Err(error) => crate::telemetry::log_event!(
                 warn,
                 event.name = "workhorse.worker.shutdown_settlement_failed",
                 workhorse.task.id = %task.id,
@@ -437,7 +456,7 @@ impl Inner {
                 workhorse.worker.id = %self.worker_id,
                 error.r#type = %error.type_name(),
                 "Worker could not settle a task after the shutdown abort"
-            );
+            ),
         }
         settled
     }

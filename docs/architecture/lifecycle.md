@@ -820,10 +820,10 @@ flow. The heartbeat stops, and the worker slot becomes free for another claim.
 If the handler catches that signal and returns, the worker applies the recorded suspension again.
 Every SDK also emits `workhorse.handler.signal_swallowed` at warning severity with
 `workhorse.handler.outcome = suspended` (SM-2016). If the handler throws or returns an error other
-than the suspension, the worker also applies the suspension. The Go, Rust, Ruby, JVM, and .NET
-workers then emit the same warning. The TypeScript and Python workers do not emit it in that case.
-Go and Rust read an error that wraps the suspension as the suspension, so they emit no warning for
-it. Ruby, the JVM, and .NET compare the thrown exception itself.
+than the suspension, the worker also applies the suspension, and each of the seven workers emits
+the same warning (SM-2066). Go and Rust read an error that wraps the suspension as the suspension,
+so they emit no warning for it. TypeScript, Python, Ruby, the JVM, and .NET compare the thrown
+error itself.
 [Worker log differences](../parity.md#worker-log-differences) states why the reading of a wrapped
 suspension stays. The shared case
 `durable-suspension-that-the-handler-catches-still-suspends` checks in every SDK that the task stays
@@ -1700,8 +1700,9 @@ The worker watches a `complete_many_and_claim_v1` as a claim only if it asks for
 when the worker starts it. A statement that only completes tasks gets no warning. If the heartbeat
 gate closes before the send, the statement claims nothing, but the worker still watches it.
 
-The .NET record names its values by its log template: `WorkerId`, `Statement`, and `ElapsedMs`. The
-other .NET worker records use the same names, as [ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry) states.
+The .NET record carries its values under the same keys: `workhorse.worker.id`,
+`workhorse.worker.statement`, and `workhorse.worker.elapsed_ms`. The other .NET worker records also
+use the keys of the TypeScript records, as the [ADR 0107 amendment of 2026-11-23](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#amendment-a-log-record-carries-the-keys-of-the-other-sdks-2026-11-23) states.
 
 `run()` does not wait for its first maintenance pass before its first claim
 ([First maintenance pass](#first-maintenance-pass)). After a stop, each SDK ends its wait for a

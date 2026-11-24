@@ -2448,7 +2448,7 @@ internal sealed class RuntimeFixtures : IAsyncDisposable
         {
             if (eventId.Name == "workhorse.task.heartbeat_rejected"
                 && state is IReadOnlyList<KeyValuePair<string, object?>> values
-                && values.Any(value => value is { Key: "Status", Value: "busy" }))
+                && values.Any(value => value is { Key: "workhorse.heartbeat.status", Value: "busy" }))
             {
                 var at = Stopwatch.GetTimestamp();
                 lock (_lock)

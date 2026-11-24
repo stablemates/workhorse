@@ -1211,6 +1211,7 @@ describe("checkpoints progress waits", () => {
   });
 
   it("preserves durable suspension when application code catches and throws a different error", async () => {
+    records.length = 0;
     const id = await queue.enqueue("rethrown-wait-sentinel", {});
     let caught: unknown;
     const worker = new Worker(queue, { workerId: "rethrown-sentinel-worker" }).handle(
@@ -1238,6 +1239,26 @@ describe("checkpoints progress waits", () => {
       "claimed",
       "wait_scheduled",
     ]);
+    // SM-2066: a thrown error also swallows the suspension, so the worker warns, as in the other
+    // five SDKs. The worker compares the thrown value itself, so an error that wraps the
+    // suspension in its cause still gives the warning. The record holds no part of the error.
+    const swallowed = records.filter(
+      (record) => record.eventName === "workhorse.handler.signal_swallowed",
+    );
+    expect(swallowed).toEqual([
+      expect.objectContaining({
+        severityText: "WARN",
+        attributes: {
+          "workhorse.task.id": id,
+          "workhorse.task.type": "rethrown-wait-sentinel",
+          "workhorse.task.attempt": 1,
+          "workhorse.queue.name": "default",
+          "workhorse.worker.id": "rethrown-sentinel-worker",
+          "workhorse.handler.outcome": "suspended",
+        },
+      }),
+    ]);
+    expect(JSON.stringify(swallowed)).not.toContain("replacement handler error");
   });
 
   it("does not query durability tables for handlers that use no durability helpers", async () => {

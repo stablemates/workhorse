@@ -452,13 +452,13 @@ With a zero grace, a Ruby, JVM, or .NET worker cancels its handlers, and the sto
 `workhorse.worker.statement_slow` fires once when a maintenance pass or a claim waits longer than
 the stop budget. `workhorse.worker.elapsed_ms` is the wait at the moment of the warning.
 
-| Value                 | Shared key                    | .NET name   |
-| --------------------- | ----------------------------- | ----------- |
-| Worker                | `workhorse.worker.id`         | `WorkerId`  |
-| `maintenance`/`claim` | `workhorse.worker.statement`  | `Statement` |
-| Wait in milliseconds  | `workhorse.worker.elapsed_ms` | `ElapsedMs` |
+| Value                 | Key                           |
+| --------------------- | ----------------------------- |
+| Worker                | `workhorse.worker.id`         |
+| `maintenance`/`claim` | `workhorse.worker.statement`  |
+| Wait in milliseconds  | `workhorse.worker.elapsed_ms` |
 
-The .NET record names each value by its log template, as [ADR 0107](../decisions/0107-shape-the-dotnet-sdk-as-a-csharp-core-with-hosting-ef-core-and-asp-net-core-packages.md#telemetry) states.
+Each of the seven SDKs writes the values under these keys.
 
 | SDK        | Stop budget                                       |
 | ---------- | ------------------------------------------------- |

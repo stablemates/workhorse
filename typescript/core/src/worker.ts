@@ -1894,12 +1894,7 @@ export class Worker {
         }
         await this.inject("afterHandler", task);
         if (attempt.arbiter.isSuspended()) {
-          logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
-            ...taskSpanAttributes(task),
-            "workhorse.queue.name": task.queue,
-            "workhorse.worker.id": this.workerId,
-            "workhorse.handler.outcome": "suspended",
-          });
+          this.logSignalSwallowed(task);
           span.setAttribute("workhorse.handler.outcome", "suspended");
           attempt.recordExecution("suspended");
           return;
@@ -2040,6 +2035,17 @@ export class Worker {
     }
   }
 
+  // A handler caught the suspension signal of a durable call and then returned or threw. The task
+  // still suspends. The record carries no part of the value or the error of the handler.
+  private logSignalSwallowed(task: ClaimedTask): void {
+    logWarn("workhorse.handler.signal_swallowed", "Task handler swallowed its abort signal", {
+      ...taskSpanAttributes(task),
+      "workhorse.queue.name": task.queue,
+      "workhorse.worker.id": this.workerId,
+      "workhorse.handler.outcome": "suspended",
+    });
+  }
+
   // A completion or a release after the shutdown abort failed. Lease recovery settles the task, and
   // the error then ends the run.
   private logShutdownSettlementFailure(task: ClaimedTask, error: unknown): void {
@@ -2102,6 +2108,9 @@ export class Worker {
     const error = inspectableThrownValue(thrown);
     const { arbiter } = attempt;
     if (arbiter.isSuspended()) {
+      // A handler that throws another value after the suspension caught the signal. The task still
+      // suspends, and the warning is the only record of the defect, as in the other SDKs (SM-2066).
+      if (!attempt.isSuspensionSignal(thrown)) this.logSignalSwallowed(task);
       span.setAttribute("workhorse.handler.outcome", "suspended");
       attempt.recordExecution("suspended");
       return;
