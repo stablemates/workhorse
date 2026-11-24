@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,7 +152,8 @@ func TestLastWorkerLogsAFailedUnlisten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.ConnConfig.Tracer = breakConnectionOnUnlisten{}
+	tracer := newBreakConnectionOnUnlisten()
+	config.ConnConfig.Tracer = tracer
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
@@ -171,8 +173,13 @@ func TestLastWorkerLogsAFailedUnlisten(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- worker.Run(runContext) }()
 
-	waitForNotificationListener(t, ctx, pool, 0)
+	// The listener sends UNLISTEN only after its LISTEN returned without an error. pg_stat_activity
+	// shows the LISTEN while the server runs it, before pgx reads the reply, and a stop in that
+	// interval makes the LISTEN fail with the canceled context (SM-2056). Thus the test stops the
+	// worker only after the tracer saw the LISTEN end without an error.
+	awaitSignal(t, tracer.listened, "the LISTEN of the notification listener to succeed", stop)
 	stop()
+	// Run returns after the listener stops, and the listener writes the record before it stops.
 	if err := awaitSignal(t, result, "Run to return after the stop"); err != nil {
 		t.Fatal(err)
 	}
@@ -182,10 +189,17 @@ func TestLastWorkerLogsAFailedUnlisten(t *testing.T) {
 }
 
 // breakConnectionOnUnlisten closes a connection's socket as it starts to send UNLISTEN, so the
-// statement fails.
-type breakConnectionOnUnlisten struct{}
+// statement fails. It closes listened when a LISTEN ends without an error.
+type breakConnectionOnUnlisten struct {
+	listened     chan struct{}
+	listenedOnce sync.Once
+}
 
-func (breakConnectionOnUnlisten) TraceQueryStart(
+func newBreakConnectionOnUnlisten() *breakConnectionOnUnlisten {
+	return &breakConnectionOnUnlisten{listened: make(chan struct{})}
+}
+
+func (tracer *breakConnectionOnUnlisten) TraceQueryStart(
 	ctx context.Context,
 	connection *pgx.Conn,
 	data pgx.TraceQueryStartData,
@@ -196,7 +210,17 @@ func (breakConnectionOnUnlisten) TraceQueryStart(
 	return ctx
 }
 
-func (breakConnectionOnUnlisten) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+// TraceQueryEnd runs in Exec before Exec returns, so a stop after listened closes cannot make the
+// LISTEN fail.
+func (tracer *breakConnectionOnUnlisten) TraceQueryEnd(
+	_ context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryEndData,
+) {
+	if data.Err == nil && data.CommandTag.String() == "LISTEN" {
+		tracer.listenedOnce.Do(func() { close(tracer.listened) })
+	}
+}
 
 func closedResult() <-chan error {
 	result := make(chan error, 1)
