@@ -3,6 +3,8 @@
 - **Status:** Accepted. [ADR 0100](0100-make-the-root-readme-a-product-overview.md) supersedes the
   root README part. The published package README contract stays accepted.
 - **Date:** 2026-08-26
+- **Amended by:** [ADR 0127](0127-remove-the-stability-notice-from-the-readmes.md) removes the
+  notice of item 2 from the package README contract.
 - **Related:** Plane WH-441
 
 ## Context

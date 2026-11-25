@@ -1,11 +1,10 @@
 /**
  * The release notice, owned once.
  *
- * Every public surface carries the notice, and more than one check reads it: this repository's
- * Markdown and MDX surfaces are governed by `scripts/public-beta-release.test.ts`, and the copy
- * inside each published tarball by `typescript/core/test/packed-packages.ts`. Restating the
- * sentence in a second check is how the two came to assert notices that could not both exist, so
- * both read this module instead.
+ * More than one check reads the notice: this repository's Markdown and MDX surfaces are governed by
+ * `scripts/public-beta-release.test.ts`, and the README inside each published tarball by
+ * `typescript/core/test/packed-packages.ts`. Restating the sentence in a second check is how the
+ * two came to assert notices that could not both exist, so both read this module instead.
  *
  * The notice is two durable facts wrapped in editorial prose. The SemVer statement names the
  * promise of the stable line, and the compatibility boundary states the promise a reader upgrades
@@ -16,6 +15,9 @@
  * replaces it (ADR 0054). "Stable" is the absence of a qualifier (`GLOSSARY.md`), so a current
  * surface states the SemVer promise and does not carry the retired label. The dated 0.x changelog
  * entries keep the label as history.
+ *
+ * ADR 0127 removes the notice from the READMEs. The changelogs, the site, and `go/doc.go` keep
+ * it, and a README carries neither the notice nor the retired label.
  */
 
 /** The label of the 0.x releases, which retires at 1.0.0. Compared without regard to case. */
@@ -71,8 +73,11 @@ export function hasRetiredLabel(contents: string): boolean {
   return contents.toLowerCase().includes(retiredLabel);
 }
 
-/** Whether `contents` carries the notice: the SemVer promise and the compatibility boundary. */
-export function hasStableNotice(contents: string): boolean {
+/**
+ * Whether `contents` states any part of the notice: the SemVer promise or the compatibility
+ * boundary. ADR 0127 keeps both out of a README, so one of them alone is enough to fail.
+ */
+export function hasAnyStabilityNotice(contents: string): boolean {
   const text = prose(contents);
-  return text.includes(semverNotice) && text.includes(compatibilityNotice);
+  return text.includes(semverNotice) || text.includes(compatibilityNotice);
 }

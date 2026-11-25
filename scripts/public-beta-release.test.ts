@@ -9,6 +9,7 @@ import {
   hasReadmeCutoverNotice,
   offlineUpgradeSteps,
   hasRetiredLabel,
+  hasAnyStabilityNotice,
   prose,
   semverNotice,
 } from "./public-beta-notice.js";
@@ -216,17 +217,36 @@ describe("the 1.0.0 release", () => {
   });
 });
 
+/** Every README that Git tracks, so a new README is read without a change to a list. */
+function trackedReadmes(): string[] {
+  return execFileSync("git", ["ls-files", "-z", "README.md", "**/README.md"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  })
+    .split("\0")
+    .filter((relativePath) => relativePath !== "");
+}
+
 describe("the stable line", () => {
-  it("puts the SemVer notice and compatibility boundary on every package README", async () => {
-    const readmes = [
-      ...(await publishedPackages()).map((entry) => `${entry.location}/README.md`),
-      "python/README.md",
-      "go/README.md",
-      "rust/README.md",
-      "ruby/README.md",
-      "jvm/README.md",
-      "dotnet/README.md",
-    ];
+  /**
+   * ADR 0127 removes the stability notice from the READMEs. The promise stays in
+   * `docs/versioning.md`, the changelogs, and the site, so a README neither states it nor keeps the
+   * retired label.
+   */
+  it("keeps the stability notice and the retired label out of every README", async () => {
+    const readmes = trackedReadmes();
+    expect(readmes).toEqual(
+      expect.arrayContaining([
+        "README.md",
+        ...(await publishedPackages()).map((entry) => `${entry.location}/README.md`),
+        "python/README.md",
+        "go/README.md",
+        "rust/README.md",
+        "ruby/README.md",
+        "jvm/README.md",
+        "dotnet/README.md",
+      ]),
+    );
 
     for (const relativePath of readmes) {
       const contents = await read(relativePath);
@@ -234,8 +254,10 @@ describe("the stable line", () => {
         relativePath,
         retired: false,
       });
-      expect(prose(contents)).toContain(semverNotice);
-      expect(prose(contents)).toContain(compatibilityNotice);
+      expect({ relativePath, notice: hasAnyStabilityNotice(contents) }).toEqual({
+        relativePath,
+        notice: false,
+      });
     }
   });
 
@@ -244,27 +266,25 @@ describe("the stable line", () => {
    * offline. A README that states the additive promise without that exception lets a team plan a
    * rolling deployment that each old worker fails after. SM-1012 added the exception, and later
    * rewrites of the notice lost it from 16 READMEs (SM-1975), so every tracked README is read.
+   * From ADR 0127 no README states the promise, and this check stops a README that states it again.
    */
   it("names the migration 0025 exception in every README that states the promise", async () => {
-    const readmes = execFileSync("git", ["ls-files", "-z", "README.md", "**/README.md"], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-    })
-      .split("\0")
-      .filter((relativePath) => relativePath !== "");
-    const promising: string[] = [];
+    const readmes = trackedReadmes();
+    expect(readmes).toEqual(expect.arrayContaining(["README.md", "jvm/README.md"]));
     const missing: string[] = [];
     for (const relativePath of readmes) {
-      const contents = await read(relativePath);
-      if (!prose(contents).includes(compatibilityNotice)) continue;
-      promising.push(relativePath);
-      if (!hasReadmeCutoverNotice(contents)) missing.push(relativePath);
+      if (!hasReadmeCutoverNotice(await read(relativePath))) missing.push(relativePath);
     }
 
-    expect(promising).toEqual(
-      expect.arrayContaining(["README.md", "jvm/README.md", "dotnet/README.md"]),
-    );
     expect(missing).toEqual([]);
+  });
+
+  it("finds either half of the stability notice on its own", () => {
+    expect(hasAnyStabilityNotice(`# P\n\nWorkhorse ${semverNotice}.\n`)).toBe(true);
+    expect(
+      hasAnyStabilityNotice(`# P\n\n> Migrations are ordered, and ${compatibilityNotice}.\n`),
+    ).toBe(true);
+    expect(hasAnyStabilityNotice("# P\n\nInstall the package.\n")).toBe(false);
   });
 
   it("refuses a README notice that drops the exception or its offline steps", () => {
@@ -312,7 +332,6 @@ describe("the stable line", () => {
 
     // A changelog keeps its dated 0.x entries, so only its introduction states the current promise.
     const promiseSurfaces = [
-      "README.md",
       "site/content/docs/index.mdx",
       "CHANGELOG.md",
       "python/CHANGELOG.md",
@@ -330,7 +349,6 @@ describe("the stable line", () => {
       expect(prose(introduction)).toContain(semverNotice);
     }
     const compatibilitySurfaces = [
-      "README.md",
       "site/content/docs/index.mdx",
       "CHANGELOG.md",
       "python/CHANGELOG.md",
