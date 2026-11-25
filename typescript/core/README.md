@@ -10,10 +10,12 @@ queue for PostgreSQL.
   <img src="https://workhorse.run/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
 </picture>
 
-> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
-> release may change behaviour, so read the changelog before you upgrade. It will not ask you to
-> recreate your database: migrations are ordered, and inside a major line a migration only adds, so
-> a running deployment upgrades in place.
+> Workhorse follows Semantic Versioning from 1.0.0. A 1.x minor or patch release does not break a
+> governed surface, such as the API of this package. Read [what 1.0.0
+> promises](https://workhorse.run/docs/compatibility#know-what-100-promises) and the changelog
+> before you upgrade. A release does not make you create your database again. Migrations are
+> ordered, and inside a major line a migration only adds. Thus, a running deployment upgrades in
+> place.
 > Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
 > offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 

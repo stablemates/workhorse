@@ -115,9 +115,7 @@ export function SiteFooter() {
 
       <div className="wh-rule border-t">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-5 lg:px-8">
-          <p className="font-mono text-[11.5px] text-fd-muted-foreground">
-            Public beta · Apache-2.0
-          </p>
+          <p className="font-mono text-[11.5px] text-fd-muted-foreground">Apache-2.0</p>
           <p className="font-mono text-[11.5px] text-fd-muted-foreground">{runtimes}</p>
         </div>
       </div>

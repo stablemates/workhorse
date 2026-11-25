@@ -9,10 +9,11 @@ This page lists each limit of Workhorse. If a limit has a workaround, the page g
 Workhorse fits an application that uses PostgreSQL. The handlers of the application must accept
 that a task can run more than one time. The schema upgrades in a deployment step, not by itself.
 
-Workhorse is a public beta. A public beta is a usable 0.x release for evaluation and early
-production use. A minor release can change behaviour, so read the changelog before you upgrade. You
-do not have to make your database again. Migrations are ordered, and inside a major line a migration
-only adds. Thus, a running deployment upgrades in place.
+Workhorse is stable from 1.0.0 and follows Semantic Versioning. A 1.x minor or patch release does
+not break a governed surface, so read the changelog for the new features and fixes before you
+upgrade. You do not have to make your database again. Migrations are ordered, and inside a major
+line a migration only adds. Thus, a running deployment upgrades in place.
+[Compatibility](/docs/compatibility#know-what-100-promises) states what 1.0.0 promises.
 
 ## Write workflows in handler code
 

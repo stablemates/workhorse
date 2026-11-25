@@ -95,9 +95,9 @@ supported PostgreSQL major.
 [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md)
 records these floors.
 
-A Gradle build adds the core with `implementation("run.workhorse:workhorse:0.17.0")`. A Maven
+A Gradle build adds the core with `implementation("run.workhorse:workhorse:1.0.0")`. A Maven
 build adds
-`<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.17.0</version></dependency>`.
+`<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>1.0.0</version></dependency>`.
 For the Kotlin module or the starter, replace the artifact ID with `workhorse-kotlin` or
 `workhorse-spring-boot-starter`. `support.json` states the two commands as `install.gradle` and
 `install.maven`.
@@ -433,9 +433,9 @@ rest are optional TypeScript packages.
 | `@stablemates/workhorse-prisma`             | Prisma ORM provider                               | `@stablemates/workhorse`, `@prisma/client` >= 6 and < 8                                                       |
 | `@stablemates/workhorse-typeorm`            | TypeORM provider                                  | `@stablemates/workhorse`, `typeorm` >= 0.3 and < 2                                                            |
 | `@stablemates/workhorse-kysely`             | Kysely provider                                   | `@stablemates/workhorse`, `kysely` >= 0.29 and < 0.30                                                         |
-| `@stablemates/workhorse-knex`               | PostgreSQL Knex provider                          | `@stablemates/workhorse` >= 0.17 and < 0.18, `knex` 3.3.0, `pg` 8.23.1                                        |
+| `@stablemates/workhorse-knex`               | PostgreSQL Knex provider                          | `@stablemates/workhorse` >= 1.0 and < 2, `knex` 3.3.0, `pg` 8.23.1                                            |
 | `@stablemates/workhorse-otel`               | OpenTelemetry adapter                             | `@stablemates/workhorse`, `@opentelemetry/api` >= 1.9 and < 2, `@opentelemetry/api-logs` >= 0.200 and < 0.300 |
-| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 0.17.0 and < 0.18, React 19                                                       |
+| `@stablemates/workhorse-dashboard`          | Operator dashboard and its framework-neutral host | `@stablemates/workhorse` >= 1.0.0 and < 2, React 19                                                           |
 | `@stablemates/workhorse-dashboard-server`   | Authenticated standalone dashboard server         | `@stablemates/workhorse-dashboard-contract`                                                                   |
 | `@stablemates/workhorse-dashboard-contract` | Type-only dashboard server boundary               | None                                                                                                          |
 | `stablemates-workhorse`                     | Python clients, workers, and WSGI dashboard       | None; includes Psycopg >= 3.3 and < 4; `asyncpg` extra supports >= 0.31 and < 1                               |
@@ -448,23 +448,26 @@ TypeScript peer range. SQL protocol 5 and schema version 99 are their compatibil
 still match the npm packages, because every line releases from one commit.
 
 Every release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
-Central, and nuget.org from one source commit. The current release is `0.17.0`. “Public beta” means the release is usable for evaluation and early production adoption without a
-0.x compatibility promise. The label is retired at 1.0.0 and replaced by “stable”; see
+Central, and nuget.org from one source commit. The current release is `1.0.0`. It is the first
+stable release. At 1.0.0 the “public beta” label of the 0.x releases retired, and “stable” replaced
+it. From 1.0.0, a minor or patch release does not break a governed surface; see
 [What SemVer governs](versioning.md).
 
-The dashboard and core may use different patch releases within the same minor line. The dashboard
-server reads `workhorse.dashboard_*_v1` views and versioned functions, and a migration may not
-remove, retype, or reinterpret a shipped view, so a core release remains compatible with the
-dashboard it shipped beside. At 1.0.0 the dashboard's peer range on `@stablemates/workhorse` widens
-from the minor line to the major line; see [Retention and removal](versioning.md#retention-and-removal).
+The dashboard and core may use different minor or patch releases within the same major line. The
+dashboard server reads `workhorse.dashboard_*_v1` views and versioned functions, and a migration may
+not remove, retype, or reinterpret a shipped view, so a core release remains compatible with the
+dashboard it shipped beside. From 1.0.0 the dashboard's peer range on `@stablemates/workhorse`
+covers the major line, `>=1.0.0 <2.0.0`; see
+[Retention and removal](versioning.md#retention-and-removal).
 
 The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, JVM, or .NET
 host supplies its own published version when it renders the application. Thus the dashboard reports
 the package that serves it. A version-only release does not change the bundle.
 
-While the line is `0.x`, any minor release may make a breaking change in behaviour. The schema is
-not one of them: from `0.1.0` every release ships ordered, immutable migrations, and inside a major
-line a migration only adds, so a client built against schema version N accepts any installed
+While the line was `0.x`, any minor release could make a breaking change in behaviour. From 1.0.0,
+only a major release can break a governed surface. A schema upgrade is not a breaking change: from
+`0.1.0` every release ships ordered, immutable migrations, and inside a major line a migration only
+adds, so a client built against schema version N accepts any installed
 version at or above N below the next major boundary. `migrateSchema` runs from a deployment step
 before any process from the new release starts. Breaking changes are listed in
 [`CHANGELOG.md`](../CHANGELOG.md) with the upgrade steps for that release, and

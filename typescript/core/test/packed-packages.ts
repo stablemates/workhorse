@@ -7,8 +7,9 @@ import { promisify } from "node:util";
 import { auditPackedTree } from "../../../scripts/audit-npm-dependencies.js";
 import { publishedPackages, workspacePackages } from "../../../scripts/packages.js";
 import {
-  hasPublicBetaNotice,
   hasReadmeCutoverNotice,
+  hasRetiredLabel,
+  hasStableNotice,
 } from "../../../scripts/public-beta-notice.js";
 import {
   MINIMUM_PROTOCOL_VERSION,
@@ -189,8 +190,11 @@ try {
     await run("tar", ["-xzf", tarballFor(entry.name), "-C", releaseExtracted]);
     const packageRoot = path.join(releaseExtracted, "package");
     const readme = await readFile(path.join(packageRoot, "README.md"), "utf8");
-    if (!hasPublicBetaNotice(readme)) {
-      throw new Error(`${entry.name} README does not carry the public beta notice`);
+    if (!hasStableNotice(readme)) {
+      throw new Error(`${entry.name} README does not carry the SemVer notice`);
+    }
+    if (hasRetiredLabel(readme)) {
+      throw new Error(`${entry.name} README still names the retired public beta label`);
     }
     if (!hasReadmeCutoverNotice(readme)) {
       throw new Error(

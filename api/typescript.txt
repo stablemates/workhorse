@@ -5613,7 +5613,7 @@ const WORKHORSE_SCHEMA_BASELINE_VERSION = 6;
 
 const WORKHORSE_SCHEMA_VERSION = 106;
 
-const WORKHORSE_VERSION = "0.17.0";
+const WORKHORSE_VERSION = "1.0.0";
 
 class WaitConflictError extends WorkhorseError {
   readonly taskId: string;

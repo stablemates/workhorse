@@ -8,14 +8,16 @@ import {
   hasCutoverException,
   hasReadmeCutoverNotice,
   offlineUpgradeSteps,
+  hasRetiredLabel,
   prose,
-  publicBetaLabel,
+  semverNotice,
 } from "./public-beta-notice.js";
 
 /** The release this repository cuts next: one version on every registry from one commit. */
-const releaseVersion = "0.17.0";
-const releaseDate = "2026-11-24";
-const corePeerRange = ">=0.17.0 <0.18.0";
+const releaseVersion = "1.0.0";
+const releaseDate = "2026-11-25";
+/** From 1.0.0 a peer range covers the major line, as `scripts/check-release.ts` requires. */
+const corePeerRange = ">=1.0.0 <2.0.0";
 
 /** The published beta. Its entries stay in the changelogs as history and must keep their facts. */
 const betaNpmVersion = "0.1.0-beta.2";
@@ -49,7 +51,7 @@ function changelogEntry(changelog: string, version: string, date: string): strin
   return next === -1 ? body : body.slice(0, next);
 }
 
-describe("the 0.17.0 release", () => {
+describe("the 1.0.0 release", () => {
   it("carries the plain version and peer range in every published manifest", async () => {
     for (const entry of await publishedPackages()) {
       const manifest = JSON.parse(await read(entry.manifest)) as {
@@ -58,7 +60,8 @@ describe("the 0.17.0 release", () => {
         version?: string;
       };
       expect(manifest.version).toBe(releaseVersion);
-      expect(manifest.description?.toLowerCase()).toContain(publicBetaLabel);
+      // At 1.0.0 the public beta label retires, and "stable" is the absence of a qualifier.
+      expect(hasRetiredLabel(manifest.description ?? "")).toBe(false);
       const workhorsePeer = manifest.peerDependencies?.["@stablemates/workhorse"];
       expect([undefined, corePeerRange]).toContain(workhorsePeer);
     }
@@ -73,8 +76,9 @@ describe("the 0.17.0 release", () => {
 
     const pythonManifest = await read("python/pyproject.toml");
     expect(pythonManifest).toContain(`version = "${releaseVersion}"`);
-    expect(pythonManifest).toContain("Development Status :: 4 - Beta");
-    expect(pythonManifest.toLowerCase()).toContain(publicBetaLabel);
+    expect(pythonManifest).toContain("Development Status :: 5 - Production/Stable");
+    expect(pythonManifest).not.toContain("Development Status :: 4 - Beta");
+    expect(hasRetiredLabel(pythonManifest)).toBe(false);
     expect(await read("python/uv.lock")).toContain(
       `name = "stablemates-workhorse"\nversion = "${releaseVersion}"`,
     );
@@ -108,8 +112,9 @@ describe("the 0.17.0 release", () => {
         ],
       ],
       ["python/CHANGELOG.md", [`Python **${manifest.support.python.minimum}** or newer`]],
-      // 0.14.0 shipped with the Go 1.25 floor, 0.15.0 raises it to 1.26 (ADR 0058), and 0.16.0
-      // and 0.17.0 keep it. The number is written here because a published entry is immutable.
+      // 0.14.0 shipped with the Go 1.25 floor, 0.15.0 raises it to 1.26 (ADR 0058), and 0.16.0,
+      // 0.17.0, and 1.0.0 keep it. The number is written here because a published entry is
+      // immutable.
       ["go/CHANGELOG.md", ["Go **1.26** or newer"]],
       [
         "rust/CHANGELOG.md",
@@ -137,8 +142,8 @@ describe("the 0.17.0 release", () => {
       // 0.6.1 keep it. 0.7.0 states v54, the floor migration 0055 reaches, and 0.7.1 keeps it. 0.8.0
       // states v69, the floor migration 0070 reaches. 0.9.0 states v73, the floor migration 0074
       // reaches. 0.10.0 states v76, the floor migration 0077 reaches, and 0.11.0 and 0.12.0 keep
-      // it. 0.14.0 states v99, the floor migration 0100 reaches, and 0.15.0, 0.16.0, and 0.17.0 keep
-      // it. The project published no 0.13.0.
+      // it. 0.14.0 states v99, the floor migration 0100 reaches, and 0.15.0, 0.16.0, 0.17.0, and
+      // 1.0.0 keep it. The project published no 0.13.0.
       // The number is written here rather than read from the manifest, because a published entry
       // is immutable and a later release moving the floor must not rewrite it.
       expect(entry).toContain("**schema v99**");
@@ -147,6 +152,46 @@ describe("the 0.17.0 release", () => {
         expect(entry).toContain(requirement);
       }
       expect(changelog).not.toMatch(/^## .* — unreleased$/m);
+    }
+  });
+
+  /**
+   * ADR 0054 gives a 0.x reader three statements at the boundary, in the 1.0.0 entry of each
+   * changelog and on the compatibility page of the site: the upgrade is the usual migrate and
+   * package bump, nothing was removed, and the schema and protocol versions that 1.0.0 accepts.
+   */
+  it("gives the three boundary statements in each changelog and on the site", async () => {
+    const surfaces: { relativePath: string; text: string }[] = [];
+    for (const relativePath of [
+      "CHANGELOG.md",
+      "python/CHANGELOG.md",
+      "go/CHANGELOG.md",
+      "rust/CHANGELOG.md",
+      "ruby/CHANGELOG.md",
+      "jvm/CHANGELOG.md",
+      "dotnet/CHANGELOG.md",
+    ]) {
+      const entry = changelogEntry(await read(relativePath), releaseVersion, releaseDate);
+      surfaces.push({ relativePath, text: prose(entry) });
+    }
+    const site = await read("site/content/docs/compatibility.mdx");
+    const start = site.indexOf("## Know what 1.0.0 promises");
+    expect(start).toBeGreaterThan(-1);
+    const section = site.slice(start + 3);
+    surfaces.push({
+      relativePath: "site/content/docs/compatibility.mdx",
+      text: prose(section.slice(0, section.search(/^## /m))),
+    });
+
+    for (const { relativePath, text } of surfaces) {
+      expect({ relativePath, text }).toEqual({
+        relativePath,
+        text: expect.stringContaining("workhorse schema migrate"),
+      });
+      expect(text).toContain("1.0.0 removes nothing");
+      expect(text).toMatch(/client protocol (?:\*\*)?5/);
+      expect(text).toMatch(/schema at version (?:\*\*)?99(?:\*\*)? or higher/);
+      expect(text).toContain("twelve surfaces");
     }
   });
 
@@ -171,8 +216,8 @@ describe("the 0.17.0 release", () => {
   });
 });
 
-describe("the public beta line", () => {
-  it("puts the label and compatibility boundary on every package README", async () => {
+describe("the stable line", () => {
+  it("puts the SemVer notice and compatibility boundary on every package README", async () => {
     const readmes = [
       ...(await publishedPackages()).map((entry) => `${entry.location}/README.md`),
       "python/README.md",
@@ -185,7 +230,11 @@ describe("the public beta line", () => {
 
     for (const relativePath of readmes) {
       const contents = await read(relativePath);
-      expect(contents.toLowerCase()).toContain(publicBetaLabel);
+      expect({ relativePath, retired: hasRetiredLabel(contents) }).toEqual({
+        relativePath,
+        retired: false,
+      });
+      expect(prose(contents)).toContain(semverNotice);
       expect(prose(contents)).toContain(compatibilityNotice);
     }
   });
@@ -243,21 +292,42 @@ describe("the public beta line", () => {
     expect(prose(packedSmoke)).not.toContain(compatibilityNotice);
   });
 
-  it("labels public surfaces and keeps the compatibility boundary in durable documentation", async () => {
-    const surfaces = [
+  it("retires the label on public surfaces and keeps the compatibility boundary in durable documentation", async () => {
+    // These surfaces describe the current line, so none of them names the retired label.
+    const currentSurfaces = [
       "README.md",
       "site/content/docs/index.mdx",
+      "site/content/docs/limitations.mdx",
+      "site/content/pages/about.mdx",
+      "site/components/site-footer.tsx",
       "dashboard/app/src/brand.tsx",
+      "go/doc.go",
+    ];
+    for (const relativePath of currentSurfaces) {
+      expect({ relativePath, retired: hasRetiredLabel(await read(relativePath)) }).toEqual({
+        relativePath,
+        retired: false,
+      });
+    }
+
+    // A changelog keeps its dated 0.x entries, so only its introduction states the current promise.
+    const promiseSurfaces = [
+      "README.md",
+      "site/content/docs/index.mdx",
       "CHANGELOG.md",
       "python/CHANGELOG.md",
       "go/CHANGELOG.md",
       "rust/CHANGELOG.md",
+      "jvm/CHANGELOG.md",
+      "dotnet/CHANGELOG.md",
       "go/doc.go",
     ];
-
-    for (const relativePath of surfaces) {
+    for (const relativePath of promiseSurfaces) {
       const contents = await read(relativePath);
-      expect(contents.toLowerCase()).toContain(publicBetaLabel);
+      const introduction = relativePath.endsWith("CHANGELOG.md")
+        ? contents.slice(0, contents.search(/^## /m))
+        : contents;
+      expect(prose(introduction)).toContain(semverNotice);
     }
     const compatibilitySurfaces = [
       "README.md",

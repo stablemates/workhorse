@@ -240,6 +240,33 @@ Serverless platforms have a separate matrix for lifetime and connectivity. Read
 Connection poolers have a separate matrix for session state. Read [the pooler guide](/docs/pgbouncer)
 and [PgCat](/docs/pgcat) before you put a pooler between Workhorse and PostgreSQL.
 
+## Know what 1.0.0 promises
+
+1.0.0 is the first stable release of Workhorse. It changes the promise of the release, not the
+code. From 1.0.0, Semantic Versioning governs twelve surfaces. A governed surface is an artifact
+that the version number makes a promise about. A minor or patch release of the 1.x line does not
+break a governed surface. The twelve surfaces are these:
+
+- The SQL protocol and schema.
+- The TypeScript, Python, Go, Rust, Ruby, Java, Kotlin, and C# APIs.
+- The `workhorse` CLI.
+- The `dashboard/v1` wire contract.
+- The OpenTelemetry instrument, span, and attribute names.
+
+The upgrade from 0.17.x uses the same two steps as each 0.x minor since 0.1.0:
+
+1. Run `workhorse schema migrate` from your deployment pipeline. 1.0.0 adds no migration, so the
+   command finds a current schema and changes nothing.
+2. Roll out the 1.0.0 packages. A 0.17 process and a 1.0 process can use one database at the same
+   time, so the upgrade is a rolling deployment.
+
+1.0.0 removes nothing. It keeps each superseded SQL function, export, name, CLI flag, and telemetry
+name of 0.17.0. The changelog entry of each 0.x minor lists the breaking changes of that release,
+with its upgrade steps.
+
+The 1.0.0 SDKs use client protocol 5. They accept an installed schema at version 99 or higher. A
+clean installation of 1.0.0 installs schema version 106, the same schema as 0.16.0 and 0.17.0.
+
 ## Release each package line from its own changelog
 
 Core and its integration packages release together. Keep their versions the same, so that adapters,
@@ -248,20 +275,20 @@ dashboard contracts, and exported types describe the same source revision. The
 changes and the schema version that each release needs.
 
 Each release publishes one version to npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
-Central, and nuget.org, from one source commit. The current release is `0.17.0`. Earlier beta
+Central, and nuget.org, from one source commit. The current release is `1.0.0`. Earlier 0.x
 versions stay on the registries that published them. Maven Central serves the JVM artifacts from
 `0.9.0`, and nuget.org serves the .NET packages from `0.10.0`.
 Each changelog gives their dates and their source commits. [Releases](/docs/releases) shows the
 current version of each line, its date, and whether it still gets fixes.
 
-A 0.x minor release can change behaviour, so read the changelog before you upgrade. You do not have
-to make your database again. The schema upgrades in place, because a release ships ordered
-migrations, and a migration inside a major line only adds. If your installation runs cold export,
-stop the exporters during that upgrade. [Export history before retention deletes
+A 1.x minor or patch release does not break a governed surface, but read the changelog before you
+upgrade. You do not have to make your database again. The schema upgrades in place, because a
+release ships ordered migrations, and a migration inside a major line only adds. If your
+installation runs cold export, stop the exporters during that upgrade. [Export history before retention deletes
 it](/docs/maintenance#export-history-before-retention-deletes-it) gives the procedure.
 
-The dashboard and core can use different patch releases in the same minor line. The dashboard
-server reads versioned views and functions that core owns. Thus, a core patch stays compatible if
+The dashboard and core can use different minor or patch releases of one major line. The dashboard
+server reads versioned views and functions that core owns. Thus, a core release stays compatible if
 its migration keeps those contracts.
 
 The shared browser bundle carries no SDK version. The TypeScript, Python, Go, Rust, Ruby, JVM, or .NET

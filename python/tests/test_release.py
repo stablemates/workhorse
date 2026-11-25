@@ -78,7 +78,7 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
         f"py{python_support['minimum'].replace('.', '')}"
     )
     assert project["description"] == (
-        "Python SDK for the Workhorse durable task queue for PostgreSQL. Public beta."
+        "Python SDK for the Workhorse durable task queue for PostgreSQL."
     )
     assert project["dependencies"] == [
         "jsonschema>=4.25,<5",
@@ -87,8 +87,8 @@ def test_python_support_contract_matches_repository_declarations(database_url: s
     assert project["optional-dependencies"]["psycopg"] == []
     assert project["optional-dependencies"]["asyncpg"] == ["asyncpg>=0.31,<1"]
     assert project["name"] == "stablemates-workhorse"
-    assert project["version"] == "0.17.0"
-    assert "Development Status :: 4 - Beta" in project["classifiers"]
+    assert project["version"] == "1.0.0"
+    assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
 
     postgres_majors = [str(major) for major in support["postgres"]["tested"]]
 

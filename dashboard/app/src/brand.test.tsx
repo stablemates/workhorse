@@ -16,7 +16,7 @@ describe("WorkhorseBrand", () => {
 });
 
 describe("WorkhorseVersion", () => {
-  it("shows the beta label and current version", () => {
+  it("shows the current version and no stability label", () => {
     const html = renderToStaticMarkup(
       <MantineProvider>
         <WorkhorseVersion version="9.8.7" />
@@ -25,7 +25,7 @@ describe("WorkhorseVersion", () => {
 
     expect(html).toContain('aria-label="Workhorse version 9.8.7"');
     expect(html).toContain("v9.8.7");
-    expect(html).toContain("Public beta");
+    expect(html).not.toContain("Public beta");
     expect(html).not.toContain("inside a major line a migration only adds");
   });
 
@@ -61,7 +61,7 @@ describe("WorkhorseVersion", () => {
       </MantineProvider>,
     );
 
-    expect(html).toContain("Public beta");
+    expect(html).not.toContain("Public beta");
     expect(html).not.toContain("Workhorse version");
   });
 });

@@ -347,4 +347,4 @@ Full method and results: [`benchmarks/2026-08-17-statistics-tiers-analysis.md`](
 - **No worker or tag dimensions.** Their cardinality is controlled by deployment data, so including them would remove the aggregate row bound. Filtered views keep using bounded live queries.
 - **A late commit can be missing.** A history row whose transaction commits after the recompute window passed its minute is not counted ([Late commits](#late-commits)).
 - **Window edges are minute-granular.** A 15-minute window is 15 whole minutes, not 15 minutes to the microsecond.
-- **Schema baseline.** Rolling statistics are part of the current public beta baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).
+- **Schema baseline.** Rolling statistics are part of the current schema baseline described in [`schema-lifecycle.md`](schema-lifecycle.md).

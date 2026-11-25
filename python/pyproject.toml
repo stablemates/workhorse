@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "stablemates-workhorse"
-version = "0.17.0"
-description = "Python SDK for the Workhorse durable task queue for PostgreSQL. Public beta."
+version = "1.0.0"
+description = "Python SDK for the Workhorse durable task queue for PostgreSQL."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 authors = [{ name = "Stablemates" }]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3 :: Only",

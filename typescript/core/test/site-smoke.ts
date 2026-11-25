@@ -86,7 +86,7 @@ try {
     ["/llms.txt", ["llms-full.txt", "/docs/quickstart.md"]],
     // The trust pages (ADR 0062) and their twins. An agent verifying the
     // publisher reads these by name, so each has to exist with real content.
-    ["/about", ["Stablemates", "Apache", "public beta"]],
+    ["/about", ["Stablemates", "Apache", "Semantic Versioning"]],
     ["/about.md", ["# About Workhorse", "Stablemates", "Apache"]],
     [
       "/contact",
