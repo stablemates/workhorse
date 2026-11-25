@@ -48,7 +48,7 @@ release ships them. No outside account has filed a defect in the
 - **Bar:** The migration rehearsals run, the recovery from a failed migration works, and a fresh host
   installs all seven SDKs from their registries.
 - **State:** Met
-- **Last change:** 2026-11-14
+- **Last change:** 2026-11-25
 
 Each deployment of the public demo migrates its database from the
 [pipeline](../typescript/demo/DEPLOYMENT.md#the-schema-step-runs-from-the-pipeline), and
@@ -57,29 +57,30 @@ populated copy of each released schema. On 2026-09-03, private records show a ru
 [recovery procedure](schema-lifecycle.md#backup-rollback-and-failed-migration-recovery) against a
 deliberate failed migration, and a cold install of three SDKs.
 
-On 2026-11-14, a private record shows a cold install of
-[release 0.14.0](https://github.com/stablemates/workhorse/releases/tag/v0.14.0) in clean containers,
-with no file from a checkout of this repository. The install followed only the
-[installation page](https://workhorse.run/docs/installation) and the pages that it links. It took
-each of the seven SDKs at 0.14.0 from npm, PyPI, the Go module proxy, crates.io, RubyGems, Maven
-Central, and nuget.org. It installed the schema in a new database with the command of the
-installation page.
-
-On that one PostgreSQL 18 database, a handler of each SDK completed one task. The JVM ran a Java
-handler and a Kotlin suspend handler. The .NET consumer referenced the four packages that the
-installation page names.
 [ADR 0059](decisions/0059-assemble-the-1-0-0-specification.md#what-the-release-candidate-means-for-a-cold-install)
-makes the last published 0.x minor the candidate of a cold install, and on 2026-11-14 that minor
-was 0.14.0.
+makes the last published 0.x minor the candidate of a cold install. On 2026-11-25, that minor was
+[release 0.17.0](https://github.com/stablemates/workhorse/releases/tag/v0.17.0). A private record
+of that date shows a cold install of it in clean containers, with no checkout of this repository.
+The install followed only the [installation page](https://workhorse.run/docs/installation)
+and the pages that it links. It took each of the seven SDKs at 0.17.0 from npm, PyPI, the Go module
+proxy, crates.io, RubyGems, Maven Central, and nuget.org. It installed schema version 106 in a new
+database with the command of the installation page.
 
-The cold install found five defects in the published pages, and none of them stops a reader. On a
-host that has no libpq, the Python package needs `psycopg[binary]`. The Java, Kotlin, and C# code
-blocks of the [quickstart](https://workhorse.run/docs/quickstart) are fragments, and three sentences
-of the [compatibility page](https://workhorse.run/docs/compatibility) omit .NET and nuget.org. The
-cold install did not cover the Spring Boot starter, which
+Each program of section 3 of the [quickstart](https://workhorse.run/docs/quickstart) ran as the
+page prints it, with no change. On one PostgreSQL 18 database, the TypeScript, Python, Go, Rust,
+Ruby, Java, Kotlin, and C# programs each completed one task. Python ran on two images. The slim
+image has no libpq, and it used the command that the installation page gives for that case. The
+full image used the first command only. A second Kotlin program added one suspend call to the
+handler of the page, and so proved a suspend handler end to end.
+
+An earlier cold install, of release 0.14.0 on 2026-11-14, found five defects in the published pages.
+Pull requests [1285](https://github.com/stablemates/workhorse/pull/1285) and
+[1287](https://github.com/stablemates/workhorse/pull/1287) fixed them, and the cold install of
+0.17.0 found no defect. The cold install did not cover the Spring Boot starter, which
 [ADR 0103](decisions/0103-shape-the-jvm-sdk-as-a-java-core-with-kotlin-and-spring-boot-modules.md#the-cold-install-covers-the-jvm)
-gives to the release consumer check. It also did not run a worker through `Workhorse.Hosting`, and
-it did not use the API of the Entity Framework Core and ASP.NET Core packages.
+gives to the release consumer check. The .NET consumer referenced the four packages that the
+installation page names. It did not run a worker through `Workhorse.Hosting`, and it did not use
+the API of the Entity Framework Core and ASP.NET Core packages.
 
 ## Gate 4. Verify one installation through retention
 
