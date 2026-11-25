@@ -24,8 +24,8 @@ import { repositoryRoot } from "./packages.js";
 // version that added a feature or the version a 0.7 database starts at.
 
 /**
- * The upgrade section of the newest release that ships a migration. 0.17.0 ships none, so its
- * section names no migration. The next release with a migration moves this.
+ * The upgrade section of the newest release that ships a migration. 0.17.0 and 1.0.0 ship none, so
+ * their sections name no migration. The next release with a migration moves this.
  */
 const upgradeHeading = "## Upgrade from 0.15.x to 0.16.0";
 

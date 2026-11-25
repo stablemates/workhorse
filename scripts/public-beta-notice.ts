@@ -1,5 +1,5 @@
 /**
- * The public-beta notice, owned once.
+ * The release notice, owned once.
  *
  * Every public surface carries the notice, and more than one check reads it: this repository's
  * Markdown and MDX surfaces are governed by `scripts/public-beta-release.test.ts`, and the copy
@@ -7,13 +7,22 @@
  * sentence in a second check is how the two came to assert notices that could not both exist, so
  * both read this module instead.
  *
- * The notice is two durable facts wrapped in editorial prose. The label names the stability of the
- * line, and the compatibility boundary states the promise a reader upgrades on. The wording around
- * them is free to change; a rewrite that drops either is the failure worth catching.
+ * The notice is two durable facts wrapped in editorial prose. The SemVer statement names the
+ * promise of the stable line, and the compatibility boundary states the promise a reader upgrades
+ * on. The wording around them is free to change; a rewrite that drops either is the failure worth
+ * catching.
+ *
+ * Until 1.0.0 the notice carried the "public beta" label. At 1.0.0 the label retires and "stable"
+ * replaces it (ADR 0054). "Stable" is the absence of a qualifier (`GLOSSARY.md`), so a current
+ * surface states the SemVer promise and does not carry the retired label. The dated 0.x changelog
+ * entries keep the label as history.
  */
 
-/** The stability label every public surface carries. Compared without regard to case. */
-export const publicBetaLabel = "public beta";
+/** The label of the 0.x releases, which retires at 1.0.0. Compared without regard to case. */
+export const retiredLabel = "public beta";
+
+/** The promise of the stable line, which every notice states. Compared against {@link prose}. */
+export const semverNotice = "follows Semantic Versioning";
 
 /** The compatibility promise the notice makes. Compared against {@link prose}. */
 export const compatibilityNotice = "inside a major line a migration only adds";
@@ -57,10 +66,13 @@ export function hasReadmeCutoverNotice(contents: string): boolean {
   return hasCutoverException(contents) && contents.includes(offlineUpgradeSteps);
 }
 
-/** Whether `contents` carries the public-beta notice: the label and the compatibility boundary. */
-export function hasPublicBetaNotice(contents: string): boolean {
-  return (
-    contents.toLowerCase().includes(publicBetaLabel) &&
-    prose(contents).includes(compatibilityNotice)
-  );
+/** Whether `contents` still names the retired label. */
+export function hasRetiredLabel(contents: string): boolean {
+  return contents.toLowerCase().includes(retiredLabel);
+}
+
+/** Whether `contents` carries the notice: the SemVer promise and the compatibility boundary. */
+export function hasStableNotice(contents: string): boolean {
+  const text = prose(contents);
+  return text.includes(semverNotice) && text.includes(compatibilityNotice);
 }

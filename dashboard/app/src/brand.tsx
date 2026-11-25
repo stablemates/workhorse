@@ -1,4 +1,4 @@
-import { Anchor, Badge, Box, Group, Text, type BoxProps } from "@mantine/core";
+import { Anchor, Box, Group, Text, type BoxProps } from "@mantine/core";
 const workhorseMarkUrl = new URL("./assets/workhorse-mark.svg", import.meta.url).href;
 const workhorseWordmarkUrl = new URL("./assets/workhorse-wordmark.svg", import.meta.url).href;
 
@@ -31,10 +31,7 @@ const workhorseCommitUrl = "https://github.com/stablemates/workhorse/commit/";
 
 export function WorkhorseVersion({ version, revision }: { version?: string; revision?: string }) {
   return (
-    <Group w="100%" justify="space-between" gap="xs" wrap="nowrap">
-      <Badge variant="light" color="gray" size="xs">
-        Public beta
-      </Badge>
+    <Group w="100%" gap="xs" wrap="nowrap">
       {version === undefined ? null : (
         <Group gap={4} wrap="nowrap">
           <Text

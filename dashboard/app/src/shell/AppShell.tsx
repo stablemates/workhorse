@@ -668,7 +668,7 @@ export function DashboardContent({
             leftSection={<BookOpenText size={18} />}
             variant="light"
           />
-          {/* Breathing room keeps the beta badge from reading as part of the link above. */}
+          {/* Breathing room keeps the version line from reading as part of the link above. */}
           <Box className="dashboard-navbar__version" mt="xs" px="sm">
             <WorkhorseVersion version={workhorseVersion} revision={workhorseRevision} />
           </Box>

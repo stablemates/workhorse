@@ -4,9 +4,54 @@
 and publishes from its own tag. It carries the version the TypeScript packages, the Go module, and
 the Rust crate carry, because every release tag names one commit.
 
-Workhorse is a public beta. Any 0.x minor release may change behaviour. From `0.1.0` the schema
-upgrades in place: every release ships ordered migrations, and inside a major line a migration only
-adds.
+Workhorse is stable from 1.0.0 and follows Semantic Versioning: a 1.x minor or patch release does
+not break a governed surface. The 0.x releases were a public beta, and any 0.x minor release could
+change behaviour. From `0.1.0` the schema upgrades in place: every release ships ordered
+migrations, and inside a major line a migration only adds.
+
+## 1.0.0 — 2026-11-25
+
+The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
+packages release from one source commit.
+
+Requires **schema v99** and Python **3.12** or newer.
+
+1.0.0 is the first stable release. It changes the promise of the release, not the code. The Python
+distribution has no API or behaviour changes in 1.0.0. The one change is a label: the WSGI dashboard
+no longer shows the "Public beta" badge beside the version.
+
+The classifier is now `Development Status :: 5 - Production/Stable`, and the description no longer
+names the public beta.
+
+### Upgrade from 0.17.x to 1.0.0
+
+**Run the usual two steps.** Run `workhorse schema migrate` from the deployment pipeline, then roll
+out the 1.0.0 packages. These are the same two steps as each 0.x minor since 0.1.0. 1.0.0 adds no
+migration, so the command finds a current schema and changes nothing. The schema stays at version
+**106**, and the SDK compatibility floor stays at **99**. 0.17 and 1.0 processes can use one
+database at the same time, so the upgrade is a rolling deployment.
+
+**1.0.0 removes nothing.** It removes no superseded SQL function, export, name, CLI flag, or
+telemetry name, and it does not narrow `workhorse.protocol_version`. The entry of each 0.x minor
+below lists the breaking changes of that release, with its upgrade steps.
+
+**What 1.0.0 accepts.** The 1.0.0 SDKs use client protocol **5**. They accept an installed schema at
+version **99** or higher. A clean installation of 1.0.0 installs schema version **106**, from
+`sql/releases/0106.sql`, the same artifact as 0.16.0 and 0.17.0.
+
+[The upgrade notes](../docs/upgrading.md#upgrade-from-017x-to-100) give each step.
+
+### The public beta label retires, and SemVer governs twelve surfaces
+
+1.0.0 retires the "public beta" label of the 0.x releases, and "stable" replaces it. From 1.0.0,
+Semantic Versioning governs twelve surfaces: the SQL protocol and schema, the TypeScript, Python,
+Go, Rust, Ruby, Java, Kotlin, and C# APIs, the `workhorse` CLI, the `dashboard/v1` wire contract,
+and the OpenTelemetry instrument, span, and attribute names. A minor or patch release of the 1.x
+line does not break a governed surface. [What SemVer governs](../docs/versioning.md) states what a
+breaking change is for each surface. No API is experimental.
+
+The seven lines stay in lockstep. If one line needs a major release, every line publishes that major
+([ADR 0106](../docs/decisions/0106-keep-the-release-lines-in-lockstep-after-1-0-0.md)).
 
 ## 0.17.0 — 2026-11-24
 

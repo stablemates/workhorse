@@ -1,4 +1,5 @@
-// Package workhorse provides the public beta Go client and worker for the Workhorse durable task
-// queue for PostgreSQL. During 0.x, a minor release may change behaviour, but the schema upgrades
-// in place: migrations are ordered, and inside a major line a migration only adds.
+// Package workhorse provides the Go client and worker for the Workhorse durable task queue for
+// PostgreSQL. From 1.0.0 the module follows Semantic Versioning: a 1.x minor or patch release does
+// not break the exported API. The schema upgrades in place: migrations are ordered, and inside a
+// major line a migration only adds.
 package workhorse

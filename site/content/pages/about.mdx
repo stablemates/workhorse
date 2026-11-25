@@ -14,7 +14,7 @@ outcome is a row that an operator can query.
 Stablemates publishes Workhorse and maintains it in the open at
 [github.com/stablemates/workhorse](https://github.com/stablemates/workhorse). The packages are
 released under the Apache License 2.0, and contributions are accepted under the contributor
-agreement in that repository. There is no paid tier today. The beta withholds nothing; a later
+agreement in that repository. There is no paid tier today. The packages withhold nothing; a later
 commercial product would be new files under its own licence, not a second licence of the same
 code.
 
@@ -42,10 +42,10 @@ The current published version of each line, and which versions receive fixes, ar
 
 ## What it promises, and what it does not
 
-Workhorse is a public beta. It is usable for evaluation and early production adoption. A minor
-release may change behaviour, so read the changelog before you upgrade. Inside a major line a
-migration only adds, so a running deployment upgrades in place and is never asked to recreate its
-database.
+Workhorse is stable from 1.0.0 and follows Semantic Versioning. A 1.x minor or patch release does
+not break a governed surface, such as an SDK API, the CLI, or a telemetry name. Read the changelog
+before you upgrade. Inside a major line a migration only adds, so a running deployment upgrades in
+place and does not have to make its database again.
 
 Handlers run at least once, PostgreSQL is the only supported database, and there is no separate
 workflow definition language: durable steps are composed in ordinary handler code.

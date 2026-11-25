@@ -7,6 +7,23 @@ schema version, and the steps that the upgrade needs.
 [Compatibility and support boundary](compatibility.md) states the schema guarantees that every
 upgrade keeps. Each changelog states the full changes of its release.
 
+## Upgrade from 0.17.x to 1.0.0
+
+1.0.0 is the first stable release. It changes the promise of the release, not the code: from 1.0.0,
+Semantic Versioning governs the twelve surfaces that [What SemVer governs](versioning.md) lists. The
+upgrade is a rolling deployment, and a mixed fleet is supported while it runs.
+
+1. Run `workhorse schema migrate` from the deployment pipeline, as for each 0.x minor. 1.0.0 adds no
+   migration, so the command finds a current schema and changes nothing. The schema stays at
+   version 106, and the SDK compatibility floor stays at 99.
+2. Roll out the new processes in any order.
+
+1.0.0 removes nothing. It removes no superseded SQL function, export, name, CLI flag, or telemetry
+name, and it does not narrow `workhorse.protocol_version`. The 1.0.0 SDKs use client protocol 5,
+and they accept an installed schema at version 99 or higher. The dashboard no longer shows the
+"Public beta" badge beside the version. Each optional npm package now declares the peer range
+`>=1.0.0 <2.0.0` on `@stablemates/workhorse`.
+
 ## Upgrade from 0.16.x to 0.17.0
 
 0.17.0 aligns the spans, metrics, and log records that this section lists with the TypeScript

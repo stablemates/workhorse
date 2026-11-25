@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0 — 2026-11-25
+
+- No code changes. The peer range on `@stablemates/workhorse` is now `>=1.0.0 <2.0.0`, the major
+  line, so the adapter installs beside each 1.x core. Before, it covered one minor line. The npm
+  packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET packages
+  release from one source commit. The core requires **schema v99**. 1.0.0 adds no migration, so the
+  schema stays at version **106**. 1.0.0 is the first stable release: from 1.0.0, Semantic
+  Versioning governs the OpenTelemetry instrument, span, and attribute names, and a 1.x minor or
+  patch release does not rename or remove one. The package description no longer names the public
+  beta.
+
+### Upgrade from 0.17.x to 1.0.0
+
+**Run the usual two steps.** Run `workhorse schema migrate` from the deployment pipeline, then roll
+out the 1.0.0 packages. 1.0.0 adds no migration, so the command finds a current schema and changes
+nothing. The schema stays at version **106**, and the SDK compatibility floor stays at **99**. The
+adapter has no code changes.
+
+[The 1.0.0 entry of `CHANGELOG.md`](../../CHANGELOG.md) and
+[the upgrade notes](../../docs/upgrading.md#upgrade-from-017x-to-100) give each change.
+
 ## 0.17.0 — 2026-11-24
 
 - No code changes. The peer range on `@stablemates/workhorse` is `>=0.17.0 <0.18.0`, so the

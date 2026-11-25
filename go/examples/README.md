@@ -1,6 +1,6 @@
 # Go examples
 
-Install the public beta with `go get github.com/stablemates/workhorse/go`, then set
+Install the module with `go get github.com/stablemates/workhorse/go`, then set
 `WORKHORSE_DATABASE_URL` to a database where the Workhorse schema is installed.
 
 - `transaction` enqueues a retryable task inside an application-owned pgx transaction. Its

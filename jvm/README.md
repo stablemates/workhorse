@@ -11,11 +11,12 @@ starter extend it.
   <img src="https://workhorse.run/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
 </picture>
 
-> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
-> release may change behaviour, so read the
-> [changelog](https://github.com/stablemates/workhorse/blob/main/jvm/CHANGELOG.md) before you upgrade.
-> It does not ask you to recreate your database. Migrations are ordered, and inside a major line a
-> migration only adds. Thus a running deployment upgrades in place.
+> Workhorse follows Semantic Versioning from 1.0.0. A 1.x minor or patch release does not break a
+> governed surface, such as the API of this package. Read [what 1.0.0
+> promises](https://workhorse.run/docs/compatibility#know-what-100-promises) and the
+> [changelog](https://github.com/stablemates/workhorse/blob/main/jvm/CHANGELOG.md) before you
+> upgrade. A release does not make you create your database again. Migrations are ordered, and
+> inside a major line a migration only adds. Thus, a running deployment upgrades in place.
 > Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
 > offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
@@ -34,34 +35,34 @@ The JVM SDK has three artifacts. All three use the group `run.workhorse` and one
 Maven Central serves these artifacts from `0.9.0`. A Gradle build adds the core:
 
 ```groovy
-implementation("run.workhorse:workhorse:0.17.0")
+implementation("run.workhorse:workhorse:1.0.0")
 ```
 
 A Maven build adds the core:
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>0.17.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse</artifactId><version>1.0.0</version></dependency>
 ```
 
 The Kotlin module and the starter use the same group and version. Add the Kotlin module for
 suspend handlers:
 
 ```groovy
-implementation("run.workhorse:workhorse-kotlin:0.17.0")
+implementation("run.workhorse:workhorse-kotlin:1.0.0")
 ```
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>0.17.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-kotlin</artifactId><version>1.0.0</version></dependency>
 ```
 
 Add the starter for a Spring Boot application:
 
 ```groovy
-implementation("run.workhorse:workhorse-spring-boot-starter:0.17.0")
+implementation("run.workhorse:workhorse-spring-boot-starter:1.0.0")
 ```
 
 ```xml
-<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>0.17.0</version></dependency>
+<dependency><groupId>run.workhorse</groupId><artifactId>workhorse-spring-boot-starter</artifactId><version>1.0.0</version></dependency>
 ```
 
 The core puts PgJDBC on the runtime class path only. If your code names a PgJDBC class, such as
@@ -74,7 +75,7 @@ Java, Kotlin, Spring Boot, and PgJDBC versions.
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.17.0 workhorse schema install
+npx --package @stablemates/workhorse@1.0.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs

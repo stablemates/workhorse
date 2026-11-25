@@ -11,11 +11,12 @@ Host integration, EF Core transactions, and an ASP.NET Core dashboard backend.
   <img src="https://workhorse.run/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
 </picture>
 
-> **Public beta:** Workhorse is usable for evaluation and early production adoption. A 0.x minor
-> release may change behaviour, so read the
-> [changelog](https://github.com/stablemates/workhorse/blob/main/dotnet/CHANGELOG.md) before you upgrade.
-> It does not ask you to recreate your database. Migrations are ordered, and inside a major line a
-> migration only adds. Thus a running deployment upgrades in place.
+> Workhorse follows Semantic Versioning from 1.0.0. A 1.x minor or patch release does not break a
+> governed surface, such as the API of this package. Read [what 1.0.0
+> promises](https://workhorse.run/docs/compatibility#know-what-100-promises) and the
+> [changelog](https://github.com/stablemates/workhorse/blob/main/dotnet/CHANGELOG.md) before you
+> upgrade. A release does not make you create your database again. Migrations are ordered, and
+> inside a major line a migration only adds. Thus, a running deployment upgrades in place.
 > Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
 > offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
 
@@ -52,7 +53,7 @@ EF Core, and ASP.NET Core versions.
 Install the schema once, as a deployment step. The application never installs or migrates it.
 
 ```bash
-npx --package @stablemates/workhorse@0.17.0 workhorse schema install
+npx --package @stablemates/workhorse@1.0.0 workhorse schema install
 ```
 
 The machine that runs that deployment step needs Node.js 22 or newer. The application itself needs
