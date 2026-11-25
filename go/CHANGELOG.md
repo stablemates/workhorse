@@ -17,8 +17,12 @@ packages release from one source commit.
 Requires **schema v99** and Go **1.26** or newer.
 
 1.0.0 is the first stable release. It changes the promise of the release, not the code. The Go
-module has no API or behaviour changes in 1.0.0. The one change is a label: the dashboard of the
-module no longer shows the "Public beta" badge beside the version.
+module has no API or behaviour changes in 1.0.0. The only change to the software is a label: the
+dashboard of the module no longer shows the "Public beta" badge beside the version.
+
+The README of the module no longer carries a release notice. [What SemVer
+governs](../docs/versioning.md) states the promise of the stable line ([ADR
+0127](../docs/decisions/0127-remove-the-stability-notice-from-the-readmes.md)).
 
 The module path stays `github.com/stablemates/workhorse/go`, with no `/v1` suffix. A Go caller
 changes no import path. The package documentation no longer names the public beta.

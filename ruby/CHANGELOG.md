@@ -11,8 +11,12 @@ packages release from one source commit.
 Requires **schema v99**, Ruby **3.3** or newer, and PostgreSQL **15** or newer.
 
 1.0.0 is the first stable release. It changes the promise of the release, not the code. The gem has
-no API or behaviour changes in 1.0.0. The one change is a label: the Rack dashboard no longer shows
-the "Public beta" badge beside the version.
+no API or behaviour changes in 1.0.0. The only change to the software is a label: the Rack dashboard
+no longer shows the "Public beta" badge beside the version.
+
+The README of the gem no longer carries a release notice. [What SemVer
+governs](../docs/versioning.md) states the promise of the stable line ([ADR
+0127](../docs/decisions/0127-remove-the-stability-notice-from-the-readmes.md)).
 
 ### Upgrade from 0.17.x to 1.0.0
 
