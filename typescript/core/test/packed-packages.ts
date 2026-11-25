@@ -9,7 +9,7 @@ import { publishedPackages, workspacePackages } from "../../../scripts/packages.
 import {
   hasReadmeCutoverNotice,
   hasRetiredLabel,
-  hasStableNotice,
+  hasAnyStabilityNotice,
 } from "../../../scripts/public-beta-notice.js";
 import {
   MINIMUM_PROTOCOL_VERSION,
@@ -190,8 +190,8 @@ try {
     await run("tar", ["-xzf", tarballFor(entry.name), "-C", releaseExtracted]);
     const packageRoot = path.join(releaseExtracted, "package");
     const readme = await readFile(path.join(packageRoot, "README.md"), "utf8");
-    if (!hasStableNotice(readme)) {
-      throw new Error(`${entry.name} README does not carry the SemVer notice`);
+    if (hasAnyStabilityNotice(readme)) {
+      throw new Error(`${entry.name} README carries the stability notice that ADR 0127 removes`);
     }
     if (hasRetiredLabel(readme)) {
       throw new Error(`${entry.name} README still names the retired public beta label`);

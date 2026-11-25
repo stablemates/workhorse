@@ -10,15 +10,6 @@ PostgreSQL.
   <img src="https://workhorse.run/diagrams/readme-overview-light.png" width="960" alt="One protocol for your workers and your dashboard">
 </picture>
 
-> Workhorse follows Semantic Versioning from 1.0.0. A 1.x minor or patch release does not break a
-> governed surface, such as the API of this package. Read [what 1.0.0
-> promises](https://workhorse.run/docs/compatibility#know-what-100-promises) and the
-> [changelog](https://github.com/stablemates/workhorse/blob/main/ruby/CHANGELOG.md) before you
-> upgrade. A release does not make you create your database again. Migrations are ordered, and
-> inside a major line a migration only adds. Thus, a running deployment upgrades in place.
-> Migration 0025 is the one exception. If your database is from a release before 0.5.0, upgrade it
-> offline with [these steps](https://workhorse.run/docs/installation#upgrade-a-04x-database-offline).
-
 An AI agent should read [the Workhorse documentation index](https://workhorse.run/llms.txt) first.
 
 ## Install
