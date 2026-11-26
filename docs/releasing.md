@@ -445,17 +445,28 @@ crate, it has no tag of its own and publishes from the npm `v*` tag. It joined t
    The [release check](#release-train) in the build job refuses that tag before npm publishes.
 4. On a match, the job builds the gem with `gem build`. `scripts/check-registry-version.ts` then
    asks RubyGems.org for the version. If RubyGems.org serves it with the SHA-256 checksum of the
-   built gem, the job uploads nothing and succeeds. If the checksum differs, the job fails. Thus a
-   re-run finishes after an earlier run pushed the gem, as
+   built gem and a Sigstore attestation of the same bytes, the job uploads nothing and succeeds.
+   If the checksum differs, or the attestation is missing, the job fails. Thus a re-run finishes
+   after an earlier run pushed an attested gem, as
    [Re-run a failed crates-io or rubygems job](#re-run-a-failed-crates-io-or-rubygems-job) states.
 5. If RubyGems.org does not serve the version, `rubygems/release-gem` exchanges the job's OIDC
    identity for a RubyGems API key and runs `rake release` in `ruby/`. That task builds the gem and
    pushes it with a Sigstore attestation. It finds the train tag already in place, so it pushes no
    tag. The `rubygems` job turns off the wait step of the action (SM-2077).
+
+   The action signs the gem with `gem exec sigstore-cli` outside the bundle. If signing fails, the
+   action pushes the gem without an attestation and only writes a warning. That happened from 0.7.1
+   through 1.0.0: the signer loaded the `json` 3 of the bundle and could not read its trusted root.
+   Thus the `rubygems` job installs the bundle in `$RUNNER_TEMP/bundle`, outside the system gem
+   home. Before the push, a step loads the trusted root of the signer as `gem exec` loads it. If
+   that step fails, the `rubygems` job stops before the upload.
+
 6. `scripts/check-registry-version.ts --wait` then asks RubyGems.org for the version every 10 s. It
-   stops when RubyGems.org serves the version with the SHA-256 checksum of the gem in `ruby/pkg`.
-   If RubyGems.org serves a different checksum, or the version is missing for about ten minutes,
-   the job fails.
+   stops when RubyGems.org serves the version with the SHA-256 checksum of the gem in `ruby/pkg`,
+   and lists a Sigstore attestation that signs the same checksum. If RubyGems.org serves a
+   different checksum, or the version or the attestation is missing for about ten minutes, the job
+   fails, and `github-release` does not run. RubyGems.org never replaces a version, so a gem
+   without an attestation stays without one. Fix the signer, then ship a new candidate.
 7. Verify the public version with `gem install stablemates-workhorse -v X.Y.Z` in an empty gem home,
    and review the attestation on the gem's RubyGems.org page.
 
@@ -796,7 +807,11 @@ from the tag again, and `scripts/check-registry-version.ts` asks the registry fo
 1. If the registry does not serve the version, the job uploads the artifact.
 2. If the registry serves the version with the SHA-256 checksum of the new build, the job uploads
    nothing and succeeds. `cargo package` and `gem build` make the same bytes from the same tag, so
-   this is the case after an upload of an earlier run. The run summary names the checksum.
+   this is the case after an upload of an earlier run. The run summary names the checksum. For the
+   gem, RubyGems.org must also list a Sigstore attestation of the same bytes. If it lists none, an
+   earlier run pushed the gem without an attestation, and the job fails. A re-run cannot add the
+   attestation, so `github-release` does not run for that tag. Fix the signer and release a new
+   candidate.
 3. If the registry serves the version with a different checksum, the job fails and uploads nothing.
    The registry has bytes that this tag did not build. Do not re-run the job again. Compare the
    published artifact with a build of the tag before you continue the release.

@@ -1323,7 +1323,20 @@ describe("continuous integration", () => {
     );
     expect(check).toBeGreaterThan(job.indexOf("gem build stablemates-workhorse.gemspec"));
     expect(check).toBeLessThan(job.indexOf("bundle install"));
-    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(3);
+    expect(job.match(/if: steps\.registry\.outputs\.upload == 'true'/g)).toHaveLength(4);
+    // The action signs the gem outside the bundle, with the newest `json` of the system gem home.
+    // With json 3 the signer failed, and the action pushed 0.7.1 through 1.0.0 without an
+    // attestation. The bundle goes outside the system gem home, and a step loads the signer's
+    // trusted root before the push.
+    const install = job.indexOf("- name: Install the gem's bundle");
+    const signer = job.indexOf("- name: Check that the gem signer loads its trusted root");
+    expect(job.slice(install, signer)).toContain(
+      'echo "BUNDLE_PATH=$RUNNER_TEMP/bundle" >> "$GITHUB_ENV"',
+    );
+    expect(signer).toBeGreaterThan(install);
+    expect(signer).toBeLessThan(job.indexOf("uses: rubygems/release-gem@"));
+    expect(job.slice(signer)).toContain("Sigstore::TrustedRoot.production");
+    expect(job).not.toContain("attestations: false");
     // SM-2077: the action's wait step installs the newest Bundler and crashed after a correct
     // upload. The job turns it off and waits for the pushed gem's checksum with the script.
     expect(job).toContain("          await-release: false\n");
