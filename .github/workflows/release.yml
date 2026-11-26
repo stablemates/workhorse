@@ -304,12 +304,33 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           node scripts/check-registry-version.ts rubygems stablemates-workhorse "$version" \
             "$RUNNER_TEMP/stablemates-workhorse-$version.gem"
+      # The bundle goes outside the system gem home. The action signs the gem with
+      # `gem exec sigstore-cli:0.2.3` outside the bundle, and that command loads the newest `json`
+      # in the system gem home. sigstore 0.2.3 cannot read its trusted root with json 3, which the
+      # lockfile holds for rubocop. The action then pushes the gem without an attestation and only
+      # writes a warning, so 0.7.1 through 1.0.0 have no attestation. `BUNDLE_PATH` also stays set
+      # for `rake release` in the action, and `Bundler.unbundled_env` removes it for the signer.
       - name: Install the gem's bundle
         if: steps.registry.outputs.upload == 'true'
         working-directory: ruby
         env:
           BUNDLE_FROZEN: "true"
-        run: bundle install
+        run: |
+          set -euo pipefail
+          echo "BUNDLE_PATH=$RUNNER_TEMP/bundle" >> "$GITHUB_ENV"
+          BUNDLE_PATH="$RUNNER_TEMP/bundle" bundle install
+      # Before the push, load the signer's trusted root as `gem exec` loads it: outside the bundle,
+      # with the newest gems of the system gem home. A failure here stops the job before RubyGems.org
+      # receives a gem without an attestation. Keep the version equal to the one that the
+      # attestation patch of the pinned action names.
+      - name: Check that the gem signer loads its trusted root
+        if: steps.registry.outputs.upload == 'true'
+        run: |
+          set -euo pipefail
+          env -u BUNDLE_PATH gem install --no-document sigstore-cli:0.2.3
+          env -u BUNDLE_PATH ruby -e 'gem "sigstore-cli", "0.2.3"; require "sigstore"
+            Sigstore::TrustedRoot.production
+            puts "sigstore #{Sigstore::VERSION} loads its trusted root with json #{JSON::VERSION}"'
       # Publication carries no secret. The action exchanges this job's OIDC identity for a
       # short-lived RubyGems API key, which RubyGems.org mints only for the trusted publisher the
       # `stablemates-workhorse` gem names: this repository, this workflow file, and the `rubygems`
@@ -328,8 +349,9 @@ jobs:
           working-directory: ruby
           await-release: false
       # `rake release` pushes the gem that it builds in `ruby/pkg`. The step asks RubyGems.org for
-      # the version until it serves that gem's SHA-256 checksum, and fails on a different checksum
-      # or after about ten minutes.
+      # the version until it serves that gem's SHA-256 checksum and a Sigstore attestation of the
+      # same bytes. It fails on a different checksum, or after about ten minutes without both, so
+      # a push without an attestation stops the train before github-release.
       - name: Wait until RubyGems.org serves the version
         if: steps.registry.outputs.upload == 'true'
         run: |

@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  attestationsUrl,
+  attestedChecksums,
   awaitRegistryVersion,
   checkRegistryVersion,
   registries,
@@ -25,6 +27,38 @@ const publishedBody = {
 } as const;
 
 const noDelay = async () => {};
+
+/** A Sigstore bundle, as RubyGems.org lists it, that signs the bytes with SHA-256 `checksum`. */
+const attestation = (checksum: string) => ({
+  mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+  messageSignature: {
+    messageDigest: {
+      algorithm: "SHA2_256",
+      digest: Buffer.from(checksum, "hex").toString("base64"),
+    },
+  },
+});
+
+const isAttestations = (url: unknown) => String(url).includes("/api/v1/attestations/");
+
+/**
+ * A fetch that answers the attestations URL of RubyGems.org from `attestations`, and each other URL
+ * from `version`. By default the gem carries an attestation of the built bytes.
+ */
+const registryFetch = (
+  version: () => Response | Promise<Response>,
+  attestations: () => unknown = () => [attestation(sha256("built bytes"))],
+) =>
+  vi.fn<typeof fetch>(async (url) =>
+    isAttestations(url) ? Response.json(attestations()) : version(),
+  );
+
+/** RubyGems.org serves the version with the checksum of the built bytes. */
+const served = () => Response.json(publishedBody.rubygems(sha256("built bytes")));
+
+/** The requests of a fetch mock to the version URL, without those to the attestations URL. */
+const versionCalls = (fetchImpl: ReturnType<typeof registryFetch>) =>
+  fetchImpl.mock.calls.filter(([url]) => !isAttestations(url)).length;
 
 const names = { "crates-io": "workhorse", rubygems: "stablemates-workhorse" } as const;
 
@@ -76,8 +110,8 @@ describe("the registry version check before a crate or gem upload", () => {
     });
 
     it("skips the upload when the registry serves the version with the same checksum", async () => {
-      const outcome = await check(async () =>
-        Response.json(publishedBody[registry](sha256("built bytes"))),
+      const outcome = await check(
+        registryFetch(() => Response.json(publishedBody[registry](sha256("built bytes")))),
       );
       expect(outcome.upload).toBe(false);
       expect(outcome.message).toContain(`already serves ${name} 0.11.0`);
@@ -125,6 +159,17 @@ describe("the registry version check before a crate or gem upload", () => {
       );
     });
   });
+
+  /** The check before the upload of the gem. */
+  const checkGem = (fetchImpl: typeof fetch) =>
+    checkRegistryVersion({
+      registry: "rubygems",
+      name: "stablemates-workhorse",
+      version: "0.11.0",
+      artifact,
+      fetch: fetchImpl,
+      delay: noDelay,
+    });
 
   it("fails before a request when the built artifact is missing", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
@@ -175,10 +220,10 @@ describe("the registry version check before a crate or gem upload", () => {
         () => new Response("not found", { status: 404 }),
         () => Response.json(publishedBody[registry](sha256("built bytes"))),
       ];
-      const fetchImpl = vi.fn<typeof fetch>(async () => answers.shift()!());
+      const fetchImpl = registryFetch(async () => answers.shift()!());
       const message = await wait(fetchImpl);
       expect(message).toContain(`serves ${name} 0.11.0 with SHA-256 ${sha256("built bytes")}`);
-      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      expect(versionCalls(fetchImpl)).toBe(3);
       expect(delay.mock.calls).toEqual([[1_000], [1_000]]);
     });
 
@@ -203,7 +248,7 @@ describe("the registry version check before a crate or gem upload", () => {
     });
 
     it("fails at once when the registry serves a different checksum", async () => {
-      const fetchImpl = vi.fn<typeof fetch>(async () =>
+      const fetchImpl = registryFetch(async () =>
         Response.json(publishedBody[registry](sha256("other bytes"))),
       );
       await expect(wait(fetchImpl)).rejects.toThrow(/cannot publish these bytes/);
@@ -214,6 +259,156 @@ describe("the registry version check before a crate or gem upload", () => {
       const fetchImpl = vi.fn<typeof fetch>(async () => new Response("no", { status: 403 }));
       await expect(wait(fetchImpl)).rejects.toThrow(/HTTP 403/);
       expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+  });
+
+  // rubygems/release-gem pushes a gem without an attestation when signing fails, and only warns.
+  // 0.7.1 through 1.0.0 reached RubyGems.org so.
+  describe("the attestation of a gem after its upload", () => {
+    let clock: number;
+    const delay = async (milliseconds: number) => {
+      clock += milliseconds;
+    };
+    beforeEach(() => {
+      clock = 0;
+    });
+    const wait = (fetchImpl: typeof fetch) =>
+      awaitRegistryVersion({
+        registry: "rubygems",
+        name: "stablemates-workhorse",
+        version: "0.11.0",
+        artifact,
+        fetch: fetchImpl,
+        delay,
+        now: () => clock,
+        timeout: 3_500,
+        interval: 1_000,
+      });
+
+    it("asks RubyGems.org for the attestations of the exact version", () => {
+      expect(attestationsUrl("stablemates-workhorse", "0.11.0")).toBe(
+        "https://rubygems.org/api/v1/attestations/stablemates-workhorse-0.11.0.json",
+      );
+    });
+
+    it("reads the checksum that a message signature or a DSSE statement signs", () => {
+      // The attestation that RubyGems.org lists for stablemates-workhorse 0.6.1, and its checksum.
+      const listed = [
+        {
+          messageSignature: {
+            messageDigest: {
+              algorithm: "SHA2_256",
+              digest: "wB66X5WhVX3OTyJIxJ2XlVqJb4yLeCIQUfwjkOF7kS8=",
+            },
+          },
+        },
+      ];
+      expect(attestedChecksums(listed)).toEqual([
+        "c01eba5f95a1557dce4f2248c49d97955a896f8c8b78221051fc2390e17b912f",
+      ]);
+      const statement = { subject: [{ name: "a.gem", digest: { sha256: sha256("built bytes") } }] };
+      const dsse = {
+        dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64") },
+      };
+      expect(attestedChecksums([dsse])).toEqual([sha256("built bytes")]);
+      expect(attestedChecksums({ error: "not found" })).toEqual([]);
+      expect(attestedChecksums([{ dsseEnvelope: { payload: "not json" } }])).toEqual([]);
+    });
+
+    it("waits until RubyGems.org lists an attestation of the pushed bytes", async () => {
+      const lists: unknown[] = [[], [], [attestation(sha256("built bytes"))]];
+      const fetchImpl = registryFetch(served, () => lists.shift());
+      expect(await wait(fetchImpl)).toContain("and a Sigstore attestation of the same bytes");
+      expect(clock).toBe(2_000);
+    });
+
+    it("fails at the deadline when the gem has no attestation", async () => {
+      const fetchImpl = registryFetch(served, () => []);
+      await expect(wait(fetchImpl)).rejects.toThrow(
+        /serves stablemates-workhorse 0\.11\.0 with the checksum of artifact, but lists no Sigstore attestation of it after 4 requests in 3 s\. The push fell back/,
+      );
+    });
+
+    it("does not take an attestation of other bytes", async () => {
+      const fetchImpl = registryFetch(served, () => [attestation(sha256("other bytes"))]);
+      await expect(wait(fetchImpl)).rejects.toThrow(/lists no Sigstore attestation/);
+    });
+
+    it("takes a missing attestations list as no attestation", async () => {
+      const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+        isAttestations(url) ? new Response("not found", { status: 404 }) : served(),
+      );
+      await expect(wait(fetchImpl)).rejects.toThrow(/lists no Sigstore attestation/);
+    });
+
+    // Sol found that a re-run after an upload without an attestation skipped the upload and the
+    // wait, so github-release ran.
+    it("fails the check before a re-run when the served gem has no attestation", async () => {
+      await expect(checkGem(registryFetch(served, () => []))).rejects.toThrow(
+        /already serves stablemates-workhorse 0\.11\.0 with the checksum of artifact, but lists no Sigstore attestation of it\. An earlier run pushed the gem without an attestation/,
+      );
+      const outcome = await checkGem(registryFetch(served));
+      expect(outcome.upload).toBe(false);
+      expect(outcome.message).toContain("and a Sigstore attestation of the same bytes");
+    });
+
+    it("writes no output and fails on the command line for a served gem without an attestation", async () => {
+      const output = path.join(directory, "output");
+      const summary = path.join(directory, "summary");
+      const code = await runCheck(["rubygems", "stablemates-workhorse", "0.11.0", artifact], {
+        environment: { GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+        fetch: registryFetch(served, () => []),
+        delay: noDelay,
+      });
+      expect(code).toBe(1);
+      await expect(readFile(output, "utf8")).rejects.toThrow(/ENOENT/);
+      expect(await readFile(summary, "utf8")).toContain("lists no Sigstore attestation");
+    });
+
+    // Sol found that one poll makes two requests with repeats each, so a deadline check between
+    // polls let the wait run past `waitTimeout + requestBound`.
+    it("ends the wait by the bound when both requests of a poll are slow", async () => {
+      // The polls answer at once until 590 s. Then each request takes 30 s and fails four times
+      // before it succeeds, which takes the version and the attestations 170 s each.
+      let busy = 0;
+      const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+        if (clock >= 590_000) {
+          clock += 30_000;
+          busy += 1;
+          if (busy % 5 !== 0) return new Response("busy", { status: 503 });
+        }
+        return isAttestations(url) ? Response.json([]) : served();
+      });
+      await expect(
+        awaitRegistryVersion({
+          registry: "rubygems",
+          name: "stablemates-workhorse",
+          version: "0.11.0",
+          artifact,
+          fetch: fetchImpl,
+          delay,
+          now: () => clock,
+        }),
+      ).rejects.toThrow(/before the end of the wait/);
+      expect(clock).toBeLessThanOrEqual(waitTimeout + requestBound);
+    });
+
+    it("does not ask a crate for an attestation", async () => {
+      const fetchImpl = registryFetch(
+        () => Response.json(publishedBody["crates-io"](sha256("built bytes"))),
+        () => [],
+      );
+      const message = await awaitRegistryVersion({
+        registry: "crates-io",
+        name: "workhorse",
+        version: "0.11.0",
+        artifact,
+        fetch: fetchImpl,
+        delay,
+        now: () => clock,
+      });
+      expect(message).not.toContain("attestation");
+      expect(fetchImpl.mock.calls.some(([url]) => isAttestations(url))).toBe(false);
     });
   });
 
@@ -244,7 +439,7 @@ describe("the registry version check before a crate or gem upload", () => {
 
     it("writes upload=false and a summary line for a version that the registry serves", async () => {
       const body = publishedBody.rubygems(sha256("built bytes"));
-      expect(await run(async () => Response.json(body))).toBe(0);
+      expect(await run(registryFetch(() => Response.json(body)))).toBe(0);
       expect(await readFile(output, "utf8")).toBe("upload=false\n");
       expect(await readFile(summary, "utf8")).toContain("already serves stablemates-workhorse");
     });
@@ -263,7 +458,12 @@ describe("the registry version check before a crate or gem upload", () => {
     it("with --wait, writes a summary line and no output when the registry serves the gem", async () => {
       const body = publishedBody.rubygems(sha256("built bytes"));
       const argv = ["--wait", "rubygems", "stablemates-workhorse", "0.11.0"];
-      expect(await run(async () => Response.json(body), argv)).toBe(0);
+      expect(
+        await run(
+          registryFetch(() => Response.json(body)),
+          argv,
+        ),
+      ).toBe(0);
       await expect(readFile(output, "utf8")).rejects.toThrow(/ENOENT/);
       expect(await readFile(summary, "utf8")).toContain("serves stablemates-workhorse 0.11.0");
     });
@@ -271,7 +471,12 @@ describe("the registry version check before a crate or gem upload", () => {
     it("with --wait, fails for a different checksum", async () => {
       const body = publishedBody.rubygems(sha256("other bytes"));
       const argv = ["--wait", "rubygems", "stablemates-workhorse", "0.11.0"];
-      expect(await run(async () => Response.json(body), argv)).toBe(1);
+      expect(
+        await run(
+          registryFetch(() => Response.json(body)),
+          argv,
+        ),
+      ).toBe(1);
       expect(await readFile(summary, "utf8")).toContain("cannot publish these bytes");
     });
 

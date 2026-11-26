@@ -20,6 +20,10 @@
  * first request. The `rubygems` job uses this mode in place of the wait step of `rubygems/release-gem`,
  * because that step crashed after a correct upload (SM-2077).
  *
+ * For RubyGems.org, `--wait` also waits for a Sigstore attestation that signs the pushed bytes. When
+ * signing fails, the action pushes the gem without an attestation and only writes a warning. That
+ * happened from 0.7.1 through 1.0.0, so the wait fails when the attestation is still missing.
+ *
  * A request that fails with a network error, HTTP 429, or HTTP 5xx repeats, and the script fails
  * only after `attempts` such failures in a row. Each other failure fails the script.
  *
@@ -60,6 +64,40 @@ export function versionUrl(registry: Registry, name: string, version: string): s
   if (registry === "crates-io")
     return `https://crates.io/api/v1/crates/${encodedName}/${encodedVersion}`;
   return `https://rubygems.org/api/v2/rubygems/${encodedName}/versions/${encodedVersion}.json?platform=ruby`;
+}
+
+/** The URL at which RubyGems.org lists the Sigstore attestations of one version of a gem. */
+export function attestationsUrl(name: string, version: string): string {
+  return `https://rubygems.org/api/v1/attestations/${encodeURIComponent(`${name}-${version}`)}.json`;
+}
+
+/**
+ * The SHA-256 checksums, in hex, that the Sigstore bundles in an attestations answer of
+ * RubyGems.org sign. A bundle signs either a message digest or the subjects of a DSSE statement.
+ */
+export function attestedChecksums(body: unknown): string[] {
+  if (!Array.isArray(body)) return [];
+  return body.flatMap((entry: unknown) => {
+    const bundle = entry as {
+      messageSignature?: { messageDigest?: { algorithm?: unknown; digest?: unknown } };
+      dsseEnvelope?: { payload?: unknown };
+    } | null;
+    const digest = bundle?.messageSignature?.messageDigest;
+    if (digest?.algorithm === "SHA2_256" && typeof digest.digest === "string")
+      return [Buffer.from(digest.digest, "base64").toString("hex")];
+    const payload = bundle?.dsseEnvelope?.payload;
+    if (typeof payload !== "string") return [];
+    try {
+      const statement = JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as {
+        subject?: { digest?: { sha256?: unknown } }[];
+      };
+      return (statement.subject ?? []).flatMap((subject) =>
+        typeof subject.digest?.sha256 === "string" ? [subject.digest.sha256] : [],
+      );
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** The SHA-256 checksum in a version answer of the registry, if it has one. */
@@ -140,19 +178,30 @@ async function checksumOf(artifact: string): Promise<string> {
 }
 
 /**
- * Ask the registry for the version once, with repeats for transient failures. Fail when the
- * registry serves the version with no checksum or with a checksum other than `built`.
+ * The end of a wait: no request starts that could end after `deadline` on the clock `now`. One
+ * poll of the wait makes two requests, each with repeats, so a check of the deadline between polls
+ * does not bound the wait.
  */
-async function readVersion(options: CheckOptions, built: string): Promise<Reading> {
-  const { registry, name, version, artifact } = options;
+interface Limit {
+  readonly now: () => number;
+  readonly deadline: number;
+}
+
+/**
+ * Ask the registry one URL, with repeats for transient failures. Fail on any other failure, and
+ * fail before a request that could end after the deadline of `limit`.
+ */
+async function ask(options: CheckOptions, url: string, limit?: Limit): Promise<Answer> {
   const fetchImpl = options.fetch ?? fetch;
   const delay = options.delay ?? setTimeout;
-  const label = labels[registry];
-  const file = path.basename(artifact);
-  const url = versionUrl(registry, name, version);
-
   let answer: Answer | RequestFailure | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const pause = attempt > 1 ? retryInterval : 0;
+    if (limit && limit.now() + pause + requestTimeout > limit.deadline)
+      throw new Error(
+        `${labels[options.registry]} did not answer for ${options.name} ${options.version} at ${url} ` +
+          `before the end of the wait${answer && "failure" in answer ? `: ${answer.failure}` : ""}`,
+      );
     if (attempt > 1) await delay(retryInterval);
     answer = await requestVersion(fetchImpl, url);
     if (!("failure" in answer) || !answer.transient) break;
@@ -161,7 +210,27 @@ async function readVersion(options: CheckOptions, built: string): Promise<Readin
     );
   }
   if (answer === undefined || "failure" in answer)
-    throw new Error(`${label} did not answer for ${name} ${version} at ${url}: ${answer?.failure}`);
+    throw new Error(
+      `${labels[options.registry]} did not answer for ${options.name} ${options.version} at ${url}: ${answer?.failure}`,
+    );
+  return answer;
+}
+
+/** True when RubyGems.org lists a Sigstore attestation that signs the bytes with checksum `built`. */
+async function attested(options: CheckOptions, built: string, limit?: Limit): Promise<boolean> {
+  const answer = await ask(options, attestationsUrl(options.name, options.version), limit);
+  return answer.status === "served" && attestedChecksums(answer.body).includes(built);
+}
+
+/**
+ * Ask the registry for the version once, with repeats for transient failures. Fail when the
+ * registry serves the version with no checksum or with a checksum other than `built`.
+ */
+async function readVersion(options: CheckOptions, built: string, limit?: Limit): Promise<Reading> {
+  const { registry, name, version, artifact } = options;
+  const label = labels[registry];
+  const file = path.basename(artifact);
+  const answer = await ask(options, versionUrl(registry, name, version), limit);
   if (answer.status === "missing") return { label, file, built, served: undefined };
 
   const served = statedChecksum(registry, answer.body);
@@ -181,17 +250,28 @@ async function readVersion(options: CheckOptions, built: string): Promise<Readin
 /** Ask the registry for the version and compare its checksum with the built artifact. */
 export async function checkRegistryVersion(options: CheckOptions): Promise<CheckOutcome> {
   const { name, version } = options;
-  const reading = await readVersion(options, await checksumOf(options.artifact));
+  const built = await checksumOf(options.artifact);
+  const reading = await readVersion(options, built);
   if (reading.served === undefined)
     return {
       upload: true,
       message: `${reading.label} does not serve ${name} ${version}, so the job uploads it`,
     };
+  // A re-run after an upload without an attestation skips the upload and the wait, so the check
+  // asks for the attestation here too.
+  const rubygems = options.registry === "rubygems";
+  if (rubygems && !(await attested(options, built)))
+    throw new Error(
+      `${reading.label} already serves ${name} ${version} with the checksum of ${reading.file}, but lists no ` +
+        "Sigstore attestation of it. An earlier run pushed the gem without an attestation. " +
+        `${reading.label} never replaces a version, so fix the signer and release a new candidate.`,
+    );
   return {
     upload: false,
     message:
-      `${reading.label} already serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}. ` +
-      "An earlier run uploaded it, so the job uploads nothing",
+      `${reading.label} already serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}` +
+      (rubygems ? ", and a Sigstore attestation of the same bytes" : "") +
+      ". An earlier run uploaded it, so the job uploads nothing",
   };
 }
 
@@ -206,11 +286,13 @@ export interface WaitOptions extends CheckOptions {
 
 /**
  * After an upload, ask the registry until it serves the version with the checksum of the pushed
- * artifact. Return a message when it does. Fail when it serves other bytes, or when the version is
- * still missing at `timeout` after the first request.
+ * artifact. For RubyGems.org, also wait until it lists a Sigstore attestation of those bytes.
+ * Return a message when it does. Fail when it serves other bytes, or when the version or the
+ * attestation is still missing at `timeout` after the first request.
  *
- * Each request can repeat for transient failures, as in the check before the upload. The last
- * request starts before the deadline, so the wait can end at most `requestBound` after it.
+ * Each request can repeat for transient failures, as in the check before the upload. No request
+ * starts that could end more than `requestBound` after `timeout`, so the wait ends by then, also
+ * when each poll asks for the version and for the attestations.
  */
 export async function awaitRegistryVersion(options: WaitOptions): Promise<string> {
   const { name, version } = options;
@@ -221,19 +303,35 @@ export async function awaitRegistryVersion(options: WaitOptions): Promise<string
   const built = await checksumOf(options.artifact);
   const label = labels[options.registry];
   const start = now();
+  const limit: Limit = { now, deadline: start + timeout + requestBound };
   for (let request = 1; ; request += 1) {
-    const reading = await readVersion(options, built);
-    if (reading.served !== undefined)
-      return `${label} serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}`;
+    const reading = await readVersion(options, built, limit);
+    const served = reading.served !== undefined;
+    const signed =
+      served && (options.registry !== "rubygems" || (await attested(options, built, limit)));
+    if (signed) {
+      const message = `${label} serves ${name} ${version} with SHA-256 ${reading.served}, the checksum of ${reading.file}`;
+      return options.registry === "rubygems"
+        ? `${message}, and a Sigstore attestation of the same bytes`
+        : message;
+    }
     const elapsed = now() - start;
+    const seconds = String(Math.round(elapsed / 1000));
     process.stdout.write(
-      `Request ${String(request)} at ${String(Math.round(elapsed / 1000))} s: ${label} does not serve ${name} ${version} yet\n`,
+      served
+        ? `Request ${String(request)} at ${seconds} s: ${label} serves ${name} ${version} without an attestation of ${reading.file} yet\n`
+        : `Request ${String(request)} at ${seconds} s: ${label} does not serve ${name} ${version} yet\n`,
     );
     if (elapsed + interval > timeout)
       throw new Error(
-        `${label} did not serve ${name} ${version} after ${String(request)} requests in ` +
-          `${String(Math.round(elapsed / 1000))} s. ` +
-          `Look for the version on ${label} before you re-run the job.`,
+        served
+          ? `${label} serves ${name} ${version} with the checksum of ${reading.file}, but lists no ` +
+              `Sigstore attestation of it after ${String(request)} requests in ${seconds} s. ` +
+              "The push fell back to an upload without an attestation. Read the warning of the " +
+              `publish step. ${label} never replaces a version, so fix the signer before the next release.`
+          : `${label} did not serve ${name} ${version} after ${String(request)} requests in ` +
+              `${seconds} s. ` +
+              `Look for the version on ${label} before you re-run the job.`,
       );
     await delay(interval);
   }

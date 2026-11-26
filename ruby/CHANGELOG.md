@@ -3,6 +3,20 @@
 `stablemates-workhorse` gem versions and release notes live here. The gem carries the version the
 other SDKs carry, because every tag names one release of all of them.
 
+## Unreleased
+
+### The gem carries a Sigstore attestation again
+
+0.7.1 through 1.0.0 are on RubyGems.org without a Sigstore attestation. Each one is the gem that the
+release workflow built and pushed through trusted publishing, and RubyGems.org serves its SHA-256
+checksum. But signing failed: the signer loaded the `json` 3 of the development bundle and could not
+read its trusted root. The publish action then pushed the gem without an attestation and only wrote
+a warning. RubyGems.org never adds an attestation to a published version.
+
+The release job now installs its bundle outside the system gem home, and it loads the signer's
+trusted root before the push. After the push, the job fails unless RubyGems.org lists an attestation
+that signs the pushed gem. The next release is the first one with an attestation since 0.6.1.
+
 ## 1.0.0 — 2026-11-25
 
 The npm packages, Python distribution, Go module, Rust crate, Ruby gem, JVM artifacts, and .NET
